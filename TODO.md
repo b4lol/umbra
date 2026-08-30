@@ -20,6 +20,7 @@ This list contains the technical tasks planned for the step-by-step implementati
 - [x] `ChaCha20-Poly1305` AEAD encryption and `subtle::ConstantTimeEq` timing protection.
 - [x] Secure memory hygiene with `zeroize` and guard pages. *(GuardedBuffer: PROT_NONE guards + mlock + MADV_DONTDUMP/DONTFORK/WIPEONFORK/UNMERGEABLE + zeroize-on-drop)*
 - [ ] Zero-copy in-place identity generation (the generator's return-slot bytes currently transit the stack, protected only by `mlockall`/non-dumpable; eliminate the copy).
+- [ ] Double Ratchet recovery: skipped-key store for out-of-order delivery and post-failure session resync (a failed decrypt currently desynchronizes permanently).
 
 ## A.2 Network & Transport (`umbra-net`)
 
@@ -36,7 +37,8 @@ This list contains the technical tasks planned for the step-by-step implementati
 - [x] Media Metadata Sterilizer (EXIF, GPS, color-profile stripping and pixel re-encoding). *(full pixel re-encode to metadata-free PNG; fuzzed)*
 - [ ] MEDIA_CHUNK framing/chunking for sterilized media (who chunks, EFK keying per SPECIFICATION.md `0x06`).
 - [x] Socialist Millionaire Protocol (SMP) and SAS code verification engine. *(OTR v3 SMP engine, all 4 messages + ZKPs; SAS 6-digit codes)*
-- [ ] Session-layer SMP carriage: drive SMP messages over DATA_MESSAGE with multi-packet chunking (SMP2 ≈ 1.5 KB > 990 B).
+- [x] Session-layer SMP carriage: tag multiplexer + multi-packet chunking over DATA_MESSAGE (SMP2 ≈ 1.5 KB > 990 B). *(SMP-engine driver lives with the pairing flow)*
+- [ ] Pairing-authenticated identity binding: verify/record peer ML-DSA fingerprints out of band and bind them into `smp_secret` (currently per-run ephemeral identities).
 
 ## A.4 Linux Security & TUI (`umbra-cli`)
 
@@ -47,6 +49,7 @@ This list contains the technical tasks planned for the step-by-step implementati
 - [x] **Memory Leak Locks:** `mlockall`, `prctl(PR_SET_DUMPABLE, 0)` and `MADV_DONTDUMP`/`MADV_DONTFORK` integration. *(plus `setrlimit(RLIMIT_CORE, 0)` and `MADV_UNMERGEABLE`; Landlock zero-FS sandbox in the CLI)*
 - [ ] **CPU Register Zeroing:** Adding the LLVM `-Z zero-call-used-regs=all` rule to the build configuration.
 - [ ] **DNS & IPv6 Blocking:** Verification of the absolute kernel/nftables-level `DROP` of UDP 53 and IPv6. *(Note: embedded Arti (ADR-001) opens direct relay TCP — the ADR-019 SOCKS5 exemption needs a process-scoped (UID/cgroup) allowance instead; see ADR-019/ADR-028.)*
+- [ ] **SESSION_TERMINATE (opcode 0x09):** emit on panic-button/teardown and handle on receipt (mutual ephemeral-key reset) — currently mapped to StateViolation.
 
 ## A.5 Quality, Test & Security Verification Infrastructure
 

@@ -54,6 +54,15 @@ impl X25519KeyPair {
         }
     }
 
+    /// Clones the key pair (secret included) for handing a copy to a
+    /// consumer that takes ownership, without moving the original.
+    #[must_use]
+    pub fn secret_clone(&self) -> Self {
+        Self {
+            secret: self.secret.clone(),
+        }
+    }
+
     /// Serializes the derived public key.
     ///
     /// x25519-dalek 3.0 clamps scalars at DH time, so the public key MUST be
@@ -204,12 +213,16 @@ impl MlKemPeerKey {
     }
 }
 
-/// Aggregate identity: X25519 identity key, ML-KEM-768 KEM pair, and
-/// ML-DSA-65 signing key. Identity IS the key pair — no phone number, e-mail,
-/// or username (README "Zero-PII Identity").
+/// Aggregate identity: X25519 identity key, signed prekey, ML-KEM-768 KEM
+/// pair, and ML-DSA-65 signing key. Identity IS the key pair — no phone
+/// number, e-mail, or username (README "Zero-PII Identity").
 pub struct IdentityBundle {
     /// Classical identity key pair.
     pub x25519: X25519KeyPair,
+    /// Signed prekey pair for the PQXDH ratchet (PQXDH SPK slot).
+    pub spk: X25519KeyPair,
+    /// ML-DSA-65 signature over the SPK public bytes, made by `dsa`.
+    pub spk_signature: Vec<u8>,
     /// Post-quantum KEM pair.
     pub kem: MlKemKeyPair,
     /// Post-quantum signature key pair.
@@ -219,13 +232,51 @@ pub struct IdentityBundle {
 impl IdentityBundle {
     /// Generates a full identity bundle from OS entropy.
     ///
+    /// The SPK is signed by the ML-DSA key at generation time
+    /// (`verify_spk_signature`); peer-side SPK-signature verification
+    /// during pairing is part of the session-layer wiring (TODO A.3).
+    ///
     /// See [`crate::rng`] for the documented panic boundary.
     #[must_use]
     pub fn generate() -> Self {
+        let spk = X25519KeyPair::generate();
+        let kem = MlKemKeyPair::generate();
+        let dsa = crate::signing::MlDsaKeyPair::generate();
+        let spk_signature = dsa.sign(&spk.public_bytes());
         Self {
             x25519: X25519KeyPair::generate(),
-            kem: MlKemKeyPair::generate(),
-            dsa: crate::signing::MlDsaKeyPair::generate(),
+            spk,
+            spk_signature,
+            kem,
+            dsa,
         }
+    }
+
+    /// Replaces and returns the SPK key pair (moving it into the Double
+    /// Ratchet without cloning secret bytes). The replacement pair is
+    /// re-signed by the bundle's ML-DSA key, so `spk_signature` stays
+    /// consistent with the new `spk`.
+    ///
+    /// See [`crate::rng`] for the documented panic boundary of key
+    /// generation.
+    #[must_use]
+    pub fn take_spk(&mut self) -> X25519KeyPair {
+        let fresh = X25519KeyPair::generate();
+        self.spk_signature = self.dsa.sign(&fresh.public_bytes());
+        std::mem::replace(&mut self.spk, fresh)
+    }
+
+    /// Verifies the bundle's SPK signature with a peer's ML-DSA public key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CryptoError::InvalidSignature`] if the signature does not
+    /// verify.
+    pub fn verify_spk_signature(peer_dsa_public: &[u8], bundle: &Self) -> Result<(), CryptoError> {
+        crate::signing::MlDsaKeyPair::verify(
+            peer_dsa_public,
+            &bundle.spk.public_bytes(),
+            &bundle.spk_signature,
+        )
     }
 }

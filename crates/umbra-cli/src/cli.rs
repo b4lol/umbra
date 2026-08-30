@@ -130,14 +130,20 @@ fn keygen() -> Result<(), CliError> {
     harden()?;
     let guarded = GuardedBuffer::new(IdentityBundle::generate()).map_err(CliError::from)?;
     let mut x25519 = [0u8; 32];
+    let mut spk = [0u8; 32];
+    let mut spk_signature = Vec::new();
     let mut kem = [0u8; 1184];
     let mut dsa = Vec::new();
     guarded.with(|identity| {
         x25519 = identity.x25519.public_bytes();
+        spk = identity.spk.public_bytes();
+        spk_signature = identity.spk_signature.clone();
         kem = identity.kem.public_bytes();
         dsa = identity.dsa.public_bytes();
     });
     output::line(&format!("x25519-public={}", output::hex(&x25519)));
+    output::line(&format!("spk-public={}", output::hex(&spk)));
+    output::line(&format!("spk-signature={}", output::hex(&spk_signature)));
     output::line(&format!("ml-kem-768-public={}", output::hex(&kem)));
     output::line(&format!("ml-dsa-65-public={}", output::hex(&dsa)));
     Ok(())
