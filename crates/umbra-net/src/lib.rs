@@ -6,6 +6,7 @@
 //! - [`Transport`]: async transport abstraction with a hermetic
 //!   [`LoopbackTransport`] for deterministic tests (CONTRIBUTING §"Hermetic
 //!   and Deterministic Tests").
+//! - [`cover`]: Poisson cover-traffic pump (TODO A.3, ADR-005).
 //! - `feature = "tor"`: embedded Arti Tor v3 transport (TODO A.2).
 //!
 //! Pluggable Transports (Obfs4/Snowflake), the Nym mixnet adapter, and the
@@ -14,6 +15,7 @@
 #![forbid(unsafe_code)]
 
 pub mod addr;
+pub mod cover;
 pub mod error;
 pub mod transport;
 
@@ -21,6 +23,7 @@ pub mod transport;
 pub mod tor;
 
 pub use addr::OnionAddr;
+pub use cover::CoverPump;
 pub use error::TransportError;
 pub use transport::{LoopbackPair, LoopbackTransport, Transport};
 

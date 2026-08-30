@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 umbra-protocol.workspace = true
 tokio.workspace = true
+zeroize.workspace = true
 thiserror.workspace = true
 
 # Censorship-resistant transport; wiring lands with TODO A.2 (ADR-008).
@@ -55,3 +56,6 @@ tor = [
     "dep:rustls",
     "dep:safelog",
 ]
+
+[dev-dependencies]
+zeroize.workspace = true

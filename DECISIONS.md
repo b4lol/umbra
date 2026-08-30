@@ -46,6 +46,7 @@ This document explains the rationale behind the foundational technical and archi
 - **Rationale:** Even when end-to-end encrypted, packet sizes (for example, a 42-byte "OK" reply versus an 800-byte long message) and packet send times (metadata) give adversaries very serious intelligence through traffic analysis.
 - **Decision:** All packets are fixed to exactly 1024 bytes with cryptographic padding, and dummy packets are pushed onto the wire with Poisson timing even when the queue is empty.
 - **Consequence:** An observer on the network cannot analyze when users talk, message sizes, or correspondence frequency.
+- **Note (v0.1.0-alpha, size masking):** MEDIA_CHUNK transfers pad media to the next power-of-two bucket (`umbra-protocol::media_chunk`), so an observer learns at most a 2x size bucket, not the exact length. Classifier-level fingerprinting additionally requires WTF-PAD (v2+, TARGETED_DEFENSES §3A).
 
 ---
 
@@ -59,6 +60,7 @@ This document explains the rationale behind the foundational technical and archi
   - **Prohibition of Excessive RAM and Storage Consumption:** Electron, needless WebView layers, or heavy dependencies are strictly forbidden. Process RAM usage is bounded by strict caps; needless residue/logs must not be left on disk.
   - Resource consumption is always optimized with asynchronous execution and zero-cost abstractions.
 - **Consequence:** The codebase is built to be deterministic, highly resilient, minimal-leak, lightweight, and high-performing; these goals are tracked with CI measurements (memory caps, leak tests, benchmarks).
+- **Recorded deviation (cover pump):** `umbra-net::cover` swallows transient cover-packet send failures (`let _ = send`) — cover traffic must not reveal link health to an observer. Data-path errors are never swallowed.
 
 ---
 

@@ -5,7 +5,8 @@
 //! - **Fixed 1024-byte packet framing** with cryptographic random padding
 //!   ([`packet`], SPECIFICATION.md §1).
 //! - **Deterministic media metadata sterilizer** — full pixel re-encode
-//!   ([`media`], TODO A.3).
+//!   ([`media`], TODO A.3) and **MEDIA_CHUNK transfer framing**
+//!   ([`media_chunk`], SPECIFICATION.md opcode `0x06`).
 //! - **Typestate sessions** making illegal states unrepresentable
 //!   ([`session`], CODE_MANIFESTO / ADR-021).
 //! - **Poisson-distributed cover traffic** scheduling ([`cover`], ADR-005).
@@ -16,6 +17,7 @@
 pub mod cover;
 pub mod error;
 pub mod media;
+pub mod media_chunk;
 pub mod newtypes;
 pub mod packet;
 pub mod sas;

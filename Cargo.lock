@@ -6375,12 +6375,14 @@ dependencies = [
  "tor-hsservice",
  "tor-rtcompat",
  "umbra-protocol",
+ "zeroize",
 ]
 
 [[package]]
 name = "umbra-protocol"
 version = "0.1.0-alpha"
 dependencies = [
+ "blake3",
  "getrandom 0.4.3",
  "image",
  "png",
