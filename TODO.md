@@ -49,7 +49,7 @@ This list contains the technical tasks planned for the step-by-step implementati
 - [x] **Memory Leak Locks:** `mlockall`, `prctl(PR_SET_DUMPABLE, 0)` and `MADV_DONTDUMP`/`MADV_DONTFORK` integration. *(plus `setrlimit(RLIMIT_CORE, 0)` and `MADV_UNMERGEABLE`; Landlock zero-FS sandbox in the CLI)*
 - [ ] **CPU Register Zeroing:** Adding the LLVM `-Z zero-call-used-regs=all` rule to the build configuration.
 - [ ] **DNS & IPv6 Blocking:** Verification of the absolute kernel/nftables-level `DROP` of UDP 53 and IPv6. *(Note: embedded Arti (ADR-001) opens direct relay TCP — the ADR-019 SOCKS5 exemption needs a process-scoped (UID/cgroup) allowance instead; see ADR-019/ADR-028.)*
-- [ ] **SESSION_TERMINATE (opcode 0x09):** emit on panic-button/teardown and handle on receipt (mutual ephemeral-key reset) — currently mapped to StateViolation.
+- [x] **SESSION_TERMINATE (opcode 0x09):** emit on panic-button/teardown and handle on receipt (mutual ephemeral-key reset; authenticated packet, no ratchet message, local state zeroized).
 
 ## A.5 Quality, Test & Security Verification Infrastructure
 

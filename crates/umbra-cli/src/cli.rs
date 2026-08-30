@@ -37,6 +37,12 @@ pub mod output {
 #[derive(Debug, Parser)]
 #[command(name = "umbra", version, about)]
 pub struct Cli {
+    /// Emit machine-readable NDJSON instead of key=value lines
+    /// (ADR-022: parseable JSON streams for `jq`/`awk` pipelines).
+    /// Currently honored by `keygen`.
+    #[arg(long, global = true)]
+    pub json: bool,
+
     /// Subcommand to execute.
     #[command(subcommand)]
     pub command: Command,
@@ -96,7 +102,7 @@ fn harden() -> Result<(), CliError> {
 pub fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Keygen => keygen(),
+        Command::Keygen => keygen(cli.json),
         Command::Send => {
             harden()?;
             Err(umbra_protocol::ProtocolError::Unsupported(
@@ -126,7 +132,7 @@ pub fn run() -> Result<(), CliError> {
 /// non-dumpable, and swap-excluded (ADR-003/ADR-025). Residual gap: the
 /// generator's return slot on the stack is not zeroized after the move
 /// into the guard; zero-copy in-place generation is tracked in TODO A.1.
-fn keygen() -> Result<(), CliError> {
+fn keygen(json: bool) -> Result<(), CliError> {
     harden()?;
     let guarded = GuardedBuffer::new(IdentityBundle::generate()).map_err(CliError::from)?;
     let mut x25519 = [0u8; 32];
@@ -141,10 +147,24 @@ fn keygen() -> Result<(), CliError> {
         kem = identity.kem.public_bytes();
         dsa = identity.dsa.public_bytes();
     });
-    output::line(&format!("x25519-public={}", output::hex(&x25519)));
-    output::line(&format!("spk-public={}", output::hex(&spk)));
-    output::line(&format!("spk-signature={}", output::hex(&spk_signature)));
-    output::line(&format!("ml-kem-768-public={}", output::hex(&kem)));
-    output::line(&format!("ml-dsa-65-public={}", output::hex(&dsa)));
+    if json {
+        // One NDJSON object; values are hex (a fixed safe charset, so no
+        // JSON escaping is needed).
+        let object = format!(
+            "{{\"x25519-public\":\"{}\",\"spk-public\":\"{}\",\"spk-signature\":\"{}\",\"ml-kem-768-public\":\"{}\",\"ml-dsa-65-public\":\"{}\"}}",
+            output::hex(&x25519),
+            output::hex(&spk),
+            output::hex(&spk_signature),
+            output::hex(&kem),
+            output::hex(&dsa),
+        );
+        output::line(&object);
+    } else {
+        output::line(&format!("x25519-public={}", output::hex(&x25519)));
+        output::line(&format!("spk-public={}", output::hex(&spk)));
+        output::line(&format!("spk-signature={}", output::hex(&spk_signature)));
+        output::line(&format!("ml-kem-768-public={}", output::hex(&kem)));
+        output::line(&format!("ml-dsa-65-public={}", output::hex(&dsa)));
+    }
     Ok(())
 }

@@ -220,6 +220,41 @@ fn text_payload_has_no_tag_prefix() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// SESSION_TERMINATE roundtrip (SPECIFICATION opcode 0x09): the sender
+/// wipes on send, the receiver wipes on receipt, and both sessions are
+/// dead afterwards (double-terminate rejected).
+#[test]
+fn session_terminate_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+    let (mut alice, mut bob) = established_pair()?;
+    assert!(!alice.terminated());
+
+    let terminate = alice.send_termination()?;
+    assert!(alice.terminated());
+    // Post-termination sends are refused on the sender side.
+    assert!(matches!(
+        alice.send_data(b"too late"),
+        Err(umbra_protocol::ProtocolError::StateViolation)
+    ));
+    // Double-terminate is refused.
+    assert!(alice.send_termination().is_err());
+
+    // The receiver wipes and reports the termination.
+    assert!(matches!(
+        bob.receive(&terminate)?,
+        Some(InboundPayload::Terminate)
+    ));
+    assert!(bob.terminated());
+    assert!(matches!(
+        bob.send_data(b"too late"),
+        Err(umbra_protocol::ProtocolError::StateViolation)
+    ));
+    assert!(matches!(
+        bob.cover_packet(),
+        Err(umbra_protocol::ProtocolError::StateViolation)
+    ));
+    Ok(())
+}
+
 /// The unused-key guard for fixture completeness.
 #[test]
 fn key_pair_helper_compiles() {

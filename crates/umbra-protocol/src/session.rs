@@ -80,6 +80,23 @@ struct EstablishedState {
     packet_key: Zeroizing<[u8; 32]>,
     /// In-progress SMP carriage reassembly, if any.
     smp_reassembly: Option<SmpCarriage>,
+    /// Set when SESSION_TERMINATE was sent or received.
+    terminated: bool,
+}
+
+impl EstablishedState {
+    /// Wipes the state in place: ratchet chains and the packet key all
+    /// zeroize on drop.
+    fn wipe(&mut self) {
+        self.smp_reassembly = None;
+        // `packet_key` is Zeroizing; the ratchet's chain/message keys are
+        // Zeroizing wrappers too — dropping them wipes the bytes.
+        self.packet_key = Zeroizing::new([0u8; 32]);
+        self.ratchet = DoubleRatchet::init_bob(
+            umbra_crypto::kdf::RootKey::from_bytes([0u8; 32]),
+            X25519KeyPair::from_secret_bytes(&[0u8; 32]),
+        );
+    }
 }
 
 /// Payload multiplexer tags carried as the first byte of every ratchet
@@ -117,6 +134,9 @@ pub enum InboundPayload {
     /// A fully reassembled SMP message (tag `0x01`; partial chunks are
     /// buffered internally and yield `None` until complete).
     Smp(Vec<u8>),
+    /// The peer sent SESSION_TERMINATE (SPECIFICATION opcode `0x09`):
+    /// the local session state has been zeroized and the session is dead.
+    Terminate,
 }
 
 /// Protocol session parameterized by its typestate.
@@ -282,6 +302,7 @@ impl Session<HandshakeInProgress> {
             ratchet,
             packet_key,
             smp_reassembly: None,
+            terminated: false,
         });
         Ok(Session {
             _state: PhantomData,
@@ -316,6 +337,7 @@ impl Session<HandshakeInProgress> {
             ratchet,
             packet_key,
             smp_reassembly: None,
+            terminated: false,
         });
         Ok(Session {
             _state: PhantomData,
@@ -345,6 +367,9 @@ impl Session<EstablishedSession> {
             .established
             .as_mut()
             .ok_or(ProtocolError::StateViolation)?;
+        if established.terminated {
+            return Err(ProtocolError::StateViolation);
+        }
         // Payload multiplexer: user text carries the 0x00 tag.
         let mut tagged = Vec::with_capacity(payload.len().saturating_add(1));
         tagged.push(TAG_TEXT);
@@ -414,6 +439,9 @@ impl Session<EstablishedSession> {
                 .established
                 .as_mut()
                 .ok_or(ProtocolError::StateViolation)?;
+            if established.terminated {
+                return Err(ProtocolError::StateViolation);
+            }
             let message = established.ratchet.encrypt(&frame)?;
             let framed_len = message
                 .header
@@ -500,6 +528,13 @@ impl Session<EstablishedSession> {
     /// [`InboundPayload::Text`]; SMP carriage chunks accumulate and yield
     /// [`InboundPayload::Smp`] once the transfer completes.
     ///
+    /// SESSION_TERMINATE (opcode `0x09`): the packet is decrypted (empty
+    /// payload, authenticated by the packet AEAD), then the ENTIRE
+    /// established state — ratchet chains, message keys, packet key — is
+    /// zeroized and dropped, and [`InboundPayload::Terminate`] is
+    /// returned. Subsequent sends/receives yield
+    /// [`ProtocolError::StateViolation`] (SPECIFICATION.md opcode 0x09).
+    ///
     /// Ordering contract (MVP): the Double Ratchet is strict in-order —
     /// Tor circuits deliver ordered streams, so no reordering is expected.
     /// A tampered or replayed packet fails decryption; because a message
@@ -519,7 +554,17 @@ impl Session<EstablishedSession> {
             .established
             .as_mut()
             .ok_or(ProtocolError::StateViolation)?;
+        if established.terminated {
+            return Err(ProtocolError::StateViolation);
+        }
         let unsealed: UnsealedPacket = packet::unseal(wire, established.packet_key.clone())?;
+        if unsealed.packet_type == PacketType::SessionTerminate {
+            // Authenticated termination: wipe the established state
+            // immediately (drop of Zeroizing keys zeroizes the bytes).
+            established.wipe();
+            established.terminated = true;
+            return Ok(Some(InboundPayload::Terminate));
+        }
         match unsealed.packet_type {
             PacketType::DummyCover => Ok(None),
             PacketType::DataMessage => {
@@ -549,6 +594,50 @@ impl Session<EstablishedSession> {
         }
     }
 
+    /// Seals a SESSION_TERMINATE signal (SPECIFICATION.md opcode `0x09`)
+    /// and immediately wipes the local established state (ratchet chains,
+    /// message keys, packet key). The caller transmits the returned
+    /// packet; afterwards every send/receive yields
+    /// [`ProtocolError::StateViolation`].
+    ///
+    /// The terminate signal is authenticated by the packet AEAD but
+    /// carries no ratchet message, so it cannot desynchronize chains. If
+    /// the caller drops the returned packet, the peer never learns of the
+    /// termination and simply times out — acceptable for MVP.
+    ///
+    /// Sequence note: `sequence` is not advanced (post-wipe it is dead
+    /// state).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::StateViolation`] if already terminated.
+    pub fn send_termination(&mut self) -> Result<SealedPacket, ProtocolError> {
+        let established = self
+            .established
+            .as_mut()
+            .ok_or(ProtocolError::StateViolation)?;
+        if established.terminated {
+            return Err(ProtocolError::StateViolation);
+        }
+        let sealed = packet::seal(
+            PacketType::SessionTerminate,
+            established.packet_key.clone(),
+            &[],
+        )?;
+        established.wipe();
+        established.terminated = true;
+        Ok(sealed)
+    }
+
+    /// Whether the session has been terminated (locally or by the peer).
+    #[must_use]
+    pub fn terminated(&self) -> bool {
+        self.established
+            .as_ref()
+            .map(|state| state.terminated)
+            .unwrap_or(true)
+    }
+
     /// Produces a Poisson cover-traffic packet indistinguishable from data.
     ///
     /// # Errors
@@ -560,6 +649,9 @@ impl Session<EstablishedSession> {
             .established
             .as_mut()
             .ok_or(ProtocolError::StateViolation)?;
+        if established.terminated {
+            return Err(ProtocolError::StateViolation);
+        }
         let mut filler = [0u8; 64];
         umbra_crypto::rng::fill(&mut filler).map_err(ProtocolError::from)?;
         packet::seal(
