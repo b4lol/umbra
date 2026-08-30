@@ -18,7 +18,9 @@ path = "src/main.rs"
 umbra-crypto.workspace = true
 umbra-protocol.workspace = true
 umbra-net.workspace = true
+umbra-hardware = { path = "../umbra-hardware" }
 clap.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
+landlock.workspace = true
 thiserror.workspace = true

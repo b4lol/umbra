@@ -5,6 +5,7 @@
 //! requested data; diagnostics go to `stderr`).
 
 mod cli;
+mod sandbox;
 mod tui;
 
 use std::process::ExitCode;

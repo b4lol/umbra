@@ -14,6 +14,20 @@ pub enum HardwareError {
     #[error("hardware transport failure")]
     Transport,
 
+    /// A syscall backing the safe API failed.
+    #[error("syscall {name} failed: {source}")]
+    Syscall {
+        /// Name of the failing syscall (diagnostics only).
+        name: &'static str,
+        /// Kernel-reported error.
+        source: std::io::Error,
+    },
+
+    /// The requested guarded-memory layout is impossible on this platform
+    /// (for example, an alignment larger than the page size).
+    #[error("invalid guarded-memory layout")]
+    InvalidLayout,
+
     /// Raw-driver feature not yet wired (TODO B.5/B.7).
     #[error("not yet implemented: {0}")]
     Unsupported(&'static str),

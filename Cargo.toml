@@ -71,6 +71,12 @@ argon2 = "0.6.0"
 subtle = "2.6.1"
 zeroize = { version = "1.9.0", features = ["derive"] }
 
+# Kernel FFI (umbra-hardware: mlock/mprotect/madvise, ADR-012)
+libc = "0.2.189"
+
+# Landlock LSM sandboxing (TODO A.4, ADR-007)
+landlock = "0.4.7"
+
 # Randomness (getrandom 0.4 / rand_core 0.10 — TryCryptoRng era)
 getrandom = "0.4.3"
 rand_core = "0.10.1"

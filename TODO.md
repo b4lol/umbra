@@ -18,7 +18,8 @@ This list contains the technical tasks planned for the step-by-step implementati
 - [x] Implementation of the hybrid PQXDH handshake protocol.
 - [x] Double Ratchet state machine and KDF chains.
 - [x] `ChaCha20-Poly1305` AEAD encryption and `subtle::ConstantTimeEq` timing protection.
-- [ ] Secure memory hygiene with `zeroize` and guard pages. *(zeroize done; guard pages pending)*
+- [x] Secure memory hygiene with `zeroize` and guard pages. *(GuardedBuffer: PROT_NONE guards + mlock + MADV_DONTDUMP/DONTFORK/WIPEONFORK/UNMERGEABLE + zeroize-on-drop)*
+- [ ] Zero-copy in-place identity generation (the generator's return-slot bytes currently transit the stack, protected only by `mlockall`/non-dumpable; eliminate the copy).
 
 ## A.2 Network & Transport (`umbra-net`)
 
@@ -37,7 +38,7 @@ This list contains the technical tasks planned for the step-by-step implementati
 - [ ] Security-focused, low-resource Terminal TUI (`ratatui`).
 - [ ] Clipboard manager with a 60-second auto-destruct.
 - [ ] Linux D-Bus masked generic notification adapter (`org.freedesktop.Notifications`).
-- [ ] **Memory Leak Locks:** `mlockall`, `prctl(PR_SET_DUMPABLE, 0)` and `MADV_DONTDUMP`/`MADV_DONTFORK` integration.
+- [x] **Memory Leak Locks:** `mlockall`, `prctl(PR_SET_DUMPABLE, 0)` and `MADV_DONTDUMP`/`MADV_DONTFORK` integration. *(plus `setrlimit(RLIMIT_CORE, 0)` and `MADV_UNMERGEABLE`; Landlock zero-FS sandbox in the CLI)*
 - [ ] **CPU Register Zeroing:** Adding the LLVM `-Z zero-call-used-regs=all` rule to the build configuration.
 - [ ] **DNS & IPv6 Blocking:** Verification of the absolute kernel/nftables-level `DROP` of UDP 53 and IPv6.
 
