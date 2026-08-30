@@ -150,7 +150,7 @@ fn keygen(json: bool) -> Result<(), CliError> {
     let mut spk_signature = Vec::new();
     let mut kem = [0u8; 1184];
     let mut dsa = Vec::new();
-    guarded.with(|identity| {
+    _guarded.with(|identity| {
         x25519 = identity.x25519.public_bytes();
         spk = identity.spk.public_bytes();
         spk_signature = identity.spk_signature.clone();
