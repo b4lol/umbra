@@ -1,0 +1,9 @@
+# cargo-audit configuration (separate from cargo-deny's deny.toml).
+# Both advisories are transitive through the optional `tor` feature
+# (arti-client 0.45 tree) with no Umbra-side exposure:
+# - RUSTSEC-2023-0071 (rsa): Marvin timing attack; Tor's protocol-mandated
+#   RSA-1024 identity keys. Umbra never uses RSA for its own cryptography.
+# - RUSTSEC-2024-0436 (paste): unmaintained proc-macro, build-time only.
+# Revisit on every dependabot arti bump.
+[advisories]
+ignore = ["RUSTSEC-2023-0071", "RUSTSEC-2024-0436"]

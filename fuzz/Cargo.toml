@@ -16,6 +16,10 @@ test = false
 doc = false
 bench = false
 
+# Required marker for `cargo fuzz run` to recognize this scaffold.
+[package.metadata]
+cargo-fuzz = true
+
 # The fuzz tree is its own workspace so libFuzzer's C toolchain never
 # contaminates the main workspace build.
 [workspace]

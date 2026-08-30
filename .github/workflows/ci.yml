@@ -39,13 +39,15 @@ jobs:
     name: fuzz smoke (packet parser)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # Override the pinned rust-toolchain.toml (stable) — libFuzzer needs nightly.
+      RUSTUP_TOOLCHAIN: nightly
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: |
-            -> fuzz
+          workspaces: fuzz
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
@@ -56,6 +58,10 @@ jobs:
     name: ASan + UBSan (nightly)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # Override the pinned rust-toolchain.toml (stable) — `-Zsanitizer`
+      # requires the nightly compiler.
+      RUSTUP_TOOLCHAIN: nightly
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
