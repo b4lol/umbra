@@ -1,0 +1,39 @@
+[package]
+name = "umbra-crypto"
+description = "Post-quantum hybrid cryptography core for Umbra (PQXDH, Double Ratchet, AEAD, KDF)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Post-quantum (ADR-026: pure-Rust RustCrypto only)
+ml-kem.workspace = true
+ml-dsa.workspace = true
+x25519-dalek.workspace = true
+chacha20poly1305.workspace = true
+crypto-common.workspace = true
+
+# KDF / hashing
+hkdf.workspace = true
+sha2.workspace = true
+blake3.workspace = true
+
+# Constant-time + memory hygiene
+subtle.workspace = true
+zeroize.workspace = true
+
+# Randomness
+getrandom.workspace = true
+rand_core.workspace = true
+hybrid-array = "0.4.14"
+
+# Errors
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

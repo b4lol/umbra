@@ -1,0 +1,24 @@
+[package]
+name = "umbra-cli"
+description = "Umbra command-line front end: Unix-philosophy pipes (ADR-022) and the Ratatui TUI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "umbra"
+path = "src/main.rs"
+
+[dependencies]
+umbra-crypto.workspace = true
+umbra-protocol.workspace = true
+umbra-net.workspace = true
+clap.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+thiserror.workspace = true

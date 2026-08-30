@@ -1,0 +1,16 @@
+[package]
+name = "umbra-gui"
+description = "Umbra Linux GUI: GTK4 + Libadwaita, Wayland-only (v2+ scope, ADR-027)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# GTK4/Libadwaita dependencies are intentionally NOT declared yet: the GUI is
+# v2+ scope (ADR-027) and adding gtk4-rs would drag system build requirements
+# into the MVP workspace. This crate is the reserved module slot (TODO B.3).

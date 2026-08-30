@@ -1,0 +1,21 @@
+[package]
+name = "umbra-protocol"
+description = "Umbra wire protocol: 1024-byte fixed packets, Poisson cover traffic, SAS verification, typestate sessions"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+umbra-crypto.workspace = true
+getrandom.workspace = true
+subtle.workspace = true
+zeroize.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

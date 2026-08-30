@@ -1,0 +1,10 @@
+# Cargo build configuration for the Umbra workspace.
+#
+# ADR-025 mandates LLVM `-Z zero-call-used-regs=all` (register zeroing on
+# function return). That flag is nightly-only; it will be applied by the
+# hardened nightly CI profile when it lands (TODO A.4). It is intentionally
+# NOT set here so that the stable toolchain builds stay reproducible.
+
+[alias]
+# Verify the entire workspace including tests and examples.
+checkall = "check --workspace --all-targets"

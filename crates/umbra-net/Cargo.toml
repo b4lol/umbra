@@ -1,0 +1,31 @@
+[package]
+name = "umbra-net"
+description = "Umbra transport layer: Arti Tor v3 Onion P2P (feature-gated) and hermetic transports"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+umbra-protocol.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+
+# Censorship-resistant transport; wiring lands with TODO A.2 (ADR-008).
+# Declared locally (not via [workspace.dependencies]) because workspace
+# dependencies cannot be optional. `default-features = false` drops
+# native-tls (C OpenSSL) in favor of the pure-Rust rustls stack per the
+# language policy (ADR-011); "static" bundles SQLite via cc.
+arti-client = { version = "0.45.0", default-features = false, features = [
+    "rustls",
+    "static",
+], optional = true }
+
+[features]
+default = []
+# Enables the embedded Arti Tor v3 transport (TODO A.2).
+tor = ["dep:arti-client"]

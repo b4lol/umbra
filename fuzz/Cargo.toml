@@ -1,0 +1,21 @@
+[package]
+name = "umbra-fuzz"
+description = "libFuzzer targets for Umbra parsers (CONTRIBUTING §5-6)"
+version = "0.1.0-alpha"
+edition = "2024"
+publish = false
+
+[dependencies]
+libfuzzer-sys = "0.4"
+umbra-protocol = { path = "../crates/umbra-protocol" }
+
+[[bin]]
+name = "fuzz_packet_parser"
+path = "fuzz_targets/fuzz_packet_parser.rs"
+test = false
+doc = false
+bench = false
+
+# The fuzz tree is its own workspace so libFuzzer's C toolchain never
+# contaminates the main workspace build.
+[workspace]

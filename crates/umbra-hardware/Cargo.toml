@@ -1,0 +1,37 @@
+[package]
+name = "umbra-hardware"
+description = "Hardware security bridge: the sole crate permitted to use `unsafe` (CONTRIBUTING §2)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# NOTE: this crate intentionally does NOT inherit the workspace lints: it is
+# the single, isolated exception where `unsafe` is permitted — and only for
+# direct physical-hardware communication (ADR-012). `#![forbid(unsafe_code)]`
+# would make that impossible. Every `unsafe` block here must carry a
+# `// SAFETY:` justification (clippy::undocumented_unsafe_blocks is denied).
+#
+# The skeleton contains NO unsafe code; hardware drivers land with the
+# hardware milestone (HARDWARE_SECURITY.md, TODO B.5/B.7).
+
+[lints.rust]
+missing_docs = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+missing_docs_in_private_items = "deny"
+undocumented_unsafe_blocks = "deny"
+
+[dependencies]
+zeroize.workspace = true
+thiserror.workspace = true
