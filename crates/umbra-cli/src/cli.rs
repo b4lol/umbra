@@ -139,8 +139,12 @@ fn keygen(json: bool) -> Result<(), CliError> {
     // low RLIMIT_MEMLOCK or pre-5.13 kernels) must still be able to mint
     // identities. Secrets still spend their lifetime inside the guarded
     // buffer below, whose per-page mlock errors DO propagate.
-    let guarded = GuardedBuffer::new(IdentityBundle::generate()).map_err(CliError::from)?;
-    let guarded = GuardedBuffer::new(IdentityBundle::generate()).map_err(CliError::from)?;
+    // The guarded buffer keeps the bundle alive (zeroized on drop) and
+    // provides per-page mlock; it is intentionally not read afterwards.
+    let _guarded = GuardedBuffer::new(IdentityBundle::generate()).map_err(CliError::from)?;
+    // The guarded buffer keeps the bundle alive (zeroized on drop) and
+    // provides per-page mlock; it is intentionally not read afterwards.
+    let _guarded = GuardedBuffer::new(IdentityBundle::generate()).map_err(CliError::from)?;
     let mut x25519 = [0u8; 32];
     let mut spk = [0u8; 32];
     let mut spk_signature = Vec::new();
