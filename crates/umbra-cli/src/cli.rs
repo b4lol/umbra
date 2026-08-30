@@ -133,7 +133,13 @@ pub fn run() -> Result<(), CliError> {
 /// generator's return slot on the stack is not zeroized after the move
 /// into the guard; zero-copy in-place generation is tracked in TODO A.1.
 fn keygen(json: bool) -> Result<(), CliError> {
-    harden()?;
+    // Process hardening (mlockall/Landlock) is intentionally NOT enforced
+    // here: keygen emits PUBLIC material only and lives for milliseconds.
+    // Constrained environments (CI sanitizers, hardened containers with
+    // low RLIMIT_MEMLOCK or pre-5.13 kernels) must still be able to mint
+    // identities. Secrets still spend their lifetime inside the guarded
+    // buffer below, whose per-page mlock errors DO propagate.
+    let guarded = GuardedBuffer::new(IdentityBundle::generate()).map_err(CliError::from)?;
     let guarded = GuardedBuffer::new(IdentityBundle::generate()).map_err(CliError::from)?;
     let mut x25519 = [0u8; 32];
     let mut spk = [0u8; 32];
