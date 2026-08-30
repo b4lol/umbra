@@ -1,8 +1,14 @@
 //! Async transport abstraction (ARCHITECTURE.md "Network Router").
 //!
 //! [`LoopbackPair`] provides a fully hermetic in-memory transport pair for
-//! deterministic tests; the real wire transport is the feature-gated
-//! [`crate::tor`] module (TODO A.2).
+//! deterministic tests (CONTRIBUTING §"Hermetic and Deterministic Tests");
+//! the real wire transport is the feature-gated [`crate::tor`] module
+//! (TODO A.2).
+//!
+//! Identity note: [`Transport::recv`] deliberately returns **no source
+//! address** — a Tor v3 onion service cannot know the connecting peer's
+//! address (that is the anonymity property). Peer identity is established
+//! at the pairing/session layer (CRYPTOGRAPHY.md §5), not per packet.
 
 use tokio::sync::Mutex;
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -24,14 +30,14 @@ pub trait Transport: Send + Sync {
         packet: &SealedPacket,
     ) -> impl core::future::Future<Output = Result<(), TransportError>> + Send;
 
-    /// Receives the next inbound packet with its source.
+    /// Receives the next inbound packet.
     ///
     /// # Errors
     ///
     /// Transport-specific failures ([`TransportError`]).
     fn recv(
         &self,
-    ) -> impl core::future::Future<Output = Result<(OnionAddr, SealedPacket), TransportError>> + Send;
+    ) -> impl core::future::Future<Output = Result<SealedPacket, TransportError>> + Send;
 }
 
 /// Capacity of the loopback channel, in packets.
@@ -40,9 +46,9 @@ const LOOPBACK_CAPACITY: usize = 256;
 /// In-memory loopback transport for hermetic tests.
 pub struct LoopbackTransport {
     /// Outbound queue.
-    tx: Sender<(OnionAddr, SealedPacket)>,
+    tx: Sender<SealedPacket>,
     /// Inbound queue (locked per receive; `Receiver` is not `Clone`).
-    rx: Mutex<Receiver<(OnionAddr, SealedPacket)>>,
+    rx: Mutex<Receiver<SealedPacket>>,
 }
 
 /// A matched pair of loopback transports (two peers talking in-memory).
@@ -79,14 +85,14 @@ impl Default for LoopbackPair {
 }
 
 impl Transport for LoopbackTransport {
-    async fn send(&self, peer: &OnionAddr, packet: &SealedPacket) -> Result<(), TransportError> {
+    async fn send(&self, _peer: &OnionAddr, packet: &SealedPacket) -> Result<(), TransportError> {
         self.tx
-            .send((peer.clone(), packet.clone()))
+            .send(packet.clone())
             .await
             .map_err(|_e| TransportError::ChannelClosed)
     }
 
-    async fn recv(&self) -> Result<(OnionAddr, SealedPacket), TransportError> {
+    async fn recv(&self) -> Result<SealedPacket, TransportError> {
         let mut rx = self.rx.lock().await;
         rx.recv().await.ok_or(TransportError::ChannelClosed)
     }

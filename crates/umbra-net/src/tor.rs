@@ -4,23 +4,29 @@
 //! client (no external `tor` daemon) and opens anonymized streams to peer
 //! `.onion` services, writing fixed 1024-byte packets.
 //!
-//! Inbound path — **not wired**: hosting our own Tor v3 onion service
-//! (receiving `recv()`) needs `tor-hsservice` key management and a service
-//! lifecycle loop; it lands with the second half of TODO A.2. Until then
-//! [`Transport::recv`] returns [`TransportError::Unsupported`].
+//! Inbound path — **implemented**: spawns a Tor v3 onion service (via
+//! `tor-hsservice`), accepts rendezvous streams, and surfaces them as
+//! fixed-size packets through [`Transport::recv`]. The service identity
+//! key lives in the ephemeral per-run state directory, so the `.onion`
+//! address changes per run until pairing-tied key persistence lands
+//! (TODO A.2 second half).
 //!
 //! Anonymity posture (honest scope): this layer provides Tor v3 anonymity
-//! for on-demand sends. It does **not** yet provide Global Passive
-//! Adversary resistance (THREAT_MODEL "Global Passive Adversary" row):
-//! that requires Poisson cover traffic ([`crate::SUPERSEDED_BY`]: the
-//! protocol-layer `DUMMY_COVER` pump, TODO A.3) and eventually mixnets.
-//! One fresh circuit per send also adds circuit-establishment timing;
-//! persistent streams are revisited with the inbound work.
+//! for on-demand sends and inbound acceptance. It does **not** yet provide
+//! Global Passive Adversary resistance (THREAT_MODEL "Global Passive
+//! Adversary" row): that requires Poisson cover traffic (the protocol-layer
+//! `DUMMY_COVER` pump, TODO A.3) and eventually mixnets. One fresh circuit
+//! per send also adds circuit-establishment timing; persistent streams are
+//! revisited with the pairing work.
+//!
+//! Identity note: a Tor v3 onion service cannot know the connecting peer's
+//! address — that is the anonymity property. [`Transport::recv`] therefore
+//! returns packets without a source; peer identity comes from the pairing
+//! layer (CRYPTOGRAPHY.md §5).
 //!
 //! State handling: Tor directory cache and persistent state are pointed at
 //! an ephemeral per-run temp directory — no Umbra-owned residue under the
 //! user's profile (ADR-006 anti-residue), wiped when the OS reclaims /tmp.
-//! Persistent guard state is a v2 decision (forensic-correlation tradeoff).
 //!
 //! Rustls provider: the explicit `ring` CryptoProvider is enabled because
 //! rustls 0.23 panics at client construction when zero or two providers are
@@ -36,12 +42,15 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use arti_client::{DataStream, TorClient, TorClientConfig};
-use tokio::io::AsyncWriteExt;
+use safelog::DisplayRedacted as _;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::addr::OnionAddr;
 use crate::error::TransportError;
 use crate::transport::Transport;
+use futures_util::StreamExt;
 use umbra_protocol::packet::SealedPacket;
+use umbra_protocol::types::PACKET_LEN;
 
 /// Provisional Umbra P2P port for peer onion services.
 ///
@@ -51,6 +60,9 @@ pub const PROVISIONAL_PEER_PORT: u16 = 39_441;
 
 /// Upper bound for the Tor bootstrap phase.
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Capacity of the inbound packet queue.
+const INBOUND_QUEUE: usize = 256;
 
 /// Builds an ephemeral, per-run `TorClientConfig`.
 ///
@@ -62,7 +74,8 @@ const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(180);
 /// # Errors
 ///
 /// Returns [`TransportError::EphemeralDir`] if a unique directory name
-/// cannot be derived.
+/// cannot be derived, and [`TransportError::Config`] if Arti rejects the
+/// configuration.
 fn ephemeral_config() -> Result<TorClientConfig, TransportError> {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -87,6 +100,10 @@ fn ephemeral_config() -> Result<TorClientConfig, TransportError> {
 pub struct TorTransport {
     /// Bootstrapped (or, in tests, unbootstrapped) Arti client.
     client: Arc<TorClient<tor_rtcompat::PreferredRuntime>>,
+    /// The running onion service, if the inbound path was spawned.
+    service: Option<Arc<tor_hsservice::RunningOnionService>>,
+    /// Inbound packet queue (present after [`Self::spawn_inbound`]).
+    inbound_rx: Option<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<SealedPacket>>>,
 }
 
 impl TorTransport {
@@ -111,7 +128,11 @@ impl TorTransport {
         .map_err(|_elapsed| TransportError::Timeout {
             operation: "Tor bootstrap",
         })??;
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            service: None,
+            inbound_rx: None,
+        })
     }
 
     /// Creates an unbootstrapped client — no network contact.
@@ -133,7 +154,92 @@ impl TorTransport {
         let client = TorClient::<tor_rtcompat::PreferredRuntime>::with_runtime(runtime)
             .create_unbootstrapped_async()
             .await?;
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            service: None,
+            inbound_rx: None,
+        })
+    }
+
+    /// Spawns the inbound onion service: publishes a Tor v3 hidden service
+    /// and pumps accepted streams into the inbound packet queue.
+    ///
+    /// Inbound is **unauthenticated at this layer**: anyone on the Tor
+    /// network may connect and push packets; the sole gate is the session
+    /// layer (SPECIFICATION opcodes 0x01/0x02 PQXDH plus CRYPTOGRAPHY §5
+    /// SAS/SMP pairing — the SMP engine is still a TODO A.3 stub).
+    ///
+    /// Availability: acceptance is head-of-line protected — each accepted
+    /// stream gets its own pump task bounded by
+    /// [`MAX_CONCURRENT_INBOUND_STREAMS`] permits and an idle timeout, so a
+    /// stalled peer parks only its own stream. Per-transport PoW (hs-pow)
+    /// configuration is tracked in TODO A.2.
+    ///
+    /// The service identity key is generated into the ephemeral keystore
+    /// (the per-run state directory, `0700` per Arti's fs-mistrust defaults;
+    /// no explicit wipe — the OS reclaims /tmp), so the `.onion` address
+    /// changes per run until pairing-tied key persistence lands.
+    ///
+    /// Calling this twice on one transport is refused (single service per
+    /// transport).
+    ///
+    /// Must be called within a Tokio context.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError::Config`] for an invalid nickname,
+    /// [`TransportError::Tor`] for launch failures, and
+    /// [`TransportError::AlreadyStarted`] if the service already runs.
+    pub async fn spawn_inbound(&mut self, nickname: &str) -> Result<(), TransportError> {
+        if self.service.is_some() || self.inbound_rx.is_some() {
+            return Err(TransportError::AlreadyStarted {
+                what: "inbound onion service",
+            });
+        }
+        let nickname = tor_hsservice::HsNickname::new(nickname.to_string()).map_err(|err| {
+            TransportError::Config {
+                details: err.to_string(),
+            }
+        })?;
+        let service_config = tor_hsservice::OnionServiceConfig::builder()
+            .nickname(nickname)
+            .build()
+            .map_err(|err| TransportError::Config {
+                details: err.to_string(),
+            })?;
+
+        let Some((service, rends)) = self
+            .client
+            .launch_onion_service(service_config)
+            .map_err(TransportError::Tor)?
+        else {
+            return Err(TransportError::Unsupported(
+                "onion service disabled in configuration",
+            ));
+        };
+
+        let requests = tor_hsservice::handle_rend_requests(rends);
+        let (tx, rx) = tokio::sync::mpsc::channel(INBOUND_QUEUE);
+        tokio::spawn(accept_loop(requests, tx));
+
+        self.service = Some(service);
+        self.inbound_rx = Some(tokio::sync::Mutex::new(rx));
+        Ok(())
+    }
+
+    /// The published `.onion` address of the inbound service, once known.
+    ///
+    /// The returned string is deliberately unredacted (for pairing/QR
+    /// display) and must never be written to logs or disk.
+    #[must_use]
+    pub fn onion_address(&self) -> Option<String> {
+        Some(
+            self.service
+                .as_ref()?
+                .onion_address()?
+                .display_unredacted()
+                .to_string(),
+        )
     }
 
     /// Reports whether the client is ready to carry traffic.
@@ -167,12 +273,85 @@ impl TorTransport {
     }
 }
 
+/// Upper bound for concurrent inbound streams (permit-guarded pumps).
+///
+/// A hostile peer that opens streams and stalls must not starve rendezvous
+/// acceptance: each pump holds one permit and is dropped on idle timeout.
+const MAX_CONCURRENT_INBOUND_STREAMS: usize = 64;
+
+/// Idle bound per inbound read: a stream that sends nothing for this long
+/// is dropped, releasing its concurrency permit.
+const INBOUND_READ_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Accepts rendezvous requests forever, spawning one permit-guarded pump
+/// per accepted stream (head-of-line protection: a stalled peer parks its
+/// own pump only, never the accept loop).
+///
+/// Framing rule: a stream carries only whole 1024-byte packets; a torn or
+/// malformed packet is unresynchronizable, so the stream is closed.
+async fn accept_loop(
+    mut requests: impl futures_util::Stream<Item = tor_hsservice::StreamRequest> + Unpin,
+    tx: tokio::sync::mpsc::Sender<SealedPacket>,
+) {
+    let permits = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_INBOUND_STREAMS));
+    while let Some(request) = requests.next().await {
+        let stream = match request
+            .accept(tor_cell::relaycell::msg::Connected::new_empty())
+            .await
+        {
+            Ok(stream) => stream,
+            // Malformed handshake: drop this rendezvous, keep serving.
+            Err(_e) => continue,
+        };
+        // try_acquire (not acquire.await): when saturated we prefer
+        // refusing new streams over queueing accept-loop work.
+        let permit = match Arc::clone(&permits).try_acquire_owned() {
+            Ok(permit) => permit,
+            // At capacity: reject this stream by dropping it unaccepted.
+            Err(_full) => continue,
+        };
+        tokio::spawn(pump_stream(stream, tx.clone(), permit));
+    }
+}
+
+/// Reads one stream into the queue until it closes, idles out, or hits a
+/// framing error (then the stream is dropped — resynchronizing is
+/// impossible). Dropping the task releases the concurrency permit.
+async fn pump_stream(
+    mut stream: DataStream,
+    tx: tokio::sync::mpsc::Sender<SealedPacket>,
+    _permit: tokio::sync::OwnedSemaphorePermit,
+) {
+    let mut buffer = [0u8; PACKET_LEN];
+    loop {
+        match tokio::time::timeout(INBOUND_READ_IDLE_TIMEOUT, stream.read_exact(&mut buffer)).await
+        {
+            // Full packet read: validate and enqueue.
+            Ok(Ok(_read)) => {}
+            // Stream closed / torn write: drop the stream.
+            Ok(Err(_e)) => return,
+            // Idle timeout: drop the stalled stream, release the permit.
+            Err(_elapsed) => return,
+        }
+        let packet = match SealedPacket::from_bytes(&buffer) {
+            Ok(packet) => packet,
+            // Malformed framing: drop the stream.
+            Err(_e) => return,
+        };
+        match tx.send(packet).await {
+            Ok(()) => {}
+            // Inbound queue closed: transport is shutting down.
+            Err(_e) => return,
+        }
+    }
+}
+
 impl Transport for TorTransport {
     /// Sends one sealed packet over a fresh anonymized stream.
     ///
     /// Torn-write semantics: if the stream dies mid-`write_all`, the peer
     /// holds a partial 1024-byte packet whose AEAD tag cannot verify; the
-    /// receiver must discard it (SPECIFICATION framing). Fresh streams per
+    /// receiver discards the stream (see `pump_stream`). Fresh streams per
     /// send keep such damage from desynchronizing later packets.
     ///
     /// # Errors
@@ -188,10 +367,18 @@ impl Transport for TorTransport {
         Ok(())
     }
 
-    async fn recv(&self) -> Result<(OnionAddr, SealedPacket), TransportError> {
-        Err(TransportError::Unsupported(
-            "inbound onion service hosting lands with TODO A.2 second half",
-        ))
+    /// Receives the next inbound packet from the spawned onion service.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError::Unsupported`] if `spawn_inbound` has not
+    /// run, and [`TransportError::ChannelClosed`] after shutdown.
+    async fn recv(&self) -> Result<SealedPacket, TransportError> {
+        let rx = self.inbound_rx.as_ref().ok_or(TransportError::Unsupported(
+            "inbound service not started; call spawn_inbound first",
+        ))?;
+        let mut guard = rx.lock().await;
+        guard.recv().await.ok_or(TransportError::ChannelClosed)
     }
 }
 
@@ -220,5 +407,13 @@ mod tests {
         assert!(host.ends_with(".onion"));
         assert_eq!(port, PROVISIONAL_PEER_PORT);
         Ok(())
+    }
+
+    /// The inbound service rejects an invalid nickname at configuration
+    /// time (hermetic: no network, no launch).
+    #[test]
+    fn invalid_nickname_is_rejected() {
+        let result = tor_hsservice::HsNickname::new(String::from("bad nickname!"));
+        assert!(result.is_err());
     }
 }

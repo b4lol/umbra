@@ -24,8 +24,10 @@ This list contains the technical tasks planned for the step-by-step implementati
 ## A.2 Network & Transport (`umbra-net`)
 
 - [x] Pure-Rust Tor v3 outbound P2P: embedded Arti client bootstrap (time-bounded) + anonymized streams to peer `.onion` services (`tor` feature).
-- [ ] Inbound Tor v3 Hidden Service hosting (`tor-hsservice`): onion endpoint lifecycle, key management, and the `Transport::recv` half.
-- [ ] Persistent peer streams and Strict Vanguards-Lite circuit policy (TARGETED_DEFENSES §3B).
+- [x] Inbound Tor v3 Hidden Service hosting (`tor-hsservice`): rendezvous accept loop (head-of-line protected), fixed-size packet pump, ephemeral identity keystore.
+- [ ] Pairing-tied identity-key persistence (per-run `.onion` address currently changes every run) and reconciliation with the Landlock zero-FS sandbox.
+- [ ] Per-transport inbound hardening: hs-pow (proof-of-work) configuration and persistent peer streams.
+- [ ] Strict Vanguards-Lite circuit policy (TARGETED_DEFENSES §3B).
 
 ## A.3 Protocol & Metadata Masking (`umbra-protocol`)
 

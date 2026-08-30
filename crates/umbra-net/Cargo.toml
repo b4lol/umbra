@@ -26,8 +26,15 @@ arti-client = { version = "0.45.0", default-features = false, features = [
     "rustls",
     "static",
     "tokio",
+    "onion-service-service",
 ], optional = true }
 tor-rtcompat = { version = "0.45.0", features = ["tokio", "rustls"], optional = true }
+tor-cell = { version = "0.45.0", optional = true }
+tor-hsservice = { version = "0.45.0", optional = true }
+safelog = { version = "0.9", optional = true }
+futures-util = { version = "0.3.31", default-features = false, features = [
+    "std",
+], optional = true }
 # Select exactly one rustls CryptoProvider (ring) — without an explicit
 # provider feature rustls 0.23 panics at client construction.
 rustls = { version = "0.23", default-features = false, features = [
@@ -39,4 +46,12 @@ rustls = { version = "0.23", default-features = false, features = [
 [features]
 default = []
 # Enables the embedded Arti Tor v3 transport (TODO A.2).
-tor = ["dep:arti-client", "dep:tor-rtcompat", "dep:rustls"]
+tor = [
+    "dep:arti-client",
+    "dep:tor-rtcompat",
+    "dep:tor-cell",
+    "dep:tor-hsservice",
+    "dep:futures-util",
+    "dep:rustls",
+    "dep:safelog",
+]

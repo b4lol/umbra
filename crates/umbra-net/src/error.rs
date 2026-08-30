@@ -29,6 +29,13 @@ pub enum TransportError {
         operation: &'static str,
     },
 
+    /// A transport component was started more than once.
+    #[error("already started: {what}")]
+    AlreadyStarted {
+        /// Name of the already-running component.
+        what: &'static str,
+    },
+
     /// The ephemeral storage layout could not be derived.
     #[error("could not derive an ephemeral directory")]
     EphemeralDir,
