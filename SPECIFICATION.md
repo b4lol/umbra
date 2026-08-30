@@ -13,10 +13,24 @@ Every packet transmitted over the network, regardless of its type, is strictly o
 | `0x000` | `MAGIC_HEADER` | `[u8; 2]` | 2 Byte | Protocol magic bytes: `0x55, 0x4D` (`"UM"`) |
 | `0x002` | `PROTOCOL_VERSION` | `u8` | 1 Byte | Protocol version: `0x01` |
 | `0x003` | `PACKET_TYPE` | `u8` | 1 Byte | Packet type opcode (Opcode) |
-| `0x004` | `PAYLOAD_LEN` | `u16` | 2 Byte | Byte length of the actual payload ($0 \le N \le 992$) |
+| `0x004` | `PAYLOAD_LEN` | `u16` | 2 Byte | Byte length of the actual payload ($0 \le N \le 990$) |
 | `0x006` | `CHACHA_NONCE` | `[u8; 12]` | 12 Byte | 96-bit single-use random nonce for ChaCha20-Poly1305 |
-| `0x012` | `ENCRYPTED_DATA` | `[u8; 992]` | 992 Byte | Encrypted payload (Actual Data + Cryptographic Random Padding) |
-| `0x3F2` | `POLY1305_TAG` | `[u8; 16]` | 16 Byte | 128-bit Poly1305 Auth Tag |
+| `0x012` | `ENCRYPTED_DATA` | `[u8; 990]` | 990 Byte | Encrypted payload (Actual Data + Cryptographic Random Padding) |
+| `0x3F0` | `POLY1305_TAG` | `[u8; 16]` | 16 Byte | 128-bit Poly1305 Auth Tag |
+
+> **Revision note (wire-format arithmetic):** The original revision of this
+> table specified `ENCRYPTED_DATA` as 992 bytes at `0x012` with a 16-byte
+> tag at `0x3F2`, which sums to 1026 bytes — 2 bytes beyond the mandated
+> 1024-byte packet. The layout above resolves the inconsistency
+> arithmetically: `18 (header) + 990 (encrypted data) + 16 (tag) = 1024`.
+> This matches the reference implementation in `crates/umbra-protocol`
+> (`types.rs`: `HEADER_LEN`, `BODY_LEN`, `TAG_LEN`).
+
+> **Chunking note (`HANDSHAKE_INIT`):** The PQXDH initial blob
+> ($IK_A \parallel EK_A \parallel CT_{\text{ML-KEM}}$) is 1152 bytes
+> (32 + 32 + 1088), which exceeds the 990-byte payload budget of a single
+> packet. The transport layer therefore fragments the initial handshake
+> across consecutive `HANDSHAKE_INIT` packets (see `crates/umbra-net`).
 
 ### Packet Types (Opcodes):
 - `0x01`: `HANDSHAKE_INIT` — PQXDH initiation packet from Alice to Bob ($IK_A \parallel EK_A \parallel CT_{\text{ML-KEM}}$).

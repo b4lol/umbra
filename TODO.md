@@ -12,13 +12,13 @@ This list contains the technical tasks planned for the step-by-step implementati
 
 ## A.1 Rust Workspace & Core Cryptography (`umbra-crypto`)
 
-- [ ] Creating the Cargo Workspace (`crates/umbra-crypto`, `crates/umbra-net`, `crates/umbra-protocol`, `crates/umbra-cli`, `crates/umbra-gui`, `crates/umbra-ffi`).
-- [ ] Classical Diffie-Hellman key-pair management with `x25519-dalek`.
-- [ ] Pure-Rust (RustCrypto) `ml-kem` (ML-KEM-768) and `ml-dsa` (ML-DSA-65) integration (ADR-026; C-based `pqcrypto-*` wrappers are not used).
-- [ ] Implementation of the hybrid PQXDH handshake protocol.
-- [ ] Double Ratchet state machine and KDF chains.
-- [ ] `ChaCha20-Poly1305` AEAD encryption and `subtle::ConstantTimeEq` timing protection.
-- [ ] Secure memory hygiene with `zeroize` and guard pages.
+- [x] Creating the Cargo Workspace (`crates/umbra-crypto`, `crates/umbra-net`, `crates/umbra-protocol`, `crates/umbra-cli`, `crates/umbra-gui`, `crates/umbra-ffi`).
+- [x] Classical Diffie-Hellman key-pair management with `x25519-dalek`.
+- [x] Pure-Rust (RustCrypto) `ml-kem` (ML-KEM-768) and `ml-dsa` (ML-DSA-65) integration (ADR-026; C-based `pqcrypto-*` wrappers are not used).
+- [x] Implementation of the hybrid PQXDH handshake protocol.
+- [x] Double Ratchet state machine and KDF chains.
+- [x] `ChaCha20-Poly1305` AEAD encryption and `subtle::ConstantTimeEq` timing protection.
+- [ ] Secure memory hygiene with `zeroize` and guard pages. *(zeroize done; guard pages pending)*
 
 ## A.2 Network & Transport (`umbra-net`)
 
@@ -26,8 +26,8 @@ This list contains the technical tasks planned for the step-by-step implementati
 
 ## A.3 Protocol & Metadata Masking (`umbra-protocol`)
 
-- [ ] 1024-byte fixed-block packet framing (`Packetizer`) and cryptographic random padding.
-- [ ] Poisson-distributed artificial cover-traffic generator (`PoissonTimer`).
+- [x] 1024-byte fixed-block packet framing (`Packetizer`) and cryptographic random padding.
+- [ ] Poisson-distributed artificial cover-traffic generator (`PoissonTimer`). *(scheduler implemented; async wiring pending)*
 - [ ] Media Metadata Sterilizer (EXIF, GPS, color-profile stripping and pixel re-encoding).
 - [ ] Socialist Millionaire Protocol (SMP) and SAS code verification engine.
 
