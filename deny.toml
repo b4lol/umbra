@@ -25,6 +25,9 @@ allow = [
     "BSL-1.0",
     "CDLA-Permissive-2.0",
     "OpenSSL",
+    # async_executors (via tor-rtcompat / arti-client); public-domain grant,
+    # GPL-compatible (FSF/OSI approved).
+    "Unlicense",
 ]
 confidence-threshold = 0.93
 
@@ -35,6 +38,13 @@ deny = []
 [advisories]
 version = 2
 yanked = "warn"
+# Transitive through the optional `tor` feature (arti-client 0.45 tree):
+# - RUSTSEC-2024-0436 (paste): unmaintained, no replacement upstream; the
+#   proc-macro is build-time only and not exposed in Umbra code paths.
+# - RUSTSEC-2023-0071 (rsa): Marvin timing attack in the `rsa` crate, pulled
+#   by Tor's protocol-mandated RSA-1024 identity keys; Umbra never uses RSA
+#   for its own cryptography. Revisit on every dependabot arti bump.
+ignore = ["RUSTSEC-2024-0436", "RUSTSEC-2023-0071"]
 
 [sources]
 unknown-registry = "warn"
