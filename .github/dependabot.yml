@@ -24,3 +24,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # The dtolnay/rust-toolchain action ref IS a Rust toolchain version;
+      # the toolchain is pinned by rust-toolchain.toml instead. Dependabot
+      # once bumped it to a nonexistent release (404 on static.rust-lang.org).
+      - dependency-name: "dtolnay/rust-toolchain"
