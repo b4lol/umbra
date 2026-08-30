@@ -29,7 +29,7 @@ This document describes the adversary profiles that **Umbra** is designed to wit
 
 ```
   S - Spoofing:
-      ↳ Mitigation: With the out-of-band dynamic QR code, the SAS code, and the Socialist Millionaire Protocol (SMP), MITM attacks are rendered unsuccessful and detected without user verification.
+      ↳ Mitigation: With the out-of-band dynamic QR code, the SAS code, and the Socialist Millionaire Protocol (SMP), MITM attacks are rendered unsuccessful and detected without user verification. (Engine scope: SMP proves shared-secret knowledge; binding it to a pairing-authenticated persistent identity fingerprint is tracked in TODO A.3.)
 
   T - Tampering:
       ↳ Mitigation: ChaCha20-Poly1305 AEAD + BLAKE3 integrity verification.

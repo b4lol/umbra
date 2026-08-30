@@ -55,4 +55,8 @@ pub enum ProtocolError {
     /// A feature is structurally defined but not yet wired.
     #[error("not yet implemented: {0}")]
     Unsupported(&'static str),
+
+    /// SMP (Socialist Millionaire Protocol) failure.
+    #[error("SMP failure: {0}")]
+    Smp(&'static str),
 }

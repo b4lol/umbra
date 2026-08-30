@@ -22,6 +22,7 @@ pub mod newtypes;
 pub mod packet;
 pub mod sas;
 pub mod session;
+pub mod smp;
 pub mod types;
 
 pub use error::ProtocolError;

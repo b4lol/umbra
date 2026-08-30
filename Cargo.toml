@@ -81,6 +81,10 @@ landlock = "0.4.7"
 getrandom = "0.4.3"
 rand_core = "0.10.1"
 
+# SMP big-integer arithmetic (OTR v3 protocol, TODO A.3)
+num-bigint = "0.4.8"
+num-traits = "0.2.19"
+
 # Async runtime
 tokio = { version = "1.53.1", features = [
     "rt",

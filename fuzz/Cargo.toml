@@ -30,6 +30,13 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "fuzz_smp_wire"
+path = "fuzz_targets/fuzz_smp_wire.rs"
+test = false
+doc = false
+bench = false
+
 # Required marker for `cargo fuzz run` to recognize this scaffold.
 [package.metadata]
 cargo-fuzz = true

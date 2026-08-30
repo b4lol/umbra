@@ -63,3 +63,4 @@ For multiple secure cells and diplomatic working groups, Umbra combines the IETF
 Against man-in-the-middle (MITM) attacks:
 - If the two parties are physically side by side, a one-time dynamic **QR Code** is scanned.
 - If the two parties are remote, a 6-digit visual/numeric **SAS (Short Authentication String)** code is used, or **SMP (Socialist Millionaire Protocol)** is run over a mutually shared secret password. SMP proves with zero knowledge that both parties know the same password, without disclosing it to the other party.
+- Scope note: the SMP engine (`umbra-protocol::smp`, a faithful OTR v3 transcription) proves **shared-secret knowledge**. Its MITM value depends on the secret being authenticated out of band and on the identities bound into `smp_secret` being the pairing-authenticated ones; binding to a persistent pairing fingerprint is tracked in TODO A.3.
