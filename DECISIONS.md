@@ -184,7 +184,7 @@ This document explains the rationale behind the foundational technical and archi
 
 ## ADR-017: Targeted Vulnerability Prevention and Pinpoint Defense Architecture
 
-- **Status:** Accepted
+- **Status:** Accepted *(the §Zero-Click Media Isolation subprocess variant is v2+ scope per ADR-027; the MVP ships the in-process deterministic sterilizer in `umbra-protocol::media`)*
 - **Rationale:** Generic security controls (input validation, standard encryption) fall short against Pegasus, NSO Group, state-level DPI, and side-channel (Side-channel) attacks. Low-cost pinpoint architectural defenses specific to each attack vector are required.
 - **Decision:**
   - **Zero-Click Media Isolation:** Image parsing will be moved out of the main process to a single-use subprocess with a 2 MB RAM limit, locked with `Landlock` and `Seccomp`.

@@ -4,6 +4,8 @@
 //!
 //! - **Fixed 1024-byte packet framing** with cryptographic random padding
 //!   ([`packet`], SPECIFICATION.md §1).
+//! - **Deterministic media metadata sterilizer** — full pixel re-encode
+//!   ([`media`], TODO A.3).
 //! - **Typestate sessions** making illegal states unrepresentable
 //!   ([`session`], CODE_MANIFESTO / ADR-021).
 //! - **Poisson-distributed cover traffic** scheduling ([`cover`], ADR-005).
@@ -13,6 +15,7 @@
 
 pub mod cover;
 pub mod error;
+pub mod media;
 pub mod newtypes;
 pub mod packet;
 pub mod sas;
@@ -20,6 +23,7 @@ pub mod session;
 pub mod types;
 
 pub use error::ProtocolError;
+pub use media::{MAX_DIMENSION_PX, sterilize};
 pub use packet::{SealedPacket, UnsealedPacket};
 pub use types::PacketType;
 

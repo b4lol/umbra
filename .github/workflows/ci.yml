@@ -36,14 +36,14 @@ jobs:
       - run: cargo audit
 
   fuzz:
-    name: fuzz smoke (packet parser)
+    name: fuzz smoke (packet parser + media)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       # Override the pinned rust-toolchain.toml (stable) — libFuzzer needs nightly.
       RUSTUP_TOOLCHAIN: nightly
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
         with:
@@ -55,6 +55,8 @@ jobs:
         # Explicit gnu target: cargo-fuzz's default musl target builds a
         # statically linked libc that is incompatible with ASan.
         run: cargo fuzz run fuzz_packet_parser --target x86_64-unknown-linux-gnu -- -max_total_time=60
+      - name: Fuzz the media sterilizer (60s smoke)
+        run: cargo fuzz run fuzz_media_sterilizer --target x86_64-unknown-linux-gnu -- -max_total_time=60
 
   sanitizers:
     name: ASan (nightly)

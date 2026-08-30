@@ -17,5 +17,16 @@ subtle.workspace = true
 zeroize.workspace = true
 thiserror.workspace = true
 
+# Media metadata sterilizer (TODO A.3): decode common chat-media formats,
+# re-encode PNG only. No rayon: deterministic output.
+image = { version = "0.25.10", default-features = false, features = [
+    "png",
+    "jpeg",
+    "webp",
+    "gif",
+] }
+
 [dev-dependencies]
 proptest.workspace = true
+# Craft metadata-carrying PNGs for the sterilizer tests.
+png = "0.18.1"

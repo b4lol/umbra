@@ -39,6 +39,15 @@ pub enum ProtocolError {
         actual: usize,
     },
 
+    /// Media input could not be decoded or re-encoded.
+    #[error("unsupported or corrupt media input")]
+    InvalidMedia,
+
+    /// Media input or decoded dimensions exceed the sterilizer limits
+    /// ([`crate::media::MAX_DIMENSION_PX`] and friends).
+    #[error("media exceeds sterilizer limits")]
+    MediaTooLarge,
+
     /// A session transition violated the state machine.
     #[error("invalid session state transition")]
     StateViolation,
