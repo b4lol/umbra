@@ -52,10 +52,12 @@ jobs:
         with:
           tool: cargo-fuzz
       - name: Fuzz the 1024-byte packet parser (60s smoke)
-        run: cargo fuzz run fuzz_packet_parser -- -max_total_time=60
+        # Explicit gnu target: cargo-fuzz's default musl target builds a
+        # statically linked libc that is incompatible with ASan.
+        run: cargo fuzz run fuzz_packet_parser --target x86_64-unknown-linux-gnu -- -max_total_time=60
 
   sanitizers:
-    name: ASan + UBSan (nightly)
+    name: ASan (nightly)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -72,7 +74,8 @@ jobs:
         run: |
           RUSTFLAGS="-Zsanitizer=address" cargo test --workspace --all-targets \
             --target x86_64-unknown-linux-gnu
-      - name: UndefinedBehaviorSanitizer
-        run: |
-          RUSTFLAGS="-Zsanitizer=undefined" cargo test --workspace --all-targets \
-            --target x86_64-unknown-linux-gnu
+      # NOTE: CONTRIBUTING lists UBSan; rustc's `-Zsanitizer` does not yet
+      # accept `undefined` (accepted set: address, cfi, leak, memory, thread,
+      # ...). UBSan coverage is tracked until rustc adds the value; in the
+      # meantime debug builds run with overflow checks and debug assertions
+      # enabled (see the verify job).
