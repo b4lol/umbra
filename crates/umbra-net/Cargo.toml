@@ -18,14 +18,25 @@ thiserror.workspace = true
 # Censorship-resistant transport; wiring lands with TODO A.2 (ADR-008).
 # Declared locally (not via [workspace.dependencies]) because workspace
 # dependencies cannot be optional. `default-features = false` drops
-# native-tls (C OpenSSL) in favor of the pure-Rust rustls stack per the
-# language policy (ADR-011); "static" bundles SQLite via cc.
+# native-tls (C OpenSSL); "static" bundles SQLite via cc; "tokio" selects
+# the Tokio-based PreferredRuntime. NOTE: the Tor stack transitively
+# contains C (ring asm, bundled SQLite) — a recorded deviation from the
+# no-C language policy, see ADR-028.
 arti-client = { version = "0.45.0", default-features = false, features = [
     "rustls",
     "static",
+    "tokio",
+], optional = true }
+tor-rtcompat = { version = "0.45.0", features = ["tokio", "rustls"], optional = true }
+# Select exactly one rustls CryptoProvider (ring) — without an explicit
+# provider feature rustls 0.23 panics at client construction.
+rustls = { version = "0.23", default-features = false, features = [
+    "ring",
+    "std",
+    "tls12",
 ], optional = true }
 
 [features]
 default = []
 # Enables the embedded Arti Tor v3 transport (TODO A.2).
-tor = ["dep:arti-client"]
+tor = ["dep:arti-client", "dep:tor-rtcompat", "dep:rustls"]

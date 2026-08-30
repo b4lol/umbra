@@ -21,7 +21,31 @@ pub enum TransportError {
     #[error("not yet implemented: {0}")]
     Unsupported(&'static str),
 
+    /// An operation exceeded its bounded duration (for example, the Tor
+    /// bootstrap on a censored network).
+    #[error("operation timed out: {operation}")]
+    Timeout {
+        /// Human-readable operation name.
+        operation: &'static str,
+    },
+
+    /// The ephemeral storage layout could not be derived.
+    #[error("could not derive an ephemeral directory")]
+    EphemeralDir,
+
+    /// The transport configuration could not be built (paths, defaults).
+    #[error("transport configuration failure: {details}")]
+    Config {
+        /// Display of the underlying configuration error.
+        details: String,
+    },
+
     /// An I/O failure on the underlying socket.
-    #[error("transport I/O failure")]
-    Io,
+    #[error("transport I/O failure: {0}")]
+    Io(std::io::Error),
+
+    /// Arti (Tor) failure. Present only with the `tor` feature.
+    #[cfg(feature = "tor")]
+    #[error(transparent)]
+    Tor(#[from] arti_client::Error),
 }

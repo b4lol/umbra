@@ -308,10 +308,22 @@ This document explains the rationale behind the foundational technical and archi
 
 ## ADR-027: MVP Prioritization and Deferral of the v2+ Scope
 
-- **Status:** Accepted
-- **Rationale:** The total scope (Android client, GTK4 GUI, BLE/Wi-Fi Direct mesh, Pluggable Transports, the Nym mixnet adapter, PQ-MLS TreeKEM, the active cyber deception layer, hardware side-channel defenses, and OS deep optimizations) is multi-year work on a single development line; some items, such as PQ-MLS, do not yet have a production-proven reference implementation. Making all of it a v1.0 requirement risks deliverability. Additionally, absolute security claims in the documents such as "100%", "unbreakable", and "impossible" are unmeasurable and indefensible in an independent audit.
+- **Status:** Accepted- **Rationale:** The total scope (Android client, GTK4 GUI, BLE/Wi-Fi Direct mesh, Pluggable Transports, the Nym mixnet adapter, PQ-MLS TreeKEM, the active cyber deception layer, hardware side-channel defenses, and OS deep optimizations) is multi-year work on a single development line; some items, such as PQ-MLS, do not yet have a production-proven reference implementation. Making all of it a v1.0 requirement risks deliverability. Additionally, absolute security claims in the documents such as "100%", "unbreakable", and "impossible" are unmeasurable and indefensible in an independent audit.
 - **Decision:**
   - **MVP (v1.0) Scope:** Core cryptography (PQXDH + Double Ratchet), Tor v3 onion P2P over Arti, 1024-byte fixed packet framing + Poisson cover traffic, SAS/SMP verification, the media metadata sterilizer, the Linux TUI, basic memory/kernel hardening (Seccomp, Landlock, `mlock`, kill-switch), and the test/fuzz/CI infrastructure.
   - **v2 and Later:** The Android client, GTK4 GUI, advanced client defenses such as FIDO2/Decoy Vault, the BLE/Wi-Fi Direct mesh, Obfs4/Snowflake, the Nym adapter, PQ-MLS TreeKEM, the active deception layer, hardware side-channel defenses, and OS deep optimizations. These items are not cancelled; they are tracked in `TODO.md` Section B.
   - **Measurability Rule:** Security claims are written with measurable targets instead of absolute statements (e.g., "constant-time behavior is verified with `dudect`", "the Motion Wipe target is millisecond scale, not a guarantee").
 - **Consequence:** A deliverable and auditable v1.0 definition is obtained; deferred items are not lost and are explicitly tracked as the v2+ scope. Affected documents: `TODO.md`, `ROADMAP.md`, `TARGETED_DEFENSES.md`.
+
+---
+
+## ADR-028: Accepted C-Bearing Transitive Dependencies of the Tor Stack (Deviation from ADR-011)
+
+- **Status:** Accepted (Documented Deviation / Exception to ADR-011)
+- **Rationale:** ADR-011 bans C and C++ from the project's own code and direct dependencies. The embedded Arti Tor stack (ADR-001) is nonetheless unavoidable for censorship-resistant transport, and its TLS and storage layers transitively require C-bearing components that have no pure-Rust replacement in the current ecosystem: `ring` (audited C/assembly crypto provider required to select a rustls 0.23 `CryptoProvider`) and the bundled C SQLite via `cc` (arti `static` feature). Rejecting them would mean shelling out to an external C `tor` daemon — strictly worse under ADR-001.
+- **Decision:**
+  - C-bearing dependencies are permitted **only** as transitive dependencies of the feature-gated `tor` transport in `crates/umbra-net`; no Umbra crate may link them directly for its own cryptography or storage.
+  - Umbra's own cryptography stays 100% pure-Rust RustCrypto (ADR-026 unchanged); the `crates/umbra-hardware` FFI exception (ADR-012) is unchanged.
+  - `ring` is selected explicitly (single CryptoProvider) to keep the choice auditable.
+  - This deviation is revisited on every Tor-stack dependency bump; if a pure-Rust provider (e.g., a RustCrypto TLS backend) becomes viable, the deviation is retired.
+- **Consequence:** The "no C" policy is scoped to Umbra-owned code paths with an audited, minimal, feature-gated transitive exception; CI license/audit scanning (cargo-deny, cargo-audit) continues to cover the C-bearing components.
