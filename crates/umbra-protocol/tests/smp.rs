@@ -200,3 +200,41 @@ fn secret_derivation_unambiguous() {
     let s2 = smp_secret(&a, &[2u8; 32], b"a", b"bc");
     assert_ne!(s1.as_ref(), s2.as_ref());
 }
+
+/// `bound_secret` is order-independent in the fingerprint pair but bound
+/// to both fingerprints and the shared password.
+#[test]
+fn bound_secret_canonical_and_binding() {
+    let a = [1u8; 32];
+    let b = [2u8; 32];
+    let s1 = umbra_protocol::smp::bound_secret(b"password", &a, &b);
+    let s2 = umbra_protocol::smp::bound_secret(b"password", &b, &a);
+    let s3 = umbra_protocol::smp::bound_secret(b"password", &a, &[3u8; 32]);
+    let s4 = umbra_protocol::smp::bound_secret(b"Password", &a, &b);
+    assert_eq!(s1, s2, "ordering must not matter");
+    assert_ne!(s1, s3, "peer fingerprint must bind");
+    assert_ne!(s1, s4, "password must bind");
+}
+
+/// The full fingerprint chain: bundle -> fingerprint -> bound secret,
+/// with sensitivity to each identity component.
+#[test]
+fn fingerprint_chain_binding() {
+    use umbra_crypto::keys::IdentityBundle;
+
+    let alice = IdentityBundle::generate();
+    let bob = IdentityBundle::generate();
+    let fp = |b: &IdentityBundle| {
+        umbra_crypto::kdf::identity_fingerprint(&b.x25519.public_bytes(), &b.dsa.public_bytes())
+    };
+    let (alice_fp, bob_fp) = (fp(&alice), fp(&bob));
+
+    // Deterministic for the same bundle; distinct across bundles.
+    assert_eq!(fp(&alice), alice_fp);
+    assert_ne!(alice_fp, bob_fp);
+
+    // Bound secrets derived from real fingerprints match on both sides.
+    let s_init = umbra_protocol::smp::bound_secret(b"pw", &alice_fp, &bob_fp);
+    let s_resp = umbra_protocol::smp::bound_secret(b"pw", &bob_fp, &alice_fp);
+    assert_eq!(s_init, s_resp);
+}

@@ -114,3 +114,63 @@ fn version_is_one_line() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(stdout.lines().count(), 1);
     Ok(())
 }
+
+/// `umbra fingerprint --peer NAME` prints exactly one 64-char hex line
+/// to stdout (Rule of Silence: no banners, no prefixes). Uses the
+/// `--peer` branch: peer records are public material and need no
+/// privileged `mlockall`, keeping the test unprivileged.
+#[test]
+fn fingerprint_success_prints_single_hex_line() -> Result<(), Box<dyn std::error::Error>> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let dir = std::env::temp_dir().join(format!("umbra-fp-silence-{}-{nanos}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let pass_path = dir.join("pass");
+    std::fs::write(&pass_path, b"silence test passphrase")?;
+    let keystore_path = dir.join("umbra.enc");
+    let keystore_str = keystore_path.to_str().ok_or("keystore path")?;
+    let pass_str = pass_path.to_str().ok_or("passphrase path")?;
+    let base = ["--passphrase-file", pass_str, "--keystore", keystore_str];
+
+    let out = Command::new(BIN).args(base).args(["init"]).output()?;
+    assert!(
+        out.status.success(),
+        "init must succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = Command::new(BIN)
+        .args(base)
+        .args(["export-pairing"])
+        .output()?;
+    assert!(out.status.success());
+    let payload = String::from_utf8(out.stdout)?.trim().to_string();
+    assert!(!payload.is_empty());
+
+    let out = Command::new(BIN)
+        .args(base)
+        .args(["pair", "--peer-name", "mirror", "--peer-payload", &payload])
+        .output()?;
+    assert!(
+        out.status.success(),
+        "pair must succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let out = Command::new(BIN)
+        .args(base)
+        .args(["fingerprint", "--peer", "mirror"])
+        .output()?;
+    assert!(out.status.success());
+    assert!(out.stderr.is_empty(), "stderr must be empty on success");
+    let stdout = String::from_utf8(out.stdout)?;
+    let mut lines = stdout.lines();
+    let line = lines.next().ok_or("expected one line")?;
+    assert_eq!(lines.next(), None, "exactly one line");
+    assert_eq!(line.len(), 64, "32-byte hex: {line}");
+    assert!(line.bytes().all(|b| b.is_ascii_hexdigit()), "hex only");
+
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}

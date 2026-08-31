@@ -22,7 +22,9 @@
 //!   (`crate::cover`) must be run alongside for GPA resistance (TODO).
 //! - **Unauthenticated initiator**: the responder accepts any PQXDH
 //!   handshake; peer authentication is the SAS/SMP pairing layer's job
-//!   (SMP driver still TODO — engine complete in `umbra_protocol::smp`).
+//!   (the SMP driver below folds the pairing-level `bound_secret` with
+//!   the per-handshake transcript SSID, so relays between distinct
+//!   sessions fail).
 //! - **Read bound**: every stream read is time-bounded
 //!   ([`READ_IDLE_TIMEOUT`]) so a stalled peer cannot park the task.
 
@@ -245,9 +247,30 @@ where
     Ok(())
 }
 
+/// Derives the engine-level SMP secret from the pairing-level material
+/// and this session's transcript SSID. The SSID mix is what breaks a
+/// relay that forwards SMP messages verbatim between two distinct
+/// sessions sharing the same pairing material.
+fn session_engine_secret(material: &[u8; 32], ssid: &[u8; 32]) -> BigUint {
+    let mut domain =
+        Vec::with_capacity(material.len().saturating_add(ssid.len()).saturating_add(2));
+    domain.extend_from_slice(b"Umbra SMP session secret v1");
+    domain.push(0x00);
+    domain.extend_from_slice(material);
+    domain.extend_from_slice(ssid);
+    BigUint::from_bytes_be(&umbra_crypto::kdf::derive_key(
+        "Umbra SMP session secret v1",
+        &domain,
+    ))
+}
+
 /// Runs the INITIATOR side of SMP verification over an established
 /// session (CRYPTOGRAPHY.md §5): sends SMP1, processes SMP2, sends SMP3,
 /// processes SMP4, and returns whether the shared secret matches.
+///
+/// `secret` is the PAIRING-level material
+/// (`umbra_protocol::smp::bound_secret`); the per-session transcript
+/// SSID is mixed in here.
 ///
 /// # Errors
 ///
@@ -256,14 +279,15 @@ where
 pub async fn smp_verify_initiator<S>(
     session: &mut Session<EstablishedSession>,
     stream: &mut S,
-    secret: &BigUint,
+    secret: &[u8; 32],
 ) -> Result<bool, TransportError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
 {
     use umbra_protocol::smp::{SmpFirstParty, SmpMsg2, SmpMsg4};
 
-    let (first, msg1) = SmpFirstParty::start(secret).map_err(TransportError::Protocol)?;
+    let engine_secret = session_engine_secret(secret, &session.transcript_ssid());
+    let (first, msg1) = SmpFirstParty::start(&engine_secret).map_err(TransportError::Protocol)?;
     write_smp_message(session, stream, &msg1.to_bytes()).await?;
     let msg2 = SmpMsg2::from_bytes(&read_smp_message(session, stream).await?)
         .map_err(TransportError::Protocol)?;
@@ -276,7 +300,9 @@ where
 
 /// Runs the RESPONDER side of SMP verification over an established
 /// session: waits for SMP1, answers with SMP2/SMP4, and returns whether
-/// the shared secret matches.
+/// the shared secret matches. `secret` is the PAIRING-level material
+/// (`umbra_protocol::smp::bound_secret`); the per-session transcript
+/// SSID is mixed in here.
 ///
 /// # Errors
 ///
@@ -285,17 +311,18 @@ where
 pub async fn smp_verify_responder<S>(
     session: &mut Session<EstablishedSession>,
     stream: &mut S,
-    secret: &BigUint,
+    secret: &[u8; 32],
 ) -> Result<bool, TransportError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
 {
     use umbra_protocol::smp::{SmpMsg1, SmpMsg3, SmpSecondParty};
 
+    let engine_secret = session_engine_secret(secret, &session.transcript_ssid());
     let msg1 = SmpMsg1::from_bytes(&read_smp_message(session, stream).await?)
         .map_err(TransportError::Protocol)?;
     let (second, msg2) =
-        SmpSecondParty::receive_msg1(secret, msg1).map_err(TransportError::Protocol)?;
+        SmpSecondParty::receive_msg1(&engine_secret, msg1).map_err(TransportError::Protocol)?;
     write_smp_message(session, stream, &msg2.to_bytes()).await?;
     let msg3 = SmpMsg3::from_bytes(&read_smp_message(session, stream).await?)
         .map_err(TransportError::Protocol)?;

@@ -171,7 +171,8 @@ impl TorTransport {
     /// Inbound is **unauthenticated at this layer**: anyone on the Tor
     /// network may connect and push packets; the sole gate is the session
     /// layer (SPECIFICATION opcodes 0x01/0x02 PQXDH plus CRYPTOGRAPHY §5
-    /// SAS/SMP pairing — the SMP engine is still a TODO A.3 stub).
+    /// SAS/SMP pairing — SMP verification is driver-wired in
+    /// [`crate::messenger`]).
     ///
     /// Availability: acceptance is head-of-line protected — each accepted
     /// stream gets its own pump task bounded by

@@ -108,9 +108,9 @@ Notes:
   above; only the handshake blob is length-prefixed (it predates the
   established session and cannot ride the session layer).
 - The responder side of the pipe performs no initiator authentication;
-  SAS verification (Socialist Millionaire Protocol) is mandatory before
-  the channel is trusted. Peer-initiator fingerprint binding is tracked
-  as TODO A.3.
+  SAS verification (Socialist Millionaire Protocol, fingerprint-bound
+  via `smp::bound_secret` and the transcript SSID) is mandatory before
+  the channel is trusted, and the pipe layer runs no SMP at all.
 - `--json` swaps the binary frames for NDJSON events (`handshake`,
   `packet`, `terminate` from the sender; `text`, `terminate` from the
   receiver) with base64url `data` fields.

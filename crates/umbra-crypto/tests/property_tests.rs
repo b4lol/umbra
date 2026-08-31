@@ -87,3 +87,24 @@ proptest! {
         prop_assert_eq!(decoded.to_vec(), pk);
     }
 }
+
+/// Identity fingerprints are deterministic and sensitive to each
+/// component (X25519 IK and ML-DSA VK).
+#[test]
+fn identity_fingerprint_sensitivity() {
+    use umbra_crypto::keys::IdentityBundle;
+    let alice = IdentityBundle::generate();
+    let bob = IdentityBundle::generate();
+    let fp = |b: &IdentityBundle| {
+        umbra_crypto::kdf::identity_fingerprint(&b.x25519.public_bytes(), &b.dsa.public_bytes())
+    };
+    assert_eq!(fp(&alice), fp(&alice));
+    assert_ne!(fp(&alice), fp(&bob));
+
+    // Same IK, different VK: the digest must change.
+    let tampered = umbra_crypto::kdf::identity_fingerprint(
+        &alice.x25519.public_bytes(),
+        &bob.dsa.public_bytes(),
+    );
+    assert_ne!(fp(&alice), tampered);
+}

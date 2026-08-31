@@ -64,6 +64,9 @@ enum HandshakeRole {
 struct HandshakeState {
     /// PQXDH root key (initiator- or responder-derived).
     root: RootKey,
+    /// Transcript identifier: BLAKE3 digest of the handshake blob, unique
+    /// per handshake attempt on both sides (SMP channel binding).
+    ssid: [u8; 32],
     /// Handshake role.
     role: HandshakeRole,
     /// Outgoing: peer SPK public bytes used to bootstrap the ratchet.
@@ -74,6 +77,8 @@ struct HandshakeState {
 
 /// Established-state internals.
 struct EstablishedState {
+    /// Transcript SSID carried over from the handshake (SMP binding).
+    ssid: [u8; 32],
     /// Double Ratchet engine.
     ratchet: DoubleRatchet,
     /// Symmetric key for the wire-level packet layer.
@@ -109,6 +114,9 @@ const TAG_SMP: u8 = 0x01;
 
 /// Header size of an SMP carriage frame: tag(1) + index(4) + total(4).
 const SMP_CARRIAGE_HEADER: usize = 9;
+
+/// BLAKE3 context for the handshake-transcript SSID.
+const SSID_CONTEXT: &str = "Umbra session SSID v1";
 
 /// Maximum ratchet plaintext per SMP carriage chunk.
 const SMP_CHUNK_DATA: usize = umbra_crypto::ratchet::MAX_PLAINTEXT - SMP_CARRIAGE_HEADER;
@@ -187,8 +195,9 @@ impl Session<Unauthenticated> {
     /// ML-DSA identity key `peer_dsa_public`) is verified BEFORE any key
     /// derivation: an active MITM cannot substitute a prekey/KEM bundle
     /// without holding the peer's signature key. Note the residual: the
-    /// ML-DSA identity itself is per-run ephemeral until a
-    /// pairing-authenticated fingerprint exchange is wired (TODO A.3).
+    /// ML-DSA identity itself is per-run ephemeral until persistent
+    /// identity keys land (TODO A.2); fingerprint binding of the SMP
+    /// secret is delivered by `umbra_protocol::smp::bound_secret`.
     ///
     /// Returns the initiator handshake blob for the transport layer.
     ///
@@ -215,8 +224,11 @@ impl Session<Unauthenticated> {
             peer_spk,
             peer_kem,
         )?;
+        let blob = handshake.encode();
+        let ssid = kdf::derive_key(SSID_CONTEXT, &blob);
         self.handshake = Some(HandshakeState {
             root,
+            ssid,
             role: HandshakeRole::Outgoing,
             peer_spk: Some(peer_spk.as_bytes()),
             own_spk: None,
@@ -229,7 +241,7 @@ impl Session<Unauthenticated> {
                 established: None,
                 sequence: self.sequence,
             },
-            handshake.encode(),
+            blob,
         ))
     }
 }
@@ -256,8 +268,10 @@ impl Session<Unauthenticated> {
             &self.identity.kem,
             &handshake,
         )?;
+        let ssid = kdf::derive_key(SSID_CONTEXT, blob);
         let own_spk = self.identity.take_spk();
         self.handshake = Some(HandshakeState {
+            ssid,
             root,
             role: HandshakeRole::Incoming,
             peer_spk: None,
@@ -299,6 +313,7 @@ impl Session<HandshakeInProgress> {
         let ratchet =
             DoubleRatchet::init_alice(handshake.root, &X25519PublicKey::from_bytes(&peer_spk))?;
         self.established = Some(EstablishedState {
+            ssid: handshake.ssid,
             ratchet,
             packet_key,
             smp_reassembly: None,
@@ -334,6 +349,7 @@ impl Session<HandshakeInProgress> {
         ));
         let ratchet = DoubleRatchet::init_bob(handshake.root, own_spk);
         self.established = Some(EstablishedState {
+            ssid: handshake.ssid,
             ratchet,
             packet_key,
             smp_reassembly: None,
@@ -354,6 +370,17 @@ impl Session<EstablishedSession> {
     #[must_use]
     pub const fn identity(&self) -> &IdentityBundle {
         &self.identity
+    }
+
+    /// Transcript SSID: the BLAKE3 digest of the handshake blob, agreed
+    /// by both sides and unique per handshake attempt. Channel binding
+    /// for the SMP driver ([`umbra_net::messenger`]); exposing it is safe
+    /// — it is derived from public wire data.
+    #[must_use]
+    pub fn transcript_ssid(&self) -> [u8; 32] {
+        self.established
+            .as_ref()
+            .map_or([0u8; 32], |established| established.ssid)
     }
 
     /// Encrypts and seals a data message under the ratchet and wire packet.

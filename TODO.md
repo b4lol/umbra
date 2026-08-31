@@ -39,7 +39,7 @@ This list contains the technical tasks planned for the step-by-step implementati
 - [x] Socialist Millionaire Protocol (SMP) and SAS code verification engine. *(OTR v3 SMP engine, all 4 messages + ZKPs; SAS 6-digit codes)*
 - [x] Session-layer SMP carriage: tag multiplexer + multi-packet chunking over DATA_MESSAGE (SMP2 ≈ 1.5 KB > 990 B) + messenger driver (smp_verify_initiator/responder over any stream).
 - [x] Peer record store: named peers with self-authenticating pairing payloads + `umbra pair` SAS command.
-- [ ] Pairing-authenticated identity binding: verify/record peer ML-DSA fingerprints out of band and bind them into `smp_secret` (currently per-run ephemeral identities; pipe-mode recv is unauthenticated by design until this lands — SAS verification is mandatory in the interim).
+- [x] Pairing-authenticated identity binding: peer payloads (incl. ML-DSA VK) are recorded out of band in the peer store; `umbra fingerprint` exposes the canonical IK+VK digest for comparison; `smp::bound_secret` derives the SMP secret from the password plus the canonically-sorted fingerprint pair, so key-substituting MITMs fail SMP. *(Interactive per-message SMP remains part of the session driver; pipe-mode recv still runs no SMP by design.)*
 
 ## A.4 Linux Security & TUI (`umbra-cli`)
 

@@ -80,6 +80,13 @@ pub enum Command {
     Tui,
     /// Creates a new persistent identity keystore.
     Init,
+    /// Prints the 32-byte identity fingerprint (hex) of this identity,
+    /// or of a stored peer record. Compare out of band.
+    Fingerprint {
+        /// Peer record name; omit to print this identity's fingerprint.
+        #[arg(long)]
+        peer: Option<String>,
+    },
     /// Prints the base64url pairing payload for this identity.
     ExportPairing,
     /// Prints the shared 6-digit SAS code for two pairing payloads.
@@ -221,6 +228,27 @@ pub fn run() -> Result<(), CliError> {
             tui::run().map_err(CliError::from)
         }
         Command::ExportPairing => export_pairing(),
+        Command::Fingerprint { ref peer } => match peer {
+            Some(name) => {
+                // Peer records are public key material only (like
+                // `pair`); no memory hardening is required for them.
+                let record = load_peer_record(&cli, name)?;
+                let fp = umbra_crypto::kdf::identity_fingerprint(&record.ik_arr, &record.dsa);
+                output::line(&output::hex(&fp));
+                Ok(())
+            }
+            None => {
+                harden_memory()?;
+                let bundle = load_identity(&cli)?;
+                harden_sandbox()?;
+                let fp = umbra_crypto::kdf::identity_fingerprint(
+                    &bundle.x25519.public_bytes(),
+                    &bundle.dsa.public_bytes(),
+                );
+                output::line(&output::hex(&fp));
+                Ok(())
+            }
+        },
         Command::PairingSas {
             own_payload,
             peer_payload,

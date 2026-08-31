@@ -113,6 +113,29 @@ pub fn derive_key(context: &str, material: &[u8]) -> [u8; 32] {
     blake3::derive_key(context, material)
 }
 
+/// Canonical identity fingerprint: BLAKE3 domain-separated digest over
+/// the ML-DSA-65 verification key (length-prefixed) followed by the
+/// X25519 identity key. This is the value compared out of band during
+/// pairing and bound into `umbra_protocol::smp::bound_secret`; 256 bits,
+/// truncation-free. The SPK is deliberately NOT covered: its
+/// authenticity is transitive via the ML-DSA signature, so key rotation
+/// does not change the fingerprint; the ML-KEM ephemeral key is
+/// authenticated only by the full-payload pairing comparison.
+#[must_use]
+pub fn identity_fingerprint(ik: &[u8; 32], dsa_vk: &[u8]) -> [u8; 32] {
+    // Length-prefix the variable-length VK so the encoding is
+    // unambiguous; the fixed 32-byte IK needs no prefix.
+    let mut material = Vec::with_capacity(dsa_vk.len().saturating_add(40));
+    material.extend_from_slice(
+        &u64::try_from(dsa_vk.len())
+            .unwrap_or(u64::MAX)
+            .to_be_bytes(),
+    );
+    material.extend_from_slice(dsa_vk);
+    material.extend_from_slice(ik);
+    blake3::derive_key("Umbra identity fingerprint v1", &material)
+}
+
 /// Copies `src` into `dst` starting at `offset` with bounds checking.
 ///
 /// Used everywhere instead of slice arithmetic so that the

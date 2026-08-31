@@ -25,18 +25,24 @@
 //!   `y^q == 1` check). Because `p` is a safe prime, the range check
 //!   already excludes every small-order element ({1, p-1}); worst case an
 //!   order-2q element leaks only the parity of the secret digest.
-//! - Identity binding: `smp_secret` binds both parties' identity keys,
-//!   the session id, and the user secret. In Umbra those identities are
-//!   per-run ephemeral keys — the engine proves shared-password knowledge
-//!   and excludes password-ignorant MITMs; binding to a
-//!   pairing-authenticated persistent fingerprint is tracked in TODO A.3.
-//! - DoS: SMP costs ~10-20 1536-bit modexps per side. When wired to the
-//!   session layer it MUST be gated to established sessions with per-peer
-//!   rate limiting (TODO A.3 carriage note).
+//! - Identity + channel binding: the engine itself proves
+//!   shared-password knowledge. [`bound_secret`] folds the parties'
+//!   pairing-authenticated fingerprints into the password material, and
+//!   the session driver mixes in the per-handshake transcript SSID
+//!   ([`umbra_protocol::session::Session::transcript_ssid`]) before the
+//!   secret reaches the engine — a MITM relaying SMP messages between
+//!   two distinct sessions derives mismatched secrets and fails the
+//!   proofs. Residual: the password (or the out-of-band fingerprint
+//!   comparison) remains the root of trust; anyone holding it passes
+//!   SMP by design.
+//! - DoS: SMP costs ~10-20 1536-bit modexps per side. The session
+//!   driver runs it only over established sessions; per-peer rate
+//!   limiting is NOT yet implemented and stays a documented gap.
 //!
 //! Transport boundary: serialized SMP messages exceed one packet payload
-//! (SMP2 ≈ 1.5 KB > 990 B); carriage over `DATA_MESSAGE` (with chunking)
-//! is the session layer's job (TODO A.3 wiring note).
+//! (SMP2 ≈ 1.5 KB > 990 B); chunked carriage over `DATA_MESSAGE` is
+//! implemented by the session layer (TAG_SMP multiplexer) and driven by
+//! `umbra_net::messenger`.
 
 // Justified blanket exception to `clippy::arithmetic_side_effects`:
 // `BigUint` `+`/`*` are total (arbitrary precision), division panics only
@@ -361,16 +367,12 @@ fn mpis_from_wire(bytes: &[u8], expected: usize) -> Result<Vec<BigUint>, Protoco
         if len > MAX_MPI_BYTES {
             return Err(ProtocolError::Smp("oversized MPI in message"));
         }
-        let end = cursor
-            .checked_add(4)
-            .and_then(|mid| mid.checked_add(len))
-            .ok_or(ProtocolError::StateViolation)?;
-        let slice = bytes
-            .get(cursor + 4..end)
-            .ok_or(ProtocolError::InvalidLength {
-                expected: len,
-                actual: bytes.len(),
-            })?;
+        let mid = cursor.checked_add(4).ok_or(ProtocolError::StateViolation)?;
+        let end = mid.checked_add(len).ok_or(ProtocolError::StateViolation)?;
+        let slice = bytes.get(mid..end).ok_or(ProtocolError::InvalidLength {
+            expected: len,
+            actual: bytes.len(),
+        })?;
         mpis.push(BigUint::from_bytes_be(slice));
         cursor = end;
     }
@@ -893,3 +895,37 @@ impl SmpSecondParty {
 // the in-memory secret exponents in these state machines are not wiped on
 // drop. The secret is the 256-bit pairing digest (short-lived, not a
 // long-term key); the source bytes from `smp_secret` ARE `Zeroizing`.
+
+/// Derives the password material with both parties' identity fingerprints
+/// bound in, from a shared out-of-band password and the two
+/// [`umbra_crypto::kdf::identity_fingerprint`] values. The fingerprint
+/// pair is sorted canonically so initiator and responder compute the
+/// same value regardless of role; `shared` is length-prefixed.
+///
+/// This is the PAIRING-level material only: the session driver MUST
+/// still mix the per-handshake transcript SSID before the value reaches
+/// the engine (see `umbra_net::messenger`), otherwise identical material
+/// on both sides lets a relay forward SMP messages verbatim between two
+/// distinct sessions. Residual: fingerprints derive from public keys, so
+/// this binding's strength reduces to password secrecy plus the
+/// out-of-band fingerprint comparison.
+#[must_use]
+pub fn bound_secret(shared: &[u8], fp_a: &[u8; 32], fp_b: &[u8; 32]) -> [u8; 32] {
+    let (first, second) = if fp_a <= fp_b {
+        (fp_a, fp_b)
+    } else {
+        (fp_b, fp_a)
+    };
+    let mut material = Vec::with_capacity(shared.len().saturating_add(64 + 8 + 1));
+    material.push(0x03); // material tag within this derivation only; BLAKE3
+    // context strings carry the cross-protocol separation
+    material.extend_from_slice(first);
+    material.extend_from_slice(second);
+    material.extend_from_slice(
+        &u64::try_from(shared.len())
+            .unwrap_or(u64::MAX)
+            .to_be_bytes(),
+    );
+    material.extend_from_slice(shared);
+    umbra_crypto::kdf::derive_key("Umbra SMP bound secret v1", &material)
+}
