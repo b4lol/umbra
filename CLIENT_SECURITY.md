@@ -161,8 +161,8 @@ table inet umbra_killswitch {
 ```
 
 ### D. CPU Register Zeroing (`zero-call-used-regs`)
-- Session commands are built with the LLVM `-Z zero-call-used-regs=all` rule on the NIGHTLY toolchain (`just secure-build`; enforced in the CI sanitizer job): every syscall boundary returns with call-used registers zeroed, shrinking register-residue leak surface.
-- Residual: the pinned stable toolchain cannot apply `-Z` flags, so local stable builds and the main CI job run without it; the sanitizer job (nightly) is the enforcement point.
+- Session commands are built with the LLVM `-C zero-call-used-regs=all` codegen rule on the NIGHTLY toolchain (`just secure-build`; enforced in the CI sanitizer job): every call boundary returns with call-used registers zeroed, shrinking register-residue leak surface.
+- Residual: the flag is accepted on the nightly compiler channel only, so the pinned stable toolchain (main CI job, local stable builds) runs without it; the sanitizer job (nightly) is the enforcement point.
 
 ### E. Memory Locking (`mlock`) and Anti-Cold-Boot Security
 - To prevent memory pages from being written to `/swapfile` or swap space, sensitive pages are locked with `mlock`; the process additionally calls `mlockall` and FAILS CLOSED (`umbra: syscall mlockall failed`) when the kernel refuses. Operators must raise `RLIMIT_MEMLOCK` (e.g. a systemd `LimitMEMLOCK=infinity` unit override or a raised ulimit) — an unprivileged environment with the default limit cannot run session commands, by design.
