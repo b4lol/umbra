@@ -28,41 +28,47 @@ product surface and live-network field testing deferred.
   mlockall/PR_SET_DUMPABLE/RLIMIT_CORE, GuardedBuffer, Argon2id keystore,
   pairing payloads + SAS, peer records, 60 s clipboard, masked D-Bus
   notifications, TUI skeleton, pipe transport (`send`/`recv`, NDJSON).
-- Verification: 32+ hermetic suites, proptest, dudect-style constant-time
-  suite, 4 fuzz targets, ASan nightly CI, weekly mutation testing.
+- Verification: 112 test cases across 17 integration suites plus per-crate
+  unit tests, proptest, dudect-style constant-time suite, 4 fuzz targets,
+  ASan nightly CI, weekly mutation testing.
 
 ### Changed
-- Wire-format revisions (pre-release): ratchet header counters corrected
-  (N 0-based at 32..40, PN at 40..48 — previously overlapping); pipe framing
-  documented in SPECIFICATION.md; hardening order refined (memory locks
-  before keystore reads, ADR-025).
+- Wire-format revisions (pre-release): Double Ratchet header counters
+  corrected — `N` (0-based chain index) at bytes 32..40, `PN` (previous
+  chain length) at bytes 40..48; the previous encoding wrote them
+  overlapping and nothing consumed them. Ratchet sessions tolerate bounded
+  out-of-order delivery (transactional rollback on failure); SMP carriage
+  restarts reassembly on a fresh `index == 0` chunk, so abandoned transfers
+  no longer wedge a session. Pipe framing documented in SPECIFICATION.md.
+- Hardening order refined (ADR-025): memory locks apply BEFORE keystore
+  reads; Landlock zero-FS + Seccomp apply after them.
+- Claim-sweep: absolute anonymity statements in the release documents were
+  replaced with scoped, measurable wording (docs outside this release
+  section still contain inherited absolutes — the sweep continues).
+- **ADR-026:** C-based `pqcrypto-*` (PQClean) wrappers were rejected for
+  post-quantum algorithms; the pure-Rust RustCrypto `ml-kem`, `ml-dsa`, and
+  `slh-dsa` crates are now mandatory.
+- **ADR-027:** Scope was split into MVP (v1.0) and v2+; `TODO.md` was
+  restructured into Sections A/B.
+- Absolute security claims in the documents ("100%", "unbreakable",
+  "impossible") were replaced with measurable targets (e.g., constant-time
+  behavior is verified with `dudect`; the Motion Wipe duration is defined
+  as a target, not a guarantee).
 
 ### Blocked
 - CPU register zeroing (`zero-call-used-regs`): flag removed from rustc
   nightly 1.100.0 upstream; ADR-025 clause marked blocked (TODO A.4).
 
-### Changed
-- **Wire-format revision (pre-release):** Double Ratchet header counters
-  corrected — `N` (0-based chain index) at bytes 32..40, `PN` (previous
-  chain length) at bytes 40..48; the previous encoding wrote them
-  overlapping and nothing consumed them. Ratchet sessions now tolerate
-  bounded out-of-order delivery via a skipped-key store (transactional
-  rollback on failure); SMP carriage restarts reassembly on a fresh
-  `index == 0` chunk, so abandoned transfers no longer wedge a session.
-
 ### Planned
 - Post-Quantum TreeKEM (PQ-MLS) module for multi-cell communication (v2+).
-- Linux Wayland GTK4/Libadwaita graphical interface (v2+) and the Ratatui TUI client (MVP).
-- Android Jetpack Compose client and `FLAG_SECURE` hardware-lock integration (v2+).
-- BLE & Wi-Fi Direct Mesh router for offline disaster and crisis environments (v2+).
-
-### Changed
-- **ADR-026:** C-based `pqcrypto-*` (PQClean) wrappers were rejected for post-quantum algorithms; the pure-Rust RustCrypto `ml-kem`, `ml-dsa`, and `slh-dsa` crates are now mandatory.
-- **ADR-027:** Scope was split into MVP (v1.0) and v2+; `TODO.md` was restructured into Sections A/B.
-- Absolute security claims in the documents ("100%", "unbreakable", "impossible") were replaced with measurable targets (e.g., constant-time behavior is verified with `dudect`; the Motion Wipe duration is defined as a target, not a guarantee).
+- Linux Wayland GTK4/Libadwaita graphical interface (v2+) and the full
+  interactive Ratatui TUI client (a skeleton shipped in 1.0.0-alpha.1).
+- Android Jetpack Compose client and `FLAG_SECURE` hardware-lock
+  integration (v2+).
+- BLE & Wi-Fi Direct Mesh router for offline disaster and crisis
+  environments (v2+).
 
 ---
-
 ## [0.1.0-alpha] - Unreleased (Planned)
 
 ### Planned

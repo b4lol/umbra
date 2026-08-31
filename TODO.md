@@ -43,10 +43,10 @@ This list contains the technical tasks planned for the step-by-step implementati
 
 ## A.4 Linux Security & TUI (`umbra-cli`)
 
-- [x] Linux `seccomp-bpf` syscall filtering (seccompiler allowlist, fail-closed EPERM) and `Landlock` zero-filesystem-access sandboxing (+ read-only `/dev/tty` exception for the TUI).
+- [x] Linux `seccomp-bpf` syscall filtering (seccompiler allowlist, fail-closed EPERM) and `Landlock` zero-filesystem-access sandboxing (+ `/dev/tty` read/write/ioctl exception for the TUI — crossterm raw mode).
 - [x] Security-focused, low-resource Terminal TUI (`ratatui`). *(state-machine skeleton; runs fully under the Landlock+Seccomp sandbox)*
-- [x] Clipboard manager with a 60-second auto-destruct. *(subprocess-based wl-clipboard/xclip interop; tested)*
-- [x] Linux D-Bus masked generic notification adapter (`org.freedesktop.Notifications`). *(zbus blocking client; app-name masked to a constant; tested)*
+- [x] Clipboard manager with a 60-second auto-destruct. *(in-process manager: `Zeroizing` RAM buffer + TTL wipe, tested against a memory backend; the Wayland system-clipboard backend is v2 scope)*
+- [x] Linux D-Bus masked generic notification adapter (`org.freedesktop.Notifications`). *(zbus backend implemented, unwired to any production flow; masking logic tested against a memory backend — the D-Bus path itself is untested)*
 - [x] **Memory Leak Locks:** `mlockall`, `prctl(PR_SET_DUMPABLE, 0)` and `MADV_DONTDUMP`/`MADV_DONTFORK` integration. *(plus `setrlimit(RLIMIT_CORE, 0)` and `MADV_UNMERGEABLE`; Landlock zero-FS sandbox in the CLI)*
 - [ ] **CPU Register Zeroing:** BLOCKED UPSTREAM — rustc removed `zero-call-used-regs` (nightly 1.100.0; never stabilized, no `-C`/`-Z` form survives; clang's `-fzero-call-used-regs` LLVM feature has no rustc front-door). Track rust-lang/rust for a re-landing; revisit `-Cllvm-args` workarounds before v1.0. (ADR-025 wording needs updating to match.)
 - [x] **DNS & IPv6 Blocking:** kernel-level kill-switch implemented in-process: Seccomp argument rules allow only IPv4/UNIX STREAM sockets — IPv6 and UDP (DNS :53) return EPERM (`sandbox_seccomp.rs::ipv6_and_udp_sockets_are_blocked`); host-layer nftables reference ruleset documented in CLIENT_SECURITY §4.C (process-scoped ADR-019 allowance note preserved).

@@ -70,8 +70,10 @@ pub fn restrict_filesystem_with_exceptions(
     // Targeted exception: the TUI must be able to drive its controlling
     // terminal under the zero-FS sandbox. Crossterm's raw mode issues
     // termios ioctls (IoctlDev on char devices) and — with redirected
-    // stdin — re-opens /dev/tty O_RDWR (ReadFile|WriteFile). Everything
-    // else stays denied.
+    // stdin — re-opens /dev/tty O_RDWR (ReadFile|WriteFile), so the
+    // exception is read/write/ioctl — NOT read-only. Everything else
+    // stays denied. (Headless environments where /dev/tty cannot be
+    // opened drop this rule silently.)
     let tty_rights = AccessFs::ReadFile | AccessFs::WriteFile | AccessFs::IoctlDev;
     let mut created = match PathFd::new("/dev/tty") {
         Ok(tty) => created

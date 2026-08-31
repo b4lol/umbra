@@ -41,7 +41,8 @@ pub mod output {
 pub struct Cli {
     /// Emit machine-readable NDJSON instead of key=value lines
     /// (ADR-022: parseable JSON streams for `jq`/`awk` pipelines).
-    /// Currently honored by `keygen`.
+    /// Honored by `keygen`, `send` and `recv` (NDJSON events); other
+    /// commands ignore the flag.
     #[arg(long, global = true)]
     pub json: bool,
 
@@ -49,7 +50,8 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     pub keystore: Option<std::path::PathBuf>,
 
-    /// File containing the keystore passphrase (first line; "-" = prompt
+    /// File containing the keystore passphrase (first line; interactive
+    /// prompts land with the TUI
     /// is not supported in MVP — use a mode-0600 file).
     #[arg(long, global = true, value_name = "PATH")]
     pub passphrase_file: Option<std::path::PathBuf>,
@@ -285,19 +287,26 @@ fn pipeline_mode(json: bool) -> crate::pipeline::OutputMode {
     }
 }
 
-/// Reads the keystore passphrase from `--passphrase-file`.
+/// Reads the keystore passphrase from `--passphrase-file` (FIRST LINE —
+/// a trailing newline from editors or `echo` is not part of the
+/// passphrase).
 fn load_passphrase(cli: &Cli) -> Result<Vec<u8>, CliError> {
     let path = cli.passphrase_file.as_ref().ok_or_else(|| {
         CliError::Keystore(
             "missing --passphrase-file (interactive prompts land with the TUI)".into(),
         )
     })?;
-    std::fs::read(path).map_err(|e| {
+    let contents = std::fs::read(path).map_err(|e| {
         CliError::Keystore(format!(
             "cannot read passphrase file {}: {e}",
             path.display()
         ))
-    })
+    })?;
+    let first_line_end = contents
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .unwrap_or(contents.len());
+    Ok(contents.get(..first_line_end).unwrap_or(&contents).to_vec())
 }
 
 /// Loads a keystore path + passphrase, returning the identity bundle.

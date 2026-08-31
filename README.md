@@ -2,7 +2,7 @@
 
 **Zero-Trust, Zero-Metadata, Post-Quantum Anonymous Communication System**
 
-`Umbra` is an end-to-end encrypted communication protocol and client designed for journalists, government officials, and intelligence professionals operating in high-threat environments; it is serverless (no central server), built on zero-metadata principles, and leaves no IP or identity trace.
+`Umbra` is an end-to-end encrypted communication protocol and client designed for journalists, government officials, and intelligence professionals operating in high-threat environments. It is serverless (no central server) and built on zero-metadata principles. Under its Tor transport the goal is no IP or identity trace — cover-traffic wiring and live-network field testing are still pending (see the honest-scope table), so treat every absolute anonymity claim as a design goal, not a measured property.
 
 > **Release status — `v1.0.0-alpha.1`:** the Section A (MVP) scope of [TODO.md](TODO.md) is implemented and CI-verified (39/40 tasks; one task is blocked upstream — see the honest-scope table below). This is an **alpha**: the cryptographic core is complete and continuously tested, while the interactive product surface (GUI, Android) and live-network field testing are not yet done. Every claim in this README is scoped to what is on disk; the honest-scope notes are authoritative over any marketing language inherited from the specification documents.
 
@@ -14,7 +14,7 @@
 - **PQXDH handshake** — X25519 + ML-KEM-768 (RustCrypto `ml-kem`, pure Rust, FIPS 203) with ML-DSA-65-signed pre-keys (FIPS 204); non-contributory DH rejected.
 - **Double Ratchet** — Signal-spec, with a bounded **skipped-key store** (out-of-order delivery decrypts; replay/evicted messages fail closed) and **transactional decrypt** (spec §3.5: a failed authentication rolls back all state changes).
 - **ChaCha20-Poly1305 AEAD** with `subtle` constant-time verification; single-use message keys with deterministically derived nonces.
-- **OTR v3 Socialist Millionaire Protocol** (faithful transcription; all 4 messages + ZKPs), with **identity-fingerprint binding** (`smp::bound_secret`) and **per-session transcript SSID mixing** — a wire MITM relaying SMP messages between two sessions fails the proofs on both sides.
+- **OTR v3 Socialist Millionaire Protocol** (faithful transcription; all 4 messages + ZKPs), with **identity-fingerprint binding** (`smp::bound_secret`) and **per-session transcript SSID mixing** — a wire MITM relaying SMP messages between two sessions fails the proofs on both sides. Residual: the password (or the out-of-band fingerprint comparison) remains the root of trust — anyone holding it passes SMP by design.
 - **Session typestate** (`Unauthenticated → HandshakeInProgress → EstablishedSession`) makes illegal transitions unrepresentable; newtype counters, checked arithmetic everywhere.
 - **Fixed 1024-byte packet framing** with cryptographic padding; `MEDIA_CHUNK` split/assembler with hostile-input caps; session-tag multiplexer (text / SMP / terminate).
 - **SESSION_TERMINATE (0x09)** — mutual ephemeral-key reset, authenticated, zeroized locally.
@@ -26,15 +26,15 @@
 - Poisson-scheduled **cover-traffic pump** (library; not yet wired into the interactive flows — honest scope note in `umbra-net::messenger`).
 
 ### Client security (`umbra-cli`, `umbra-hardware`)
-- **Landlock zero-FS sandbox** with exactly two sanctioned exceptions (read-only-by-need `/dev/tty`; caller-supplied Tor storage dir with a narrowed grant) — verified hermetically.
+- **Landlock zero-FS sandbox** with exactly two sanctioned exceptions (the `/dev/tty` terminal — read/write/ioctl for crossterm raw mode, silently dropped on headless systems; the caller-supplied Tor storage dir with a narrowed regular-files grant). The zero-FS default and the exception mechanism are verified hermetically.
 - **Seccomp-BPF allowlist** (fail-closed EPERM, thread-inherited) including a **network kill-switch**: `socket(2)` is granted only for IPv4/UNIX STREAM — IPv6 and UDP (DNS :53) fail at the kernel level.
 - **Memory locks**: `mlockall`, `PR_SET_DUMPABLE=0`, `RLIMIT_CORE=0`, guard-page `GuardedBuffer` (`PROT_NONE` + `MADV_DONTDUMP/DONTFORK/WIPEONFORK`), `zeroize` everywhere.
 - **Keystore** (Argon2id m=2¹⁸/t=4/p=4 + ChaCha20-Poly1305 envelope), seed-based identity, pairing payloads with **SAS codes**, named peer records.
 - **Pipe transport**: `umbra send --peer NAME | umbra recv` (binary or `--json` NDJSON), sandbox applied after keystore loads.
-- 60-second clipboard manager, D-Bus masked notifications, TUI skeleton (Ratatui), `LD_PRELOAD`-resistant process hardening.
+- 60-second clipboard manager (in-process; system-backend integration is v2), D-Bus masked notifications (implemented, unwired; the D-Bus path is untested), TUI skeleton (Ratatui).
 
 ### Verification infrastructure
-- **31+ test suites** hermetic by policy; **proptest** (invertibility, ratchet recovery), **dudect-style constant-time suite**, **cargo-fuzz** (4 targets), **ASan nightly CI**, weekly **cargo-mutants**, `cargo-deny`/`cargo-audit` on every push.
+- **112 test cases** across 17 integration suites plus per-crate unit tests, hermetic by policy; **proptest** (invertibility, ratchet recovery), **dudect-style constant-time suite**, **cargo-fuzz** (4 targets), **ASan nightly CI**, weekly **cargo-mutants**, `cargo-deny`/`cargo-audit` on every push.
 - CI (4 required checks): fmt+clippy+tests (workspace `-D warnings`), deny+audit, fuzz smoke, ASan (nightly).
 
 ---
@@ -48,9 +48,10 @@
 | View-once media engine, 24 h crypto-shredding | Deferred (Section B; media *metadata sterilizer* IS implemented) |
 | `hardened_malloc` integration | Deferred (Section B) |
 | Cover traffic in interactive flows | Pump exists (library); not wired into `send`/`recv` flows yet |
-| Persistent onion identity in production flows | Mechanism + tests only; no production call site yet |
+| Persistent onion identity in production flows | Mechanism + tests only (address stability not live-verified); no production call site yet |
 | CPU register zeroing (`zero-call-used-regs`) | **Blocked upstream** — flag removed from rustc nightly 1.100.0 (TODO A.4, ADR-025 revision note) |
 | Live-network field testing of the Tor paths | Not performed; config surfaces are hermetically tested |
+| SMP in the product surface | Library-only (drivers + tests); no CLI command runs SMP yet — the pipe layer runs none |
 | PQ-MLS TreeKEM, mixnets, pluggable transports | v2 (Section B) |
 
 The authoritative status list is [TODO.md](TODO.md); claim arbitration lives in [DECISIONS.md](DECISIONS.md) (ADR-001…ADR-029).
@@ -91,26 +92,31 @@ The authoritative status list is [TODO.md](TODO.md); claim arbitration lives in 
 
 ## 🚀 Quick start
 
-Requirements: Linux, Rust **1.97.1** (pinned via `rust-toolchain.toml`), a kernel with Landlock V5 (5.19+), and `RLIMIT_MEMLOCK` raised (systemd `LimitMEMLOCK=infinity` or equivalent) — session commands **fail closed** under the default limit by design.
+Requirements: Linux, Rust **1.97.1** (pinned via `rust-toolchain.toml`), a kernel with **Landlock ABI 5 (Linux 6.10+)** — the ruleset uses HardRequirement, so older kernels are refused, not degraded — and `RLIMIT_MEMLOCK` raised (systemd `LimitMEMLOCK=infinity` or equivalent): the hardened session commands (`send`, `recv`, `tui`, `fingerprint` without `--peer`) **fail closed** under the default limit by design (`init`, `keygen`, `export-pairing`, `pair` do not harden yet).
 
 ```sh
 git clone https://github.com/b4lol/umbra && cd umbra
 just check                 # fmt + clippy (-D warnings) + full test suite
 
+# a real passphrase file (FIRST LINE is the passphrase; 0600 recommended)
+printf '%s\n' 'correct horse battery staple' > ~/.umbra-pass && chmod 600 ~/.umbra-pass
+
 # create an identity keystore (Argon2id envelope)
-cargo run -p umbra-cli -- init --keystore ~/.umbra/umbra.enc --passphrase-file <(echo 'passphrase')
+cargo run -p umbra-cli -- init --keystore ~/.umbra/umbra.enc --passphrase-file ~/.umbra-pass
 
 # export your pairing payload; verify SAS out of band; store the peer
-cargo run -p umbra-cli -- export-pairing --keystore ~/.umbra/umbra.enc --passphrase-file pass
-cargo run -p umbra-cli -- pair --peer-name alice --peer-payload <base64url>
+# (peer records live in peers/ NEXT TO the keystore)
+cargo run -p umbra-cli -- export-pairing --keystore ~/.umbra/umbra.enc --passphrase-file ~/.umbra-pass
+cargo run -p umbra-cli -- pair --keystore ~/.umbra/umbra.enc --passphrase-file ~/.umbra-pass \
+    --peer-name alice --peer-payload <their-base64url-payload>
 cargo run -p umbra-cli -- fingerprint --peer alice   # compare out of band
 
 # pipe transport (transport-agnostic core; Tor wiring lands with the TUI)
-echo "hello" | cargo run -p umbra-cli -- send --peer alice --keystore ~/.umbra/umbra.enc --passphrase-file pass > wire.bin
-cargo run -p umbra-cli -- recv --keystore ~/.umbra/umbra.enc --passphrase-file pass < wire.bin
+echo "hello" | cargo run -p umbra-cli -- send --peer alice --keystore ~/.umbra/umbra.enc --passphrase-file ~/.umbra-pass > wire.bin
+cargo run -p umbra-cli -- recv --keystore ~/.umbra/umbra.enc --passphrase-file ~/.umbra-pass < wire.bin
 ```
 
-All commands honor the **Rule of Silence** (data on `stdout`, diagnostics prefixed `umbra: ` on `stderr`) and support `--json` NDJSON output.
+All commands honor the **Rule of Silence** (data on `stdout`, diagnostics prefixed `umbra: ` on `stderr`). `--json` NDJSON output is honored by `keygen`, `send` and `recv`.
 
 ---
 
