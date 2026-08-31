@@ -6,6 +6,8 @@
 
 pub mod cli;
 pub mod clipboard;
+pub mod keystore;
 pub mod notify;
+pub mod pairing;
 pub mod sandbox;
 pub mod tui;

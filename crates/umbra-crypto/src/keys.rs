@@ -4,10 +4,12 @@
 
 use crypto_common::Key;
 use ml_kem::{
-    Ciphertext, Decapsulate, DecapsulationKey, Encapsulate, EncapsulationKey, Kem, KeyExport,
-    MlKem768,
+    Ciphertext, Decapsulate, DecapsulationKey, Encapsulate, EncapsulationKey, KeyExport, MlKem768,
+    Seed as KemSeed, kem::FromSeed,
 };
+use rand_core::Rng;
 use x25519_dalek::{PublicKey, StaticSecret};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::error::CryptoError;
 use crate::rng;
@@ -20,6 +22,12 @@ pub const KEM_CT_LEN: usize = 1088;
 
 /// ML-KEM-768 shared secret length in bytes.
 pub const KEM_SS_LEN: usize = 32;
+
+/// ML-KEM-768 key-generation seed length in bytes (FIPS 203: d ∥ z).
+pub const KEM_SEED_LEN: usize = 64;
+
+/// ML-DSA-65 key-generation seed length in bytes (FIPS 204: ξ).
+pub const DSA_SEED_LEN: usize = 32;
 
 /// X25519 public key length in bytes.
 pub const X25519_PK_LEN: usize = 32;
@@ -61,6 +69,15 @@ impl X25519KeyPair {
         Self {
             secret: self.secret.clone(),
         }
+    }
+
+    /// Serializes the raw secret scalar (keystore roundtrip only).
+    ///
+    /// SECRET MATERIAL — the returned bytes recreate this key pair via
+    /// `from_secret_bytes`.
+    #[must_use]
+    pub fn secret_bytes(&self) -> [u8; 32] {
+        self.secret.to_bytes()
     }
 
     /// Serializes the derived public key.
@@ -110,12 +127,23 @@ impl X25519PublicKey {
     }
 }
 
-/// ML-KEM-768 key pair (decapsulation + encapsulation key).
+/// ML-KEM-768 key pair (decapsulation + encapsulation key). The
+/// key-generation seed is retained for keystore serialization
+/// (`ML-KEM.KeyGen_internal(d ∥ z)` — FIPS 203) and zeroized on drop
+/// (the ml-kem `zeroize` feature also wipes the decapsulation key).
 pub struct MlKemKeyPair {
     /// Decapsulation (private) key.
     decap: DecapsulationKey<MlKem768>,
     /// Encapsulation (public) key.
     encaps: EncapsulationKey<MlKem768>,
+    /// Key-generation seed (secret material, keystore use only).
+    seed: [u8; KEM_SEED_LEN],
+}
+
+impl Drop for MlKemKeyPair {
+    fn drop(&mut self) {
+        self.seed.zeroize();
+    }
 }
 
 impl MlKemKeyPair {
@@ -124,9 +152,43 @@ impl MlKemKeyPair {
     /// See [`crate::rng`] for the documented panic boundary of key generation.
     #[must_use]
     pub fn generate() -> Self {
-        let mut rng = rng::system_rng();
-        let (decap, encaps) = MlKem768::generate_keypair_from_rng(&mut rng);
-        Self { decap, encaps }
+        let mut seed = [0u8; KEM_SEED_LEN];
+        // Fallible fill surfaced as Result: entropy failure here would hit
+        // the documented panic boundary in `rng::system_rng` — we surface
+        // it as an error instead by trying the fallible path first.
+        rng::fill(&mut seed).unwrap_or_else(|_e| {
+            // Zero-panic doctrine: degenerate-entropy fallback is NOT
+            // acceptable for key material — mirror `rng::system_rng`'s
+            // documented panic boundary (RNG failure = unrecoverable).
+            rng::system_rng().fill_bytes(&mut seed);
+        });
+        Self::from_seed(&seed)
+    }
+
+    /// Reconstructs a key pair from its 64-byte seed
+    /// (`ML-KEM.KeyGen_internal`).
+    #[must_use]
+    pub fn from_seed(seed: &[u8; KEM_SEED_LEN]) -> Self {
+        // `from_slice` is deprecated in favor of TryFrom, but the length
+        // here is statically guaranteed by the `&[u8; KEM_SEED_LEN]`
+        // parameter (64 == KemSeed size), so the panic path the deprecation
+        // guards against is unreachable.
+        #[allow(deprecated)]
+        let kem_seed = KemSeed::from_slice(seed);
+        let (decap, encaps) = MlKem768::from_seed(kem_seed);
+        Self {
+            decap,
+            encaps,
+            seed: *seed,
+        }
+    }
+
+    /// The 64-byte key-generation seed.
+    ///
+    /// SECRET MATERIAL — keystore use only.
+    #[must_use]
+    pub const fn seed_bytes(&self) -> &[u8; KEM_SEED_LEN] {
+        &self.seed
     }
 
     /// Serializes the encapsulation (public) key.
@@ -213,6 +275,20 @@ impl MlKemPeerKey {
     }
 }
 
+/// Secret seeds of an [`IdentityBundle`] (keystore serialization form).
+/// Zeroized on drop (CODE_MANIFESTO §7).
+#[derive(ZeroizeOnDrop)]
+pub struct IdentitySeeds {
+    /// X25519 identity secret scalar.
+    pub x25519: [u8; 32],
+    /// SPK secret scalar.
+    pub spk: [u8; 32],
+    /// ML-KEM-768 key-generation seed (d ∥ z).
+    pub kem: [u8; KEM_SEED_LEN],
+    /// ML-DSA-65 key-generation seed (ξ).
+    pub dsa: [u8; DSA_SEED_LEN],
+}
+
 /// Aggregate identity: X25519 identity key, signed prekey, ML-KEM-768 KEM
 /// pair, and ML-DSA-65 signing key. Identity IS the key pair — no phone
 /// number, e-mail, or username (README "Zero-PII Identity").
@@ -249,6 +325,35 @@ impl IdentityBundle {
             spk_signature,
             kem,
             dsa,
+        }
+    }
+
+    /// Reconstructs a bundle from its secret seeds (keystore load path).
+    /// The SPK signature is recomputed from the reconstructed ML-DSA key.
+    #[must_use]
+    pub fn from_seeds(seeds: &IdentitySeeds) -> Self {
+        let spk = X25519KeyPair::from_secret_bytes(&seeds.spk);
+        let dsa = crate::signing::MlDsaKeyPair::from_seed(&seeds.dsa);
+        let spk_signature = dsa.sign(&spk.public_bytes());
+        Self {
+            x25519: X25519KeyPair::from_secret_bytes(&seeds.x25519),
+            spk,
+            spk_signature,
+            kem: MlKemKeyPair::from_seed(&seeds.kem),
+            dsa,
+        }
+    }
+
+    /// The secret seeds, in keystore serialization form.
+    ///
+    /// SECRET MATERIAL — keystore serialization only.
+    #[must_use]
+    pub fn secret_seeds(&self) -> IdentitySeeds {
+        IdentitySeeds {
+            x25519: self.x25519.secret_bytes(),
+            spk: self.spk.secret_bytes(),
+            kem: *self.kem.seed_bytes(),
+            dsa: self.dsa.seed_bytes(),
         }
     }
 

@@ -43,6 +43,15 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
+    /// Keystore file path for commands that need persisted identity.
+    #[arg(long, global = true, value_name = "PATH")]
+    pub keystore: Option<std::path::PathBuf>,
+
+    /// File containing the keystore passphrase (first line; "-" = prompt
+    /// is not supported in MVP — use a mode-0600 file).
+    #[arg(long, global = true, value_name = "PATH")]
+    pub passphrase_file: Option<std::path::PathBuf>,
+
     /// Subcommand to execute.
     #[command(subcommand)]
     pub command: Command,
@@ -59,6 +68,19 @@ pub enum Command {
     Recv,
     /// Opens the security-focused terminal UI (Ratatui).
     Tui,
+    /// Creates a new persistent identity keystore.
+    Init,
+    /// Prints the base64url pairing payload for this identity.
+    ExportPairing,
+    /// Prints the shared 6-digit SAS code for two pairing payloads.
+    PairingSas {
+        /// Own base64url pairing payload.
+        #[arg(long)]
+        own_payload: String,
+        /// Peer base64url pairing payload.
+        #[arg(long)]
+        peer_payload: String,
+    },
 }
 
 /// Top-level CLI error.
@@ -83,6 +105,14 @@ pub enum CliError {
     /// Notification backend failure.
     #[error("notification failure: {0}")]
     Notify(String),
+
+    /// Keystore / pairing failure.
+    #[error("keystore failure: {0}")]
+    Keystore(String),
+
+    /// Crypto-layer failure inside the keystore path.
+    #[error(transparent)]
+    Crypto(#[from] umbra_crypto::CryptoError),
 
     /// TUI failure.
     #[error(transparent)]
@@ -114,6 +144,7 @@ pub fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
     match cli.command {
         Command::Keygen => keygen(cli.json),
+        Command::Init => init_with(&cli),
         Command::Send => {
             harden()?;
             Err(umbra_protocol::ProtocolError::Unsupported(
@@ -132,7 +163,61 @@ pub fn run() -> Result<(), CliError> {
             harden()?;
             tui::run().map_err(CliError::from)
         }
+        Command::ExportPairing => export_pairing(),
+        Command::PairingSas {
+            own_payload,
+            peer_payload,
+        } => {
+            let code = crate::pairing::pairing_sas(&own_payload, &peer_payload);
+            output::line(&code.to_string());
+            Ok(())
+        }
     }
+}
+
+/// Reads the keystore passphrase from `--passphrase-file`.
+fn load_passphrase(cli: &Cli) -> Result<Vec<u8>, CliError> {
+    let path = cli.passphrase_file.as_ref().ok_or_else(|| {
+        CliError::Keystore(
+            "missing --passphrase-file (interactive prompts land with the TUI)".into(),
+        )
+    })?;
+    std::fs::read(path).map_err(|e| {
+        CliError::Keystore(format!(
+            "cannot read passphrase file {}: {e}",
+            path.display()
+        ))
+    })
+}
+
+/// Loads a keystore path + passphrase, returning the identity bundle.
+fn load_identity(cli: &Cli) -> Result<IdentityBundle, CliError> {
+    let path = cli
+        .keystore
+        .as_ref()
+        .ok_or_else(|| CliError::Keystore("missing --keystore PATH".into()))?;
+    let passphrase = load_passphrase(cli)?;
+    crate::keystore::load(path, &passphrase)
+}
+
+/// Implements `umbra init`: new persistent identity keystore.
+fn init_with(cli: &Cli) -> Result<(), CliError> {
+    let path = cli
+        .keystore
+        .as_ref()
+        .ok_or_else(|| CliError::Keystore("missing --keystore PATH".into()))?;
+    let passphrase = load_passphrase(cli)?;
+    crate::keystore::save(path, &passphrase, &IdentityBundle::generate())?;
+    Ok(())
+}
+
+/// Implements `umbra export-pairing`: own payload on `stdout`.
+fn export_pairing() -> Result<(), CliError> {
+    let cli = Cli::parse();
+    let bundle = load_identity(&cli)?;
+    let payload = crate::pairing::payload_for(&bundle)?;
+    output::line(&payload);
+    Ok(())
 }
 
 /// Implements `umbra keygen`: fresh identity, public parts on `stdout`.

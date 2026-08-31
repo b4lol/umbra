@@ -38,6 +38,10 @@ pub enum CryptoError {
     #[error("OS entropy source failure")]
     RngFailure,
 
+    /// Keystore KDF (Argon2id) failure.
+    #[error("keystore KDF failure: {0}")]
+    Kdf(&'static str),
+
     /// A signature did not verify.
     #[error("signature verification failed")]
     InvalidSignature,

@@ -9,11 +9,15 @@ use crypto_common::Key;
 use ml_dsa::signature::{Keypair, Signer, Verifier};
 use ml_dsa::{
     EncodedSignature, EncodedVerifyingKey, KeyExport, KeyInit, MlDsa65, Signature, SigningKey,
-    VerifyingKey, common::Generate,
+    VerifyingKey,
 };
+use rand_core::Rng;
 
 use crate::error::CryptoError;
 use crate::rng;
+
+/// ML-DSA-65 key-generation seed length in bytes (FIPS 204: ξ).
+pub const DSA_SEED_LEN: usize = 32;
 
 /// Serialized verification key length (NIST FIPS 204, ML-DSA-65).
 pub const VK_LEN: usize = size_of::<EncodedVerifyingKey<MlDsa65>>();
@@ -33,17 +37,45 @@ pub struct MlDsaKeyPair {
 }
 
 impl MlDsaKeyPair {
-    /// Generates a fresh ML-DSA-65 key pair from OS entropy.
+    /// Generates a fresh ML-DSA-65 key pair from a random 32-byte seed
+    /// (`ML-DSA.KeyGen_internal(ξ)` — FIPS 204). The seed is retained for
+    /// keystore serialization.
     ///
     /// See [`crate::rng`] for the documented panic boundary of key generation.
     #[must_use]
     pub fn generate() -> Self {
-        let mut rng = rng::system_rng();
-        let sk = SigningKey::<MlDsa65>::generate_from_rng(&mut rng);
+        let mut seed = [0u8; DSA_SEED_LEN];
+        // Infallible fill — entropy failure panics at the documented
+        // boundary (see `rng::system_rng`).
+        rng::system_rng().fill_bytes(&mut seed);
+        Self::from_seed(&seed)
+    }
+
+    /// Reconstructs a key pair from its 32-byte seed
+    /// (`ML-DSA.KeyGen_internal`).
+    #[must_use]
+    pub fn from_seed(seed: &[u8; DSA_SEED_LEN]) -> Self {
+        // `from_slice` is deprecated in favor of TryFrom, but the length
+        // here is statically guaranteed by the `&[u8; DSA_SEED_LEN]`
+        // parameter (32 == Seed size).
+        #[allow(deprecated)]
+        let seed_ref = ml_dsa::Seed::from_slice(seed);
+        let sk = SigningKey::<MlDsa65>::from_seed(seed_ref);
         Self {
             vk: sk.verifying_key(),
             sk,
         }
+    }
+
+    /// The 32-byte key-generation seed.
+    ///
+    /// SECRET MATERIAL — keystore use only. `SigningKey::to_bytes`
+    /// (KeyExport) returns the ξ seed per FIPS 204.
+    #[must_use]
+    pub fn seed_bytes(&self) -> [u8; DSA_SEED_LEN] {
+        let mut out = [0u8; DSA_SEED_LEN];
+        out.copy_from_slice(self.sk.to_bytes().as_ref());
+        out
     }
 
     /// Signs `message` and returns the encoded signature.

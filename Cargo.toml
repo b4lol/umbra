@@ -53,8 +53,8 @@ umbra-protocol = { path = "crates/umbra-protocol" }
 umbra-net = { path = "crates/umbra-net" }
 
 # Post-quantum cryptography (RustCrypto, pure Rust — ADR-026)
-ml-kem = "0.3.2"
-ml-dsa = "0.1.1"
+ml-kem = { version = "0.3.2", features = ["zeroize"] }
+ml-dsa = { version = "0.1.1", features = ["zeroize"] }
 x25519-dalek = { version = "3.0.0", features = ["static_secrets"] }
 chacha20poly1305 = { version = "0.11.0", features = ["alloc", "rand_core"] }
 
@@ -69,7 +69,7 @@ argon2 = "0.6.0"
 
 # Constant-time and memory hygiene
 subtle = "2.6.1"
-zeroize = { version = "1.9.0", features = ["derive", "alloc"] }
+zeroize = { version = "1.9.0", features = ["derive", "alloc", "simd"] }
 
 # Kernel FFI (umbra-hardware: mlock/mprotect/madvise, ADR-012)
 libc = "0.2.189"
