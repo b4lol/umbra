@@ -20,7 +20,8 @@
 //! Adversary" row): that requires Poisson cover traffic (the protocol-layer
 //! `DUMMY_COVER` pump, TODO A.3) and eventually mixnets. One fresh circuit
 //! per send also adds circuit-establishment timing; persistent streams are
-//! revisited with the pairing work.
+//! revisited in v2. Circuit pinning (strict Vanguards-Lite, TARGETED_DEFENSES
+//! §3B) and inbound hs-pow hardening (TODO A.2) apply to both config paths.
 //!
 //! Identity note: a Tor v3 onion service cannot know the connecting peer's
 //! address — that is the anonymity property. [`Transport::recv`] therefore
@@ -54,6 +55,35 @@ use crate::transport::Transport;
 use futures_util::StreamExt;
 use umbra_protocol::packet::SealedPacket;
 
+/// Rendezvous queue depth when PoW is enabled. Arti's default (8192 ≈
+/// 32 MB) would be PINNED into RAM by `mlockall` (MCL_FUTURE) — an
+/// attacker could lock 32 MB of non-swappable memory by filling the
+/// queue. Umbra uses a bounded 512-entry queue (~2 MB ceiling) instead:
+/// overload drops the lowest-effort requests earlier, which matches the
+/// bounded-memory doctrine (ADR-006).
+const POW_REND_QUEUE_DEPTH: usize = 512;
+
+/// Builds the inbound onion-service configuration (TODO A.2): the
+/// nickname plus hs-pow hardening. Shared by the production spawn path
+/// and the hermetic config test so the two cannot drift.
+///
+/// # Errors
+///
+/// Returns [`TransportError::Config`] if Arti rejects the nickname or
+/// the build (including `hs-pow-full` missing at compile time).
+fn inbound_service_config(
+    nickname: tor_hsservice::HsNickname,
+) -> Result<tor_hsservice::OnionServiceConfig, TransportError> {
+    tor_hsservice::OnionServiceConfig::builder()
+        .nickname(nickname)
+        .enable_pow(true)
+        .pow_rend_queue_depth(POW_REND_QUEUE_DEPTH)
+        .build()
+        .map_err(|err| TransportError::Config {
+            details: err.to_string(),
+        })
+}
+
 /// Provisional Umbra P2P port for peer onion services.
 ///
 /// SPECIFICATION.md does not yet fix a port; this constant is the single
@@ -81,6 +111,7 @@ const INBOUND_QUEUE: usize = 32;
 /// and [`TransportError::Config`] if Arti rejects the configuration.
 pub fn persistent_config(base: &std::path::Path) -> Result<TorClientConfig, TransportError> {
     use std::os::unix::fs::DirBuilderExt as _;
+
     let state = base.join("state");
     let cache = base.join("cache");
     // 0700: the tree holds the onion identity key (plaintext at rest).
@@ -100,11 +131,13 @@ pub fn persistent_config(base: &std::path::Path) -> Result<TorClientConfig, Tran
         .mode(0o700)
         .create(&cache)
         .map_err(TransportError::Io)?;
-    let config = arti_client::config::TorClientConfigBuilder::from_directories(state, cache)
-        .build()
-        .map_err(|err| TransportError::Config {
-            details: err.to_string(),
-        })?;
+    // Strict Vanguards-Lite (TARGETED_DEFENSES §3B), pinned for the
+    // persistent path as well; see [`pin_vanguards`] for scope.
+    let mut builder = arti_client::config::TorClientConfigBuilder::from_directories(state, cache);
+    pin_vanguards(&mut builder);
+    let config = builder.build().map_err(|err| TransportError::Config {
+        details: err.to_string(),
+    })?;
     Ok(config)
 }
 
@@ -132,12 +165,43 @@ fn ephemeral_config() -> Result<TorClientConfig, TransportError> {
     }
     let state = base.join("state");
     let cache = base.join("cache");
-    let config = arti_client::config::TorClientConfigBuilder::from_directories(state, cache)
-        .build()
-        .map_err(|err| TransportError::Config {
-            details: err.to_string(),
-        })?;
+    // Strict Vanguards-Lite here too (TARGETED_DEFENSES §3B): the pin
+    // covers BOTH config paths, not just the persistent one.
+    let mut builder = arti_client::config::TorClientConfigBuilder::from_directories(state, cache);
+    pin_vanguards(&mut builder);
+    let config = builder.build().map_err(|err| TransportError::Config {
+        details: err.to_string(),
+    })?;
     Ok(config)
+}
+
+/// Pins the STRICT Vanguards-Lite circuit policy (TARGETED_DEFENSES §3B)
+/// onto a client-config builder: `VanguardMode::Lite` is set EXPLICITLY,
+/// so the mode cannot be weakened by consensus parameters. Scope note
+/// (arti 0.45): one shared `VanguardConfig` drives ALL circuits — client
+/// and service alike run Lite (`G -> L2 -> M`, L2-only pinning); a
+/// per-service Full upgrade is upstream arti #1382. Pool sizes and
+/// lifetimes REMAIN consensus parameters — only the mode is pinned.
+fn pin_vanguards(builder: &mut arti_client::config::TorClientConfigBuilder) {
+    use tor_config::ExplicitOrAuto;
+    use tor_guardmgr::VanguardMode;
+    builder
+        .vanguards()
+        .mode(ExplicitOrAuto::Explicit(VanguardMode::Lite));
+}
+
+/// Test hook: builds the production inbound service config (hermetic
+/// config-surface test; see `inbound_service_config`).
+///
+/// # Errors
+///
+/// See [`inbound_service_config`].
+#[doc(hidden)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn inbound_service_config_for_tests(
+    nickname: tor_hsservice::HsNickname,
+) -> Result<tor_hsservice::OnionServiceConfig, TransportError> {
+    inbound_service_config(nickname)
 }
 
 /// Embedded Arti Tor v3 transport.
@@ -284,12 +348,13 @@ impl TorTransport {
                 details: err.to_string(),
             }
         })?;
-        let service_config = tor_hsservice::OnionServiceConfig::builder()
-            .nickname(nickname)
-            .build()
-            .map_err(|err| TransportError::Config {
-                details: err.to_string(),
-            })?;
+        // Inbound hardening (TODO A.2): proof-of-work is required from
+        // introducees when the service is under heavy load (Tor's hs-pow
+        // DoS defense — load-triggered with dynamic difficulty, never
+        // "always"); a high-effort attacker crowding out legitimate
+        // rendezvous via queue eviction is an accepted, Tor-standard
+        // residual.
+        let service_config = inbound_service_config(nickname)?;
 
         let Some((service, rends)) = self
             .client

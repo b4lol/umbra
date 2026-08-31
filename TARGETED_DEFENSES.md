@@ -102,7 +102,7 @@ graph TD
 - **Targeted Attack:** The adversary opening thousands of malicious Tor relays to identify the target's Guard node and forcing the target through intermediate nodes under its control (*Guard Discovery Attack*).
 - **Targeted Defense Mechanism:**
   - Standard random circuit building is abandoned; the **Vanguards-Lite** protocol is implemented inside Arti.
-  - Entry nodes (Layer-1, Layer-2, and Layer-3) are pinned and tied to monthly rotation. The goal is to drive the probability of Sybil attackers manipulating the target's circuit down to the $10^{-6}$ level.
+  - Entry nodes (Layer-1 and Layer-2 (arti 0.45 Vanguards-Lite reality: `G -> L2 -> M` with 1-12-day L2 rotation; a per-service Full/L3 upgrade is upstream arti #1382 — Umbra pins the mode explicitly so consensus cannot weaken it)) are pinned and tied to monthly rotation. The goal is to drive the probability of Sybil attackers manipulating the target's circuit down to the $10^{-6}$ level.
 
 ### C. Atomic MTU Locking (Anti-Fragmentation Leaks)
 - **Targeted Attack:** Exposure of the real MTU size and the device-OS fingerprint through the ICMP messages or packet headers produced when packets are fragmented (*IP Fragmentation*) at network gateways.

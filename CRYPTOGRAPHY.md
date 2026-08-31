@@ -25,6 +25,8 @@ This document describes the post-quantum hybrid encryption mechanisms used by th
 
 Umbra implements the hybrid **PQXDH** protocol, which combines the strengths of classical and post-quantum algorithms:
 
+> **Residual note (ADR-029, identity generation):** generated identity bytes transit the stack through the Rust ABI return slot before reaching their final home; safe Rust cannot eliminate this. The compensating controls are the ADR-025 memory-hardening layers, and the residual is accepted.
+
 ```mermaid
 graph LR
     Alice[Alice IK_A + EK_A] -->|Encaps| Bob[Bob IK_B + PK_KEM_B]

@@ -9,6 +9,7 @@ This document explains the rationale behind the foundational technical and archi
 - **Status:** Accepted
 - **Rationale:** Using the traditional C-language `tor` daemon would require external process management, root privileges, or complex IPC (Inter-Process Communication) mechanisms on Android and Linux.
 - **Decision:** The Tor Project's pure-Rust `arti-client` will be embedded directly into the binary and compiled.
+- **Addendum (2026-08, TODO A.2):** enabling `hs-pow-full` on `tor-hsservice` transitively enables the `__is_experimental` API unification on tor-hsservice/tor-hscrypto/tor-netdoc/tor-cell and pulls `equix`/`arrayvec`/`num-traits` (pure Rust — no new C surface beyond the recorded deviations above).
 - **Consequence:** A portable, monolithic Tor client free of C memory errors is obtained, with no external system dependency at all.
 
 ---
@@ -332,3 +333,15 @@ This document explains the rationale behind the foundational technical and archi
   - Same-deviation scope: `seccompiler` (Landlock/Seccomp sandbox frontend, pure Rust with internal `unsafe` BPF emission) is accepted under this ADR as a transitive exception; Umbra-owned crates remain `#![forbid(unsafe_code)]`.
   - This deviation is revisited on every Tor-stack dependency bump; if a pure-Rust provider (e.g., a RustCrypto TLS backend) becomes viable, the deviation is retired.
 - **Consequence:** The "no C" policy is scoped to Umbra-owned code paths with an audited, minimal, feature-gated transitive exception; CI license/audit scanning (cargo-deny, cargo-audit) continues to cover the C-bearing components.
+
+---
+
+## ADR-029: Identity Generation Return-Slot Transit Is a Documented Residual (Resolves TODO A.1 "Zero-Copy Identity Generation")
+
+- **Status:** Accepted (Design decision; residual documented, not eliminated)
+- **Context:** TODO A.1 asked to eliminate the copy made when `IdentityBundle::generate()` returns its value, because the return-slot bytes transit the stack before reaching their final home (keystore serialization or in-memory session state).
+- **Decision:**
+  - Safe Rust provides no control over return-slot placement or move elision; a value of this size is memcpy'd through stack space by the ABI.
+  - Guaranteeing zero transit would require `unsafe` placement tricks (out-of-place allocation via raw pointers), which (a) violate the language policy of confining `unsafe` to `umbra-hardware` (ADR-011/ADR-012), (b) add correctness risk to key-generation code, and (c) yield no measurable reduction in leak surface given the ADR-025 layers below.
+  - The compensating controls are therefore the accepted mitigation set: `mlockall` (no swap), `PR_SET_DUMPABLE=0` + `RLIMIT_CORE=0` (no core images), `MADV_DONTDUMP` on guarded buffers, and `zeroize`-on-drop for all key material. Stack-transit bytes are wiped only by page reuse — accepted because the process never writes them to disk and cannot be introspected without ptrace-class access, which the seccomp allowlist denies (ADR-007; ADR-019 documents the ptrace-scope layer).
+- **Consequence:** TODO A.1's "zero-copy identity generation" is closed as a documented residual. Any future placement-return stabilization in Rust (`&out` parameters, placement protocols) may be revisited for v2.

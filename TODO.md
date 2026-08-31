@@ -19,7 +19,7 @@ This list contains the technical tasks planned for the step-by-step implementati
 - [x] Double Ratchet state machine and KDF chains.
 - [x] `ChaCha20-Poly1305` AEAD encryption and `subtle::ConstantTimeEq` timing protection.
 - [x] Secure memory hygiene with `zeroize` and guard pages. *(GuardedBuffer: PROT_NONE guards + mlock + MADV_DONTDUMP/DONTFORK/WIPEONFORK/UNMERGEABLE + zeroize-on-drop)*
-- [ ] Zero-copy in-place identity generation (the generator's return-slot bytes currently transit the stack, protected only by `mlockall`/non-dumpable; eliminate the copy).
+- [x] Zero-copy in-place identity generation — RESOLVED BY DESIGN (ADR-029): safe Rust cannot control return-slot placement, and `unsafe` placement hacks would violate the ADR-011/ADR-012 language policy for zero measurable gain. The compensating controls are exactly the ADR-025 layers (mlockall, PR_SET_DUMPABLE=0, RLIMIT_CORE=0, MADV_DONTDUMP; secrets are Zeroizing-on-drop). Residual documented in CRYPTOGRAPHY.md.
 - [x] Double Ratchet recovery: bounded skipped-key store for out-of-order delivery (128/chain, 256 total, FIFO eviction + rotation pruning, header gap bound, replay fail-closed, transactional rollback per Signal §3.5). *(Recovery after an unrecoverable loss = establishing a new session; no automatic in-band resync protocol.)*
 
 ## A.2 Network & Transport (`umbra-net`)
@@ -27,8 +27,8 @@ This list contains the technical tasks planned for the step-by-step implementati
 - [x] Pure-Rust Tor v3 outbound P2P: embedded Arti client bootstrap (time-bounded) + anonymized streams to peer `.onion` services (`tor` feature).
 - [x] Inbound Tor v3 Hidden Service hosting (`tor-hsservice`): rendezvous accept loop (head-of-line protected), fixed-size packet pump, ephemeral identity keystore.
 - [x] Pairing-tied identity-key persistence (MECHANISM): `TorTransport::bootstrap_persistent(base)` roots the Arti state dir (native keystore under `base/state/keystore`, dirs 0700) so the `.onion` address is stable per nickname — by construction of Arti's keystore; NOT yet exercised against the live network, and no production call site wires it yet. Landlock reconciliation ships as `restrict_filesystem_with_exceptions` (narrowed grant: regular files/dirs only; no Execute/Make*/IoctlDev on the Tor tree) — API-only until a Tor-hosting flow exists.
-- [ ] Per-transport inbound hardening: hs-pow (proof-of-work) configuration and persistent peer streams.
-- [ ] Strict Vanguards-Lite circuit policy (TARGETED_DEFENSES §3B).
+- [x] Per-transport inbound hardening: hs-pow enabled on the inbound onion service (`enable_pow(true)` via the `hs-pow-full` feature; load-triggered with dynamic difficulty — never "always") with a BOUNDED rendezvous queue (512 ≈ 2 MB instead of the 8192 ≈ 32 MB default, which `mlockall` would pin into non-swappable RAM). The shared config builder is hermetically tested (build acceptance proves `hs-pow-full` is compiled in); PoW behavior against the live network is not exercised. *(Persistent peer streams remain a v2 item — one fresh circuit per stream is the v1 anonymity posture.)*
+- [x] Strict Vanguards-Lite circuit policy: BOTH config paths (ephemeral + persistent) pin `VanguardMode::Lite` EXPLICITLY, so the mode cannot be weakened by consensus (pool sizes/lifetimes REMAIN consensus parameters). Scope note (arti 0.45): one shared config drives ALL circuits — client and service alike run Lite (`G -> L2 -> M`, L2-only pinning); per-service Full is upstream arti #1382. Hermetic test asserts the pinned mode.
 
 ## A.3 Protocol & Metadata Masking (`umbra-protocol`)
 

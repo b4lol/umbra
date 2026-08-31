@@ -421,7 +421,32 @@ fn persistent_config_creates_storage_root() -> Result<(), Box<dyn std::error::Er
     assert!(base.join("cache").is_dir());
     let state_mode = std::fs::metadata(base.join("state"))?.permissions().mode();
     assert_eq!(state_mode & 0o777, 0o700, "state dir must be 0700");
-    let _ = config; // built value is the assertion (FromDirectories validates)
+    // Strict Vanguards-Lite (TARGETED_DEFENSES §3B): the mode is pinned
+    // EXPLICITLY, so consensus parameters cannot weaken it.
+    use tor_guardmgr::VanguardMode;
+    let vanguard_mode: &tor_guardmgr::VanguardConfig =
+        std::convert::AsRef::<tor_guardmgr::VanguardConfig>::as_ref(&config);
+    assert_eq!(
+        vanguard_mode.mode(),
+        VanguardMode::Lite,
+        "vanguards must be pinned to Lite"
+    );
     let _ = std::fs::remove_dir_all(&base);
+    Ok(())
+}
+
+/// The PRODUCTION inbound service-config builder (shared with
+/// `spawn_inbound`) accepts proof-of-work hardening (TODO A.2): the
+/// builder accepting `enable_pow(true)` proves `hs-pow-full` is compiled
+/// in (without it, `build()` fails with `NoCompileTimeSupport`).
+/// Exercising PoW against the live network is not hermetic.
+#[cfg(feature = "tor")]
+#[test]
+fn inbound_service_config_enables_pow() -> Result<(), Box<dyn std::error::Error>> {
+    use tor_hsservice::HsNickname;
+
+    let nickname = HsNickname::new("umbra-pow-test".to_string()).map_err(Box::new)?;
+    let config = umbra_net::tor::inbound_service_config_for_tests(nickname).map_err(Box::new)?;
+    let _ = config;
     Ok(())
 }

@@ -108,7 +108,7 @@ graph TD
 2. **Compiler Optimization Shield:**
    - Memory wiping is performed not with a standard `memset` but with `volatile`/`atomic` barriers (the `zeroize` crate) that the compiler cannot eliminate as dead code.
 3. **CPU Register Wiping:**
-   - With the LLVM `-Z zero-call-used-regs=all` flag, all CPU registers (`rax`, `ymm`, `zmm`) are zeroed on function exit.
+   - With the LLVM `-Z zero-call-used-regs=all` flag, all CPU registers (`rax`, `ymm`, `zmm`) are zeroed on function exit. *(2026-08: flag removed upstream from rustc nightly 1.100.0 without stabilization — BLOCKED, see TODO A.4 / ADR-025 revision note; the other controls in this pillar are enforced.)*
 
 ---
 

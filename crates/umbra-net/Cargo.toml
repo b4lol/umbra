@@ -30,10 +30,13 @@ arti-client = { version = "0.45.0", default-features = false, features = [
     "static",
     "tokio",
     "onion-service-service",
+    "vanguards",
 ], optional = true }
 tor-rtcompat = { version = "0.45.0", features = ["tokio", "rustls"], optional = true }
 tor-cell = { version = "0.45.0", optional = true }
-tor-hsservice = { version = "0.45.0", optional = true }
+tor-hsservice = { version = "0.45.0", optional = true, features = ["hs-pow-full"] }
+tor-guardmgr = { version = "0.45.0", optional = true }
+tor-config = { version = "0.45.0", optional = true }
 safelog = { version = "0.9", optional = true }
 futures-util = { version = "0.3.31", default-features = false, features = [
     "std",
@@ -54,6 +57,8 @@ tor = [
     "dep:tor-rtcompat",
     "dep:tor-cell",
     "dep:tor-hsservice",
+    "dep:tor-guardmgr",
+    "dep:tor-config",
     "dep:futures-util",
     "dep:rustls",
     "dep:safelog",
