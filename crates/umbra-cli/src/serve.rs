@@ -118,7 +118,10 @@ pub fn run(keystore: &std::path::Path, passphrase: &[u8], nickname: &str) -> Res
             .map_err(transport_error)?;
 
         // Wait for descriptor publication, then announce the address.
-        let deadline = tokio::time::Instant::now() + ADDRESS_WAIT;
+        let started = tokio::time::Instant::now();
+        let deadline = started
+            .checked_add(ADDRESS_WAIT)
+            .ok_or_else(|| publication_timeout("onion address publication"))?;
         let address = loop {
             if let Some(address) = transport.onion_address() {
                 break address;
