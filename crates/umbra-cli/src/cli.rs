@@ -148,14 +148,14 @@ pub fn run() -> Result<(), CliError> {
         Command::Send => {
             harden()?;
             Err(umbra_protocol::ProtocolError::Unsupported(
-                "P2P transport wiring lands with TODO A.2/A.4",
+                "interactive send lands with the pairing driver (use the library flow)",
             )
             .into())
         }
         Command::Recv => {
             harden()?;
             Err(umbra_protocol::ProtocolError::Unsupported(
-                "P2P transport wiring lands with TODO A.2/A.4",
+                "interactive recv lands with the pairing driver (use the library flow)",
             )
             .into())
         }
@@ -235,9 +235,6 @@ fn keygen(json: bool) -> Result<(), CliError> {
     // low RLIMIT_MEMLOCK or pre-5.13 kernels) must still be able to mint
     // identities. Secrets still spend their lifetime inside the guarded
     // buffer below, whose per-page mlock errors DO propagate.
-    // The guarded buffer keeps the bundle alive (zeroized on drop) and
-    // provides per-page mlock; it is intentionally not read afterwards.
-    let _guarded = GuardedBuffer::new(IdentityBundle::generate()).map_err(CliError::from)?;
     // The guarded buffer keeps the bundle alive (zeroized on drop) and
     // provides per-page mlock; it is intentionally not read afterwards.
     let _guarded = GuardedBuffer::new(IdentityBundle::generate()).map_err(CliError::from)?;

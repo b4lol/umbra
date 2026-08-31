@@ -5,11 +5,12 @@
 //! `.onion` services, writing fixed 1024-byte packets.
 //!
 //! Inbound path — **implemented**: spawns a Tor v3 onion service (via
-//! `tor-hsservice`), accepts rendezvous streams, and surfaces them as
-//! fixed-size packets through [`Transport::recv`]. The service identity
-//! key lives in the ephemeral per-run state directory, so the `.onion`
-//! address changes per run until pairing-tied key persistence lands
-//! (TODO A.2 second half).
+//! `tor-hsservice`), accepts rendezvous streams (semaphore-bounded), and
+//! hands each raw `DataStream` to the messenger layer
+//! ([`crate::messenger`] — handshake + packet flow per stream). The
+//! service identity key lives in the ephemeral per-run state directory,
+//! so the `.onion` address changes per run until pairing-tied key
+//! persistence lands (TODO A.2 second half).
 //!
 //! Anonymity posture (honest scope): this layer provides Tor v3 anonymity
 //! for on-demand sends and inbound acceptance. It does **not** yet provide
@@ -43,14 +44,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use arti_client::{DataStream, TorClient, TorClientConfig};
 use safelog::DisplayRedacted as _;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
 use crate::addr::OnionAddr;
 use crate::error::TransportError;
 use crate::transport::Transport;
 use futures_util::StreamExt;
 use umbra_protocol::packet::SealedPacket;
-use umbra_protocol::types::PACKET_LEN;
 
 /// Provisional Umbra P2P port for peer onion services.
 ///
@@ -61,8 +61,8 @@ pub const PROVISIONAL_PEER_PORT: u16 = 39_441;
 /// Upper bound for the Tor bootstrap phase.
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// Capacity of the inbound packet queue.
-const INBOUND_QUEUE: usize = 256;
+/// Capacity of the inbound stream queue.
+const INBOUND_QUEUE: usize = 32;
 
 /// Builds an ephemeral, per-run `TorClientConfig`.
 ///
@@ -103,7 +103,11 @@ pub struct TorTransport {
     /// The running onion service, if the inbound path was spawned.
     service: Option<Arc<tor_hsservice::RunningOnionService>>,
     /// Inbound packet queue (present after [`Self::spawn_inbound`]).
-    inbound_rx: Option<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<SealedPacket>>>,
+    inbound_rx: Option<
+        tokio::sync::Mutex<
+            tokio::sync::mpsc::Receiver<(DataStream, tokio::sync::OwnedSemaphorePermit)>,
+        >,
+    >,
 }
 
 impl TorTransport {
@@ -242,6 +246,24 @@ impl TorTransport {
         )
     }
 
+    /// Waits for the next inbound DataStream from the spawned onion
+    /// service (rendezvous accepted, stream ready for the messenger
+    /// handshake flow).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError::Unsupported`] if `spawn_inbound` has not
+    /// run, and [`TransportError::ChannelClosed`] after shutdown.
+    pub async fn next_inbound_stream(
+        &self,
+    ) -> Result<(DataStream, tokio::sync::OwnedSemaphorePermit), TransportError> {
+        let rx = self.inbound_rx.as_ref().ok_or(TransportError::Unsupported(
+            "inbound service not started; call spawn_inbound first",
+        ))?;
+        let mut guard = rx.lock().await;
+        guard.recv().await.ok_or(TransportError::ChannelClosed)
+    }
+
     /// Reports whether the client is ready to carry traffic.
     #[must_use]
     pub fn ready_for_traffic(&self) -> bool {
@@ -279,19 +301,15 @@ impl TorTransport {
 /// acceptance: each pump holds one permit and is dropped on idle timeout.
 const MAX_CONCURRENT_INBOUND_STREAMS: usize = 64;
 
-/// Idle bound per inbound read: a stream that sends nothing for this long
-/// is dropped, releasing its concurrency permit.
-const INBOUND_READ_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
-
-/// Accepts rendezvous requests forever, spawning one permit-guarded pump
-/// per accepted stream (head-of-line protection: a stalled peer parks its
-/// own pump only, never the accept loop).
-///
-/// Framing rule: a stream carries only whole 1024-byte packets; a torn or
-/// malformed packet is unresynchronizable, so the stream is closed.
+/// Accepts rendezvous requests forever, queueing each accepted stream
+/// with its concurrency permit. The consumer receives
+/// `(DataStream, OwnedSemaphorePermit)`: the permit MUST be held for the
+/// stream's processing lifetime, bounding active sessions at
+/// [`MAX_CONCURRENT_INBOUND_STREAMS`] (the messenger layer does the
+/// framing and per-stream handling).
 async fn accept_loop(
     mut requests: impl futures_util::Stream<Item = tor_hsservice::StreamRequest> + Unpin,
-    tx: tokio::sync::mpsc::Sender<SealedPacket>,
+    tx: tokio::sync::mpsc::Sender<(DataStream, tokio::sync::OwnedSemaphorePermit)>,
 ) {
     let permits = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_INBOUND_STREAMS));
     while let Some(request) = requests.next().await {
@@ -310,39 +328,10 @@ async fn accept_loop(
             // At capacity: reject this stream by dropping it unaccepted.
             Err(_full) => continue,
         };
-        tokio::spawn(pump_stream(stream, tx.clone(), permit));
-    }
-}
-
-/// Reads one stream into the queue until it closes, idles out, or hits a
-/// framing error (then the stream is dropped — resynchronizing is
-/// impossible). Dropping the task releases the concurrency permit.
-async fn pump_stream(
-    mut stream: DataStream,
-    tx: tokio::sync::mpsc::Sender<SealedPacket>,
-    _permit: tokio::sync::OwnedSemaphorePermit,
-) {
-    let mut buffer = [0u8; PACKET_LEN];
-    loop {
-        match tokio::time::timeout(INBOUND_READ_IDLE_TIMEOUT, stream.read_exact(&mut buffer)).await
-        {
-            // Full packet read: validate and enqueue.
-            Ok(Ok(_read)) => {}
-            // Stream closed / torn write: drop the stream.
-            Ok(Err(_e)) => return,
-            // Idle timeout: drop the stalled stream, release the permit.
-            Err(_elapsed) => return,
-        }
-        let packet = match SealedPacket::from_bytes(&buffer) {
-            Ok(packet) => packet,
-            // Malformed framing: drop the stream.
-            Err(_e) => return,
-        };
-        match tx.send(packet).await {
-            Ok(()) => {}
-            // Inbound queue closed: transport is shutting down.
-            Err(_e) => return,
-        }
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let _ = tx.send((stream, permit)).await;
+        });
     }
 }
 
@@ -374,11 +363,9 @@ impl Transport for TorTransport {
     /// Returns [`TransportError::Unsupported`] if `spawn_inbound` has not
     /// run, and [`TransportError::ChannelClosed`] after shutdown.
     async fn recv(&self) -> Result<SealedPacket, TransportError> {
-        let rx = self.inbound_rx.as_ref().ok_or(TransportError::Unsupported(
-            "inbound service not started; call spawn_inbound first",
-        ))?;
-        let mut guard = rx.lock().await;
-        guard.recv().await.ok_or(TransportError::ChannelClosed)
+        Err(TransportError::Unsupported(
+            "packet-level recv on Tor is superseded by next_inbound_stream + messenger",
+        ))
     }
 }
 

@@ -17,6 +17,7 @@
 pub mod addr;
 pub mod cover;
 pub mod error;
+pub mod messenger;
 pub mod transport;
 
 #[cfg(feature = "tor")]
@@ -25,6 +26,7 @@ pub mod tor;
 pub use addr::OnionAddr;
 pub use cover::CoverPump;
 pub use error::TransportError;
+pub use messenger::{PeerPqxdhKeys, receive_message, send_message};
 pub use transport::{LoopbackPair, LoopbackTransport, Transport};
 
 /// Prelude re-exporting the most-used transport types.

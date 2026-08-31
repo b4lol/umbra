@@ -6521,6 +6521,7 @@ dependencies = [
  "tor-cell",
  "tor-hsservice",
  "tor-rtcompat",
+ "umbra-crypto",
  "umbra-protocol",
  "zeroize",
 ]
