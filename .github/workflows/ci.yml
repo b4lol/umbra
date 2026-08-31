@@ -74,7 +74,7 @@ jobs:
           key: sanitizers
       - name: AddressSanitizer
         run: |
-          RUSTFLAGS="-Zsanitizer=address -Czero-call-used-regs=all" \
+          RUSTFLAGS="-Zsanitizer=address" \
           cargo test --workspace --all-targets \
             --target x86_64-unknown-linux-gnu
       # NOTE: CONTRIBUTING lists UBSan; rustc's `-Zsanitizer` does not yet

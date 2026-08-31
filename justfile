@@ -16,12 +16,6 @@ scan:
     cargo deny check
     cargo audit
 
-# 8. Nightly secure build (ADR-025): zero-call-used-regs register
-# zeroing. The codegen flag is nightly-gated here; the CI sanitizer job
-# enforces it.
-secure-build:
-    RUSTUP_TOOLCHAIN=nightly RUSTFLAGS="-Czero-call-used-regs=all" cargo build --release
-
 # 7. Logic and mutation testing.
 mutants:
     cargo mutants --no-shuffle

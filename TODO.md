@@ -48,7 +48,7 @@ This list contains the technical tasks planned for the step-by-step implementati
 - [x] Clipboard manager with a 60-second auto-destruct. *(subprocess-based wl-clipboard/xclip interop; tested)*
 - [x] Linux D-Bus masked generic notification adapter (`org.freedesktop.Notifications`). *(zbus blocking client; app-name masked to a constant; tested)*
 - [x] **Memory Leak Locks:** `mlockall`, `prctl(PR_SET_DUMPABLE, 0)` and `MADV_DONTDUMP`/`MADV_DONTFORK` integration. *(plus `setrlimit(RLIMIT_CORE, 0)` and `MADV_UNMERGEABLE`; Landlock zero-FS sandbox in the CLI)*
-- [x] **CPU Register Zeroing:** `-C zero-call-used-regs=all` enforced in the CI nightly sanitizer job and available via `just secure-build` (nightly-channel codegen flag; stable builds cannot apply it).
+- [ ] **CPU Register Zeroing:** BLOCKED UPSTREAM — rustc removed `zero-call-used-regs` (nightly 1.100.0; never stabilized, no `-C`/`-Z` form survives; clang's `-fzero-call-used-regs` LLVM feature has no rustc front-door). Track rust-lang/rust for a re-landing; revisit `-Cllvm-args` workarounds before v1.0. (ADR-025 wording needs updating to match.)
 - [x] **DNS & IPv6 Blocking:** kernel-level kill-switch implemented in-process: Seccomp argument rules allow only IPv4/UNIX STREAM sockets — IPv6 and UDP (DNS :53) return EPERM (`sandbox_seccomp.rs::ipv6_and_udp_sockets_are_blocked`); host-layer nftables reference ruleset documented in CLIENT_SECURITY §4.C (process-scoped ADR-019 allowance note preserved).
 - [x] **SESSION_TERMINATE (opcode 0x09):** emit on panic-button/teardown and handle on receipt (mutual ephemeral-key reset; authenticated packet, no ratchet message, local state zeroized).
 
