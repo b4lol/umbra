@@ -97,7 +97,7 @@ graph TD
 2. **Branchless Execution:**
    - `if`/`else` branches and array lookups (LUT) that depend on sensitive data are forbidden; conditional selections are performed with `subtle::ConditionallySelectable`.
 3. **Timing Analysis Verification:**
-   - All cryptographic functions are verified in the CI pipeline with the `dudect` Welch t-test ($p < 10^{-5}$).
+   - Cryptographic timing boundaries (AEAD verify path, SAS derivation; X25519/ML-KEM/ML-DSA via upstream constant-time implementations) are verified in the CI pipeline with the `dudect` Welch t-test (`constant_time_tests.rs`); SMP modexp remains a documented non-CT residual.
 
 ---
 

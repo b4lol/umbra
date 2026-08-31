@@ -5,7 +5,7 @@
 
 use chacha20poly1305::{
     ChaCha20Poly1305, Key, KeyInit, Nonce,
-    aead::{Aead, Payload},
+    aead::{Aead, AeadInOut, Payload},
 };
 use zeroize::Zeroizing;
 
@@ -91,6 +91,30 @@ impl AeadCipher {
                 },
             )
             .map_err(|_e| CryptoError::EncryptFailed)
+    }
+
+    /// Decrypts `buffer` in place (payload + 16-byte tag → plaintext)
+    /// and verifies `aad`. Allocation-free verify path — the constant-
+    /// time suite measures this boundary directly.
+    ///
+    /// Failure invariant (verified upstream, chacha20poly1305 0.11): the
+    /// Poly1305 tag is checked BEFORE any keystream is applied, so on
+    /// [`CryptoError::DecryptFailed`] the buffer is left byte-for-byte
+    /// unchanged (still ciphertext) — no partial-decryption residue.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CryptoError::DecryptFailed`] if authentication fails.
+    pub fn open_in_place(
+        &self,
+        nonce: &[u8; NONCE_LEN],
+        aad: &[u8],
+        buffer: &mut Vec<u8>,
+    ) -> Result<(), CryptoError> {
+        let nonce = Nonce::from(*nonce);
+        self.cipher
+            .decrypt_in_place(&nonce, aad, buffer)
+            .map_err(|_e| CryptoError::DecryptFailed)
     }
 
     /// Decrypts `ciphertext` (payload + 16-byte tag) and verifies `aad`.

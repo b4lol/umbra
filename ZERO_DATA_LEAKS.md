@@ -87,7 +87,7 @@ graph TD
    - `prctl(PR_SET_SPECULATION_CTRL, PR_SPEC_STORE_BYPASS, PR_SPEC_FORCE_DISABLE, 0, 0)` and `PR_SPEC_INDIRECT_BRANCH` are enforced at the kernel level, blocking memory leaks through speculative branching.
 2. **L1/L2 and LLC Cache Timing Leaks:**
    - Sensitive keys are never kept in plaintext in memory; they are encrypted on the fly with AES-NI and, immediately after being processed in the CPU cache, evicted from the cache with `clflushopt` (Cache Line Flush).
-   - All cryptographic comparisons run constant-time via `subtle::ConstantTimeEq`, verified with a Welch t-test ($p < 10^{-5}$).
+   - All cryptographic comparisons run constant-time via `subtle::ConstantTimeEq`; the AEAD verify path and SAS derivation are verified by the dudect Welch t-test suite (`constant_time_tests.rs`), while X25519/ML-KEM/ML-DSA rely on upstream constant-time implementations and SMP modexp is a documented non-CT residual.
 3. **Polynomial Masking (Masked Kyber):**
    - ML-KEM-768 matrix computations are split and run with random mask polynomials, minimizing electromagnetic (EM) and power-analysis (DPA) leaks.
 

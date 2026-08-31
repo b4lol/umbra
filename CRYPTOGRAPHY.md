@@ -15,7 +15,7 @@ This document describes the post-quantum hybrid encryption mechanisms used by th
 | **Symmetric AEAD Encryption** | ChaCha20-Poly1305 | `chacha20poly1305` (RFC 8439) | 256-bit Authenticated Encryption |
 | **Key Derivation (KDF)** | HKDF-SHA512 & BLAKE3 | `hkdf` / `blake3` | High-Entropy KDF |
 | **Password-Based KDF** | Argon2id ($t=4, m=2^{18}, p=4$) | `argon2` (RFC 9106) | Memory-Hard (ASIC/GPU Protected) |
-| **Constant-Time Equality** | Constant-Time Comparison | `subtle::ConstantTimeEq` | Constant-Time (verified with the `dudect` Welch t-test) |
+| **Constant-Time Equality** | Constant-Time Comparison | `subtle::ConstantTimeEq` | Constant-Time (AEAD verify path and SAS derivation verified by the dudect suite, `constant_time_tests.rs`; X25519/ML-KEM/ML-DSA rely on upstream constant-time implementations; SMP modexp is a documented non-CT residual) |
 
 > **Note (ADR-026):** Due to the language policy, C-based `pqcrypto-*` (PQClean) wrappers are not used; for the post-quantum algorithms, only pure Rust RustCrypto implementations are mandated. FIPS 203/204/205 compliance is verified with Known-Answer Test (KAT) vectors.
 
