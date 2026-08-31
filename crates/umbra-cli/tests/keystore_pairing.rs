@@ -140,3 +140,21 @@ fn peer_record_roundtrip() -> Result<(), Box<dyn std::error::Error + Send + Sync
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }
+
+/// `serve` resolves the Tor storage root next to the keystore (TODO A.2
+/// production call site); a parentless keystore path fails cleanly.
+#[cfg(feature = "tor")]
+#[test]
+fn serve_tor_base_resolution() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let keystore = std::env::temp_dir()
+        .join("umbra-serve-test")
+        .join("umbra.enc");
+    let base = umbra_cli::serve::tor_base_from_keystore(&keystore)?;
+    assert_eq!(
+        base,
+        std::env::temp_dir().join("umbra-serve-test").join("tor")
+    );
+    let parentless = std::path::Path::new("umbra.enc");
+    assert!(umbra_cli::serve::tor_base_from_keystore(parentless).is_err());
+    Ok(())
+}

@@ -78,6 +78,16 @@ pub enum Command {
     /// NOTE: the responder side does not authenticate the initiator —
     /// verify the SAS code out of band (umbra pairing-sas).
     Recv,
+    /// Hosts the persistent inbound onion service (requires the `tor`
+    /// build feature): bootstraps embedded Arti with a stable `.onion`
+    /// address, applies the sandbox with the Tor-storage exception, and
+    /// emits received messages as NDJSON on stdout.
+    #[cfg(feature = "tor")]
+    Serve {
+        /// Onion service nickname (letters/digits; arti-validated).
+        #[arg(long)]
+        nickname: String,
+    },
     /// Opens the security-focused terminal UI (Ratatui).
     Tui,
     /// Creates a new persistent identity keystore.
@@ -228,6 +238,16 @@ pub fn run() -> Result<(), CliError> {
         Command::Tui => {
             harden()?;
             tui::run().map_err(CliError::from)
+        }
+        #[cfg(feature = "tor")]
+        Command::Serve { ref nickname } => {
+            let keystore = cli
+                .keystore
+                .as_ref()
+                .ok_or_else(|| CliError::Keystore("missing --keystore PATH".into()))?
+                .clone();
+            let passphrase = load_passphrase(&cli)?;
+            crate::serve::run(&keystore, &passphrase, nickname)
         }
         Command::ExportPairing => export_pairing(),
         Command::Fingerprint { ref peer } => match peer {

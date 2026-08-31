@@ -18,10 +18,19 @@ path = "src/lib.rs"
 name = "umbra"
 path = "src/main.rs"
 
+[features]
+default = []
+# `serve`: inbound Tor onion-service flow (production call site for the
+# persistent-identity + sandbox-exception mechanisms, TODO A.2).
+tor = ["umbra-net/tor", "dep:tokio"]
+
 [dependencies]
 umbra-crypto.workspace = true
 umbra-protocol.workspace = true
 umbra-net.workspace = true
+# Optional under the `tor` feature (`serve`); a non-optional tokio would
+# defeat the feature gate.
+tokio = { workspace = true, optional = true }
 umbra-hardware = { path = "../umbra-hardware" }
 zeroize.workspace = true
 base64 = "0.22.1"

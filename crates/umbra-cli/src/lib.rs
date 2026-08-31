@@ -12,4 +12,6 @@ pub mod pairing;
 pub mod peers;
 pub mod pipeline;
 pub mod sandbox;
+#[cfg(feature = "tor")]
+pub mod serve;
 pub mod tui;

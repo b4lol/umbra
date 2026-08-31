@@ -6557,6 +6557,7 @@ dependencies = [
  "ratatui",
  "seccompiler",
  "thiserror 2.0.20",
+ "tokio",
  "umbra-crypto",
  "umbra-hardware",
  "umbra-net",

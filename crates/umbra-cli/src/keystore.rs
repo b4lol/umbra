@@ -207,3 +207,67 @@ pub fn load_with_params(
     let seeds = seeds_from_plaintext(&plaintext)?;
     Ok(IdentityBundle::from_seeds(&seeds))
 }
+
+/// Loads the RAW identity seeds (keystore decryption only — no key
+/// reconstruction). Used by the `serve` flow to rebuild a bundle per
+/// inbound connection (`IdentityBundle::from_seeds`) without re-running
+/// Argon2 per connection.
+///
+/// # Errors
+///
+/// Returns [`CliError::Keystore`] for missing/wrong files or a wrong
+/// passphrase, and [`CliError::Crypto`] for envelope failures.
+pub fn load_seeds(path: &Path, passphrase: &[u8]) -> Result<IdentitySeeds, CliError> {
+    load_seeds_with_params(
+        path,
+        passphrase,
+        keystore::ARGON2_M_KIB,
+        keystore::ARGON2_T_COST,
+        keystore::ARGON2_P_COST,
+    )
+}
+
+/// [`load_seeds`] with explicit Argon2id parameters (tests use reduced
+/// costs).
+///
+/// # Errors
+///
+/// See [`load_seeds`].
+pub fn load_seeds_with_params(
+    path: &Path,
+    passphrase: &[u8],
+    m_cost_kib: u32,
+    t_cost: u32,
+    p_cost: u32,
+) -> Result<IdentitySeeds, CliError> {
+    let raw = fs::read(path)
+        .map_err(|e| CliError::Keystore(format!("cannot read {}: {e}", path.display())))?;
+    let header = raw
+        .get(..MAGIC.len())
+        .ok_or_else(|| CliError::Keystore("truncated keystore file".into()))?;
+    if header != MAGIC {
+        return Err(CliError::Keystore("not an Umbra keystore file".into()));
+    }
+    let stored_salt: [u8; KS_SALT_LEN] =
+        umbra_crypto::kdf::read_at(&raw, MAGIC.len()).map_err(CliError::Crypto)?;
+    let envelope_start = MAGIC.len().saturating_add(KS_SALT_LEN);
+    let envelope = raw
+        .get(envelope_start..)
+        .ok_or_else(|| CliError::Keystore("truncated keystore envelope".into()))?;
+
+    let key = keystore::derive_keystore_key_with_params(
+        passphrase,
+        &stored_salt,
+        m_cost_kib,
+        t_cost,
+        p_cost,
+    )
+    .map_err(CliError::Crypto)?;
+    let plaintext = keystore::open_envelope(&key, envelope).map_err(|err| match err {
+        CryptoError::DecryptFailed => {
+            CliError::Keystore("wrong passphrase or corrupted keystore".into())
+        }
+        other => CliError::Crypto(other),
+    })?;
+    seeds_from_plaintext(&plaintext)
+}
