@@ -133,10 +133,21 @@ where
 
     let blob_len = umbra_crypto::pqxdh::HANDSHAKE_BLOB_LEN;
     let mut blob = vec![0u8; blob_len];
-    stream
-        .read_exact(&mut blob)
-        .await
-        .map_err(TransportError::Io)?;
+    // Idle bound: the handshake blob read is time-bounded too — a peer
+    // that connects and stalls must not park the task forever.
+    match tokio::time::timeout(READ_IDLE_TIMEOUT, stream.read_exact(&mut blob)).await {
+        Ok(Ok(_read)) => {}
+        Ok(Err(_io)) => {
+            return Err(TransportError::Timeout {
+                operation: "messenger handshake read",
+            });
+        }
+        Err(_elapsed) => {
+            return Err(TransportError::Timeout {
+                operation: "messenger handshake read",
+            });
+        }
+    }
     let session = Session::with_identity(identity)
         .accept_handshake(&blob)?
         .complete_handshake_incoming()?;

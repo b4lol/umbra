@@ -32,7 +32,7 @@ fn exception_dir_grants_exactly_that_dir() -> Result<(), Box<dyn std::error::Err
     let handle = std::thread::spawn(
         move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let granted_path = inside.clone();
-            restrict_filesystem_with_exceptions(&[granted_path.as_path()])?;
+            restrict_filesystem_with_exceptions(&[granted_path.as_path()], &[])?;
 
             // Read inside the exception: allowed.
             let seeded = std::fs::read(inside.join("seed.txt"))?;
@@ -114,7 +114,7 @@ fn nonexistent_exception_path_fails_closed() -> Result<(), Box<dyn std::error::E
         move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let missing = missing.clone();
             assert!(
-                restrict_filesystem_with_exceptions(&[missing.as_path()]).is_err(),
+                restrict_filesystem_with_exceptions(&[missing.as_path()], &[]).is_err(),
                 "a nonexistent exception path must fail the ruleset"
             );
             Ok(())

@@ -3,13 +3,15 @@
 //! together —
 //!
 //! 1. identity seeds load ONCE (pre-sandbox), bundle rebuilt per
-//!    connection via `IdentityBundle::from_seeds` (no Argon2 per peer);
+//!    connection via `IdentityBundle::from_seeds` (no Argon2 per peer;
+//!    the per-connection ML-DSA keygen + SPK sign cost is accepted and
+//!    bounded by the concurrent-stream semaphore);
 //! 2. `harden_memory()` before any secret touches RAM (ADR-025);
-//! 3. Landlock zero-FS with exactly two sanctioned exceptions — the Tor
-//!    storage dir (Arti's guard state + native keystore keeping the
-//!    `.onion` identity stable) and read-only `/etc` (the libc resolver
-//!    may open `resolv.conf`-family files during bootstrap; all public
-//!    content) — plus the full Seccomp allowlist;
+//! 3. Landlock zero-FS with the sanctioned exceptions — the Tor
+//!    storage dir (read+write: Arti's guard state + native keystore
+//!    keeping the `.onion` identity stable), read-only `/etc` (the libc
+//!    resolver may open `resolv.conf`-family files during bootstrap; all
+//!    public content), and `/dev/tty` — plus the full Seccomp allowlist;
 //! 4. `TorTransport::bootstrap_persistent` + `spawn_inbound` (Vanguards-
 //!    Lite pinning + hs-pow inbound hardening apply automatically);
 //! 5. one session per accepted stream: `receive_message` (PQXDH + Double
@@ -30,6 +32,9 @@ use crate::cli::CliError;
 
 /// Upper bound for waiting until the onion descriptor is published.
 const ADDRESS_WAIT: Duration = Duration::from_secs(120);
+
+/// Capacity of the per-session result queue feeding the stdout writer.
+const INBOUND_RESULT_QUEUE: usize = 32;
 
 /// Resolves the Tor storage root NEXT TO the keystore: `<keystore
 /// parent>/tor`. Peer records and the Tor tree share the keystore
@@ -92,10 +97,11 @@ pub fn run(keystore: &std::path::Path, passphrase: &[u8], nickname: &str) -> Res
 
     // 4. Sandbox: zero-FS + [tor tree, /etc read] exceptions, then the
     //    Seccomp allowlist (LAST; network family included for Arti).
-    crate::sandbox::restrict_filesystem_with_exceptions(&[
-        tor_base.as_path(),
-        std::path::Path::new("/etc"),
-    ])?;
+    crate::sandbox::restrict_filesystem_with_exceptions(
+        &[tor_base.as_path()],
+        // /etc is READ-ONLY: public resolver/config content only.
+        &[std::path::Path::new("/etc")],
+    )?;
     crate::sandbox::restrict_syscalls()?;
 
     // 5. Runtime + transport. `bootstrap_persistent` roots the Arti
@@ -133,20 +139,44 @@ pub fn run(keystore: &std::path::Path, passphrase: &[u8], nickname: &str) -> Res
         };
         emit_event("ready", Some(format!("onion:{address}").as_bytes()))?;
 
-        // Accept loop: one PQXDH session per stream; every failure is
-        // contained to its connection.
+        // Accept loop: one PQXDH session per stream, each handled in its
+        // OWN task (the stream's semaphore permit moves with it, keeping
+        // Arti's concurrency bound intact). Tasks deliver session results
+        // over a channel; the loop serializes the NDJSON output (line
+        // atomicity) and treats stdout failure as fatal — dropping
+        // inbound messages silently would be a correctness lie. Every
+        // session failure is contained to its connection.
+        let (results_tx, mut results_rx) = tokio::sync::mpsc::channel::<
+            Result<Vec<u8>, umbra_net::TransportError>,
+        >(INBOUND_RESULT_QUEUE);
         loop {
-            let (mut stream, _permit) = transport
-                .next_inbound_stream()
-                .await
-                .map_err(transport_error)?;
-            let bundle = IdentityBundle::from_seeds(&seeds);
-            match umbra_net::messenger::receive_message(bundle, &mut stream).await {
-                Ok(plaintext) => {
-                    emit_event("text", Some(&plaintext))?;
+            tokio::select! {
+                accepted = transport.next_inbound_stream() => {
+                    let (mut stream, permit) = accepted.map_err(transport_error)?;
+                    let bundle = IdentityBundle::from_seeds(&seeds);
+                    let tx = results_tx.clone();
+                    tokio::spawn(async move {
+                        let _permit = permit; // held for the whole session
+                        let result =
+                            umbra_net::messenger::receive_message(bundle, &mut stream).await;
+                        let _ = tx.send(result).await;
+                    });
                 }
-                Err(error) => {
-                    eprintln!("umbra: inbound session failed: {error}");
+                result = results_rx.recv() => {
+                    match result {
+                        Some(Ok(plaintext)) => {
+                            let plaintext = zeroize::Zeroizing::new(plaintext);
+                            emit_event("text", Some(&plaintext))?;
+                        }
+                        Some(Err(error)) => {
+                            eprintln!("umbra: inbound session failed: {error}");
+                        }
+                        None => {
+                            return Err(CliError::Io(std::io::Error::other(
+                                "inbound session queue closed",
+                            )));
+                        }
+                    }
                 }
             }
         }

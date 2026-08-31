@@ -215,8 +215,9 @@ pub fn load_with_params(
 ///
 /// # Errors
 ///
-/// Returns [`CliError::Keystore`] for missing/wrong files or a wrong
-/// passphrase, and [`CliError::Crypto`] for envelope failures.
+/// Returns [`CliError::Keystore`] for missing/wrong files, a wrong
+/// passphrase, or a corrupted keystore (AEAD verification failure), and
+/// [`CliError::Crypto`] for other envelope failures.
 pub fn load_seeds(path: &Path, passphrase: &[u8]) -> Result<IdentitySeeds, CliError> {
     load_seeds_with_params(
         path,

@@ -42,18 +42,17 @@ use crate::cli::CliError;
 /// Returns [`CliError::Sandbox`] if the ruleset cannot be created or is
 /// not fully enforced by the kernel.
 pub fn restrict_filesystem() -> Result<landlock::RestrictionStatus, CliError> {
-    restrict_filesystem_with_exceptions(&[])
+    restrict_filesystem_with_exceptions(&[], &[])
 }
 
-/// [`restrict_filesystem`] with explicit, caller-supplied read+write
-/// exceptions (ADR-007 refinement for the embedded-Arti flows, TODO A.2).
+/// [`restrict_filesystem`] with explicit, caller-supplied exceptions
+/// (ADR-007 refinement for the embedded-Arti flows, TODO A.2).
 ///
-/// The ONLY sanctioned use is the Tor storage directory for flows that
-/// host an onion service: Arti needs read+write for its guard state,
-/// directory cache and the native keystore that makes the `.onion`
-/// identity — and therefore the address peers know — persistent across
-/// runs. Every exception grants full `AccessFs` rights beneath the given
-/// path and nothing else; `/dev/tty` stays read-only.
+/// Sanctioned uses (the only ones): READ+WRITE for the Tor storage
+/// directory (Arti's guard state, cache and the native keystore that
+/// keeps the `.onion` identity persistent), and READ-ONLY for public
+/// configuration trees the libc resolver may open (`/etc`) during
+/// bootstrap. `/dev/tty` keeps its separate read/write/ioctl grant.
 ///
 /// # Errors
 ///
@@ -61,7 +60,8 @@ pub fn restrict_filesystem() -> Result<landlock::RestrictionStatus, CliError> {
 /// exception path cannot be opened, or the kernel does not fully enforce
 /// the ruleset.
 pub fn restrict_filesystem_with_exceptions(
-    exceptions: &[&std::path::Path],
+    read_write: &[&std::path::Path],
+    read_only: &[&std::path::Path],
 ) -> Result<landlock::RestrictionStatus, CliError> {
     let created = Ruleset::default()
         .set_compatibility(CompatLevel::HardRequirement)
@@ -96,16 +96,19 @@ pub fn restrict_filesystem_with_exceptions(
         | AccessFs::RemoveFile
         | AccessFs::Truncate
         | AccessFs::Refer;
-    for path in exceptions {
-        let fd = PathFd::new(path).map_err(|err| {
-            CliError::Io(std::io::Error::other(format!(
-                "sandbox exception path {}: {err}",
-                path.display()
-            )))
-        })?;
-        created = created
-            .add_rule(PathBeneath::new(fd, tor_grant))
-            .map_err(CliError::Sandbox)?;
+    let readonly_grant = AccessFs::ReadFile | AccessFs::ReadDir;
+    for (paths, rights) in [(read_write, tor_grant), (read_only, readonly_grant)] {
+        for path in paths {
+            let fd = PathFd::new(path).map_err(|err| {
+                CliError::Io(std::io::Error::other(format!(
+                    "sandbox exception path {}: {err}",
+                    path.display()
+                )))
+            })?;
+            created = created
+                .add_rule(PathBeneath::new(fd, rights))
+                .map_err(CliError::Sandbox)?;
+        }
     }
     let status = created.restrict_self()?;
     Ok(status)
@@ -211,12 +214,29 @@ fn allowed_syscalls() -> Vec<i64> {
         libc::SYS_getgid,
         libc::SYS_getegid,
         // Minimal filesystem surface (content access is denied by
-        // Landlock; these keep std's early initialization alive).
+        // Landlock; these keep std's early initialization alive) plus the
+        // mutation calls Arti's atomic state/keystore writes need inside
+        // the Landlock-granted Tor tree (write-temp -> rename -> unlink).
         libc::SYS_openat,
         libc::SYS_newfstatat,
         libc::SYS_statx,
         libc::SYS_lseek,
         libc::SYS_getdents64,
+        libc::SYS_fstat,
+        libc::SYS_readlinkat,
+        libc::SYS_fsync,
+        libc::SYS_ftruncate,
+        libc::SYS_pwrite64,
+        libc::SYS_fchmod,
+        libc::SYS_fchmodat,
+        libc::SYS_utimensat,
+        libc::SYS_mkdirat,
+        libc::SYS_unlinkat,
+        libc::SYS_renameat,
+        libc::SYS_renameat2,
+        // AF_UNIX stream sockets (landlock-granted; used by the runtime
+        // stack and resolver plumbing).
+        libc::SYS_socketpair,
     ];
     SYSCALLS.to_vec()
 }

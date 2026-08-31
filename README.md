@@ -92,7 +92,7 @@ The authoritative status list is [TODO.md](TODO.md); claim arbitration lives in 
 
 ## 🚀 Quick start
 
-Requirements: Linux, Rust **1.97.1** (pinned via `rust-toolchain.toml`), a kernel with **Landlock ABI 5 (Linux 6.10+)** — the ruleset uses HardRequirement, so older kernels are refused, not degraded — and `RLIMIT_MEMLOCK` raised (systemd `LimitMEMLOCK=infinity` or equivalent): the hardened session commands (`send`, `recv`, `tui`, `fingerprint` without `--peer`) **fail closed** under the default limit by design (`init`, `keygen`, `export-pairing`, `pair` do not harden yet).
+Requirements: Linux, Rust **1.97.1** (pinned via `rust-toolchain.toml`), a kernel with **Landlock ABI 5 (Linux 6.10+)** — the ruleset uses HardRequirement, so older kernels are refused, not degraded — and `RLIMIT_MEMLOCK` raised (systemd `LimitMEMLOCK=infinity` or equivalent): the hardened session commands (`send`, `recv`, `tui`, `serve`, `fingerprint` without `--peer`) **fail closed** under the default limit by design (`init`, `keygen`, `export-pairing`, `pair` do not harden yet; `serve` additionally wants `LimitMEMLOCK=infinity` — it locks the whole Arti runtime heap).
 
 ```sh
 git clone https://github.com/b4lol/umbra && cd umbra
