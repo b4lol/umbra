@@ -6,5 +6,6 @@
 
 pub mod cli;
 pub mod clipboard;
+pub mod notify;
 pub mod sandbox;
 pub mod tui;

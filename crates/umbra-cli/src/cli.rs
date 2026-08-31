@@ -80,6 +80,10 @@ pub enum CliError {
     #[error("seccomp failure: {0}")]
     Seccomp(String),
 
+    /// Notification backend failure.
+    #[error("notification failure: {0}")]
+    Notify(String),
+
     /// TUI failure.
     #[error(transparent)]
     Tui(#[from] tui::TuiError),

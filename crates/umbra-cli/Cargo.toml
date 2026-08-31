@@ -29,5 +29,12 @@ ratatui.workspace = true
 crossterm.workspace = true
 landlock.workspace = true
 seccompiler = "0.5.0"
+# D-Bus masked notifications (TODO A.4, ADR-018): pure-Rust zbus with the
+# blocking API; no external C bus libraries (ADR-011).
+zbus = { version = "5.19.0", default-features = false, features = [
+    "blocking-api",
+    "tokio",
+] }
+zvariant = { version = "5", default-features = false }
 libc.workspace = true
 thiserror.workspace = true
