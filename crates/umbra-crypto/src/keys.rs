@@ -36,6 +36,7 @@ pub const X25519_PK_LEN: usize = 32;
 type EkKey = Key<EncapsulationKey<MlKem768>>;
 
 /// X25519 identity or ephemeral key pair with zeroize-on-drop secret.
+#[derive(Clone)]
 pub struct X25519KeyPair {
     /// Private scalar (zeroized on drop via the `x25519-dalek` `zeroize`
     /// feature).

@@ -1,11 +1,22 @@
 //! Double Ratchet session encryption (README: Forward Secrecy +
 //! Post-Compromise Security).
 //!
-//! Skeleton scope (TODO A.1): strict in-order delivery. Out-of-order or
-//! skipped message keys are rejected with an error; a skipped-key store and
-//! header-key caching land with the A.1 hardening pass. Message keys are
-//! single-use; nonces are derived deterministically from the message key
+//! Signal-spec delivery semantics (TODO A.1 recovery): message keys for
+//! out-of-order arrivals are derived ahead of time and held in a bounded
+//! skipped-key store ([`MAX_SKIP_PER_CHAIN`] per receiving chain,
+//! [`MAX_SKIPPED_KEYS`] total, oldest evicted first), so reordered
+//! delivery decrypts instead of desynchronizing the session. Replayed or
+//! evicted-too-old messages fail closed with
+//! [`CryptoError::DecryptFailed`]. A message lost beyond the store is
+//! unrecoverable in-band; recovery means establishing a fresh PQXDH
+//! session (which is also how every messenger stream begins). Message keys are single-use;
+//! nonces are derived deterministically from the message key
 //! (single-use key + derived nonce never repeats).
+//!
+//! Header layout (v1.0 revision note: the counters were previously
+//! written overlapping; nothing read them before the skipped-key store
+//! landed): `DH public (32) || N (8, BE u64, 0-based index in the
+//! sender's current chain) || PN (8, BE u64, previous chain length)`.
 
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
@@ -15,8 +26,16 @@ use crate::error::CryptoError;
 use crate::kdf::{self, RootKey};
 use crate::keys::{X25519_PK_LEN, X25519KeyPair, X25519PublicKey};
 
-/// Header length: `DH public (32) || send counter (8, BE u64) || prev chain length (8, BE u64)`.
+/// Header length: `DH public (32) || N (8, BE u64) || PN (8, BE u64)`.
 pub const HEADER_LEN: usize = X25519_PK_LEN + 8 + 8;
+
+/// Maximum messages the receiver will pre-derive in ONE receiving chain
+/// when a gap opens (hostile-input bound against `N`/`PN` header values).
+pub const MAX_SKIP_PER_CHAIN: u64 = 128;
+
+/// Maximum keys held in the skipped-key store across all chains; the
+/// oldest is evicted first (bounded-memory DoS trade-off, documented).
+pub const MAX_SKIPPED_KEYS: usize = 256;
 
 /// Maximum plaintext per ratchet message: the framed message
 /// (header 48 + ciphertext + tag 16) must fit the wire packet's
@@ -25,7 +44,7 @@ pub const MAX_PLAINTEXT: usize = 926;
 
 /// An encrypted ratchet message: header (AAD) + ciphertext + tag.
 pub struct RatchetMessage {
-    /// 40-byte header (also used as AEAD associated data).
+    /// [`HEADER_LEN`]-byte header (also used as AEAD associated data).
     pub header: [u8; HEADER_LEN],
     /// Ciphertext including the 16-byte Poly1305 tag.
     pub payload: Vec<u8>,
@@ -34,13 +53,25 @@ pub struct RatchetMessage {
 /// Offset of the peer ratchet public key within the header.
 const OFF_PEER_PK: usize = 0;
 
-/// Offset of the message number within the header.
+/// Offset of the message number within the header (0-based chain index).
 const OFF_N: usize = X25519_PK_LEN;
 
 /// Offset of the previous chain length within the header.
-const OFF_PN: usize = X25519_PK_LEN + 4;
+const OFF_PN: usize = X25519_PK_LEN + 8;
+
+/// One pre-derived message key held for a future out-of-order delivery.
+#[derive(Clone)]
+struct SkippedKey {
+    /// Peer ratchet public key of the chain the key belongs to.
+    dh: [u8; 32],
+    /// 0-based index of the message within that chain.
+    n: u64,
+    /// Single-use message key (zeroized on drop).
+    mk: Zeroizing<[u8; 32]>,
+}
 
 /// Symmetric Double Ratchet state.
+#[derive(Clone)]
 pub struct DoubleRatchet {
     /// Root key (zeroized on drop).
     root_key: RootKey,
@@ -58,6 +89,8 @@ pub struct DoubleRatchet {
     recv_count: u64,
     /// Length of the previous sending chain at the last DH ratchet step.
     prev_send: u64,
+    /// Pre-derived message keys for out-of-order delivery, oldest first.
+    skipped: Vec<SkippedKey>,
 }
 
 /// Deterministically derives a single-use 12-byte nonce from a message key.
@@ -87,6 +120,7 @@ impl DoubleRatchet {
             send_count: 0,
             recv_count: 0,
             prev_send: 0,
+            skipped: Vec::new(),
         };
         ratchet.dh_ratchet_send(bob_spk)?;
         Ok(ratchet)
@@ -105,6 +139,7 @@ impl DoubleRatchet {
             send_count: 0,
             recv_count: 0,
             prev_send: 0,
+            skipped: Vec::new(),
         }
     }
 
@@ -124,6 +159,12 @@ impl DoubleRatchet {
     /// the new sending chain `(RK, CKs) = KDF(RK, DH(DHs_new, DHr))`.
     fn dh_ratchet_recv(&mut self, peer_bytes: &[u8; 32]) -> Result<(), CryptoError> {
         let peer = X25519PublicKey::from_bytes(peer_bytes);
+        // Keep only store entries belonging to the previous or the new
+        // peer ratchet key; attacker-crafted rotation churn cannot pin
+        // arbitrary keys in the store.
+        let previous = self.dh_remote;
+        self.skipped
+            .retain(|entry| Some(&entry.dh) == previous.as_ref() || &entry.dh == peer_bytes);
 
         // Step 1: new receiving chain from the OLD DH key pair.
         let dh_out = self.dh_self.dh(&peer)?;
@@ -181,11 +222,12 @@ impl DoubleRatchet {
                 actual: plaintext.len(),
             });
         }
+        let n = self.send_count;
         let mk = self.advance_send()?;
 
         let mut header = [0u8; HEADER_LEN];
         kdf::write_at(&mut header, OFF_PEER_PK, &self.dh_self.public_bytes())?;
-        kdf::write_at(&mut header, OFF_N, &self.send_count.to_be_bytes())?;
+        kdf::write_at(&mut header, OFF_N, &n.to_be_bytes())?;
         kdf::write_at(&mut header, OFF_PN, &self.prev_send.to_be_bytes())?;
 
         let nonce = nonce_from_message_key(&mk);
@@ -194,23 +236,122 @@ impl DoubleRatchet {
         Ok(RatchetMessage { header, payload })
     }
 
-    /// Decrypts a ratchet message, performing a DH ratchet step when the
-    /// peer rotates keys.
+    /// Stashes one message key in the bounded skipped-key store, evicting
+    /// the oldest entry when the store is full.
+    fn stash_skipped(&mut self, dh: [u8; 32], n: u64, mk: Zeroizing<[u8; 32]>) {
+        if self.skipped.len() >= MAX_SKIPPED_KEYS {
+            self.skipped.remove(0);
+        }
+        self.skipped.push(SkippedKey { dh, n, mk });
+    }
+
+    /// Takes a pre-derived message key for `(dh, n)` out of the store, if
+    /// one was stashed.
+    fn take_skipped(&mut self, dh: &[u8; 32], n: u64) -> Option<Zeroizing<[u8; 32]>> {
+        let index = self
+            .skipped
+            .iter()
+            .position(|entry| bool::from(entry.dh.ct_eq(dh)) && entry.n == n)?;
+        let entry = self.skipped.remove(index);
+        Some(entry.mk)
+    }
+
+    /// Pre-derives message keys up to (excluding) index `until` of the
+    /// current receiving chain into the skipped-key store, advancing the
+    /// receiving chain position.
     ///
     /// # Errors
     ///
-    /// Returns [`CryptoError::HandshakeFailed`] for out-of-order or
-    /// unestablished chains, and [`CryptoError::DecryptFailed`] on
-    /// authentication failure.
+    /// Returns [`CryptoError::DecryptFailed`] when the gap exceeds
+    /// [`MAX_SKIP_PER_CHAIN`] (hostile header bound).
+    fn skip_message_keys(&mut self, until: u64) -> Result<(), CryptoError> {
+        if self.chain_recv.is_none() || self.recv_count >= until {
+            return Ok(());
+        }
+        let Some(dh) = self.dh_remote else {
+            return Ok(());
+        };
+        let span = until
+            .checked_sub(self.recv_count)
+            .ok_or(CryptoError::DecryptFailed)?;
+        if span > MAX_SKIP_PER_CHAIN {
+            return Err(CryptoError::DecryptFailed);
+        }
+        let span = usize::try_from(span).map_err(|_e| CryptoError::DecryptFailed)?;
+        for _ in 0..span {
+            let chain = self
+                .chain_recv
+                .as_ref()
+                .ok_or(CryptoError::HandshakeFailed)?;
+            let (next, mk) = kdf::advance_chain(chain);
+            match self.chain_recv.as_mut() {
+                Some(slot) => *slot = Zeroizing::new(next),
+                None => return Err(CryptoError::HandshakeFailed),
+            }
+            self.stash_skipped(dh, self.recv_count, Zeroizing::new(mk));
+            self.recv_count = self
+                .recv_count
+                .checked_add(1)
+                .ok_or(CryptoError::HandshakeFailed)?;
+        }
+        Ok(())
+    }
+
+    /// Decrypts a ratchet message, performing a DH ratchet step when the
+    /// peer rotates keys and stashing pre-derived keys for any messages
+    /// that arrived out of order (Signal-spec "SkipMessageKeys").
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CryptoError::HandshakeFailed`] for unestablished chains
+    /// and [`CryptoError::DecryptFailed`] on authentication failure,
+    /// replay, a message older than the store, or a header gap beyond
+    /// [`MAX_SKIP_PER_CHAIN`]. On any error the ratchet state is left
+    /// exactly as it was (transactional).
     pub fn decrypt(&mut self, msg: &RatchetMessage) -> Result<Vec<u8>, CryptoError> {
+        // Signal spec §3.5: on an exception (e.g. authentication
+        // failure) the message is discarded AND the state changes made
+        // while processing it are discarded. Clone the small scalar
+        // state, mutate tentatively, commit only on success.
+        let snapshot = self.clone();
+        match self.decrypt_inner(msg) {
+            Ok(plaintext) => Ok(plaintext),
+            Err(failure) => {
+                *self = snapshot;
+                Err(failure)
+            }
+        }
+    }
+
+    /// Mutating decrypt body; wrapped transactionally by [`Self::decrypt`].
+    fn decrypt_inner(&mut self, msg: &RatchetMessage) -> Result<Vec<u8>, CryptoError> {
         let peer_pk: [u8; 32] = kdf::read_at(&msg.header, OFF_PEER_PK)?;
+        let n = u64::from_be_bytes(kdf::read_at(&msg.header, OFF_N)?);
+        let pn = u64::from_be_bytes(kdf::read_at(&msg.header, OFF_PN)?);
+
+        // Reordered delivery: the key was pre-derived when a later
+        // message of the same chain arrived.
+        if let Some(mk) = self.take_skipped(&peer_pk, n) {
+            let nonce = nonce_from_message_key(&mk);
+            let cipher = AeadCipher::new(Zeroizing::new(*mk));
+            return cipher.open(&nonce, &msg.header, &msg.payload);
+        }
 
         let rotated = match self.dh_remote {
             None => true,
             Some(current) => bool::from(current.ct_ne(&peer_pk)),
         };
         if rotated {
+            // Tail of the peer's PREVIOUS sending chain, then the step.
+            self.skip_message_keys(pn)?;
             self.dh_ratchet_recv(&peer_pk)?;
+        }
+        self.skip_message_keys(n)?;
+
+        if self.recv_count != n {
+            // Behind the chain position and not in the store: replayed
+            // or evicted too old. Fail closed without touching the chain.
+            return Err(CryptoError::DecryptFailed);
         }
 
         let chain = self

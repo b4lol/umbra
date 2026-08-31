@@ -509,6 +509,16 @@ impl Session<EstablishedSession> {
         if total > MAX_SMP_CHUNKS || index >= total {
             return Err(ProtocolError::StateViolation);
         }
+        // A fresh transfer (index 0) restarts reassembly, so an abandoned
+        // transfer cannot wedge the session; non-zero indexes must match
+        // the transfer already in progress.
+        if index == 0 {
+            established.smp_reassembly = Some(SmpCarriage {
+                total,
+                slots: vec![None; total as usize],
+                received: 0,
+            });
+        }
         let carriage = established
             .smp_reassembly
             .get_or_insert_with(|| SmpCarriage {
@@ -562,11 +572,11 @@ impl Session<EstablishedSession> {
     /// returned. Subsequent sends/receives yield
     /// [`ProtocolError::StateViolation`] (SPECIFICATION.md opcode 0x09).
     ///
-    /// Ordering contract (MVP): the Double Ratchet is strict in-order —
-    /// Tor circuits deliver ordered streams, so no reordering is expected.
-    /// A tampered or replayed packet fails decryption; because a message
-    /// key is consumed per receipt, such a failure desynchronizes the
-    /// session (recovery / skipped-key store: TODO A.1).
+    /// Delivery semantics: the Double Ratchet tolerates bounded
+    /// out-of-order delivery (skipped-key store; replay and
+    /// beyond-store messages fail closed with a transactional state
+    /// rollback). An incomplete SMP transfer is restarted by the next
+    /// `index == 0` carriage chunk of a fresh transfer.
     ///
     /// # Errors
     ///

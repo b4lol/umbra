@@ -74,10 +74,8 @@ fn smp_carriage_multi_chunk() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// The ratchet is strict in-order (MVP scope): replaying an already
-/// consumed packet fails authentication. Tor circuits deliver ordered
-/// streams, so reordering cannot occur on them; the skipped-key store
-/// that would tolerate it is TODO A.1.
+/// Replaying an already consumed packet fails closed (store miss on the
+/// skipped-key store), with the ratchet state rolled back transactionally.
 #[test]
 fn smp_carriage_strict_in_order() -> Result<(), Box<dyn std::error::Error>> {
     let (mut alice, mut bob) = established_pair()?;
@@ -167,12 +165,11 @@ fn incoming_role_rejects_initiator_completion() -> Result<(), Box<dyn std::error
 }
 
 /// A peer that abandons a transfer mid-way (never sending the remaining
-/// chunks) desynchronizes the strict in-order ratchet: every subsequent
-/// message fails decryption until recovery lands (TODO A.1 skipped-key
-/// store). The SMP carriage reassembly is discarded by the next
-/// `index == 0` chunk once recovery exists.
+/// chunks) does NOT wedge the session: the ratchet tolerates the gap
+/// (skipped-key store), and the next fresh transfer restarts reassembly
+/// at its `index == 0` chunk and completes normally.
 #[test]
-fn abandoned_transfer_desyncs_until_recovery() -> Result<(), Box<dyn std::error::Error>> {
+fn abandoned_transfer_recovered_by_fresh_transfer() -> Result<(), Box<dyn std::error::Error>> {
     let (mut alice, mut bob) = established_pair()?;
     // Transfer A: 3 chunks; the transport delivers only chunk 0 before
     // "dying" (the rest never reaches Bob).
@@ -181,13 +178,17 @@ fn abandoned_transfer_desyncs_until_recovery() -> Result<(), Box<dyn std::error:
     let first = abandoned_packets.first().ok_or("first chunk")?;
     bob.receive(first)?;
 
-    // Transfer B (fresh, complete): every packet fails to decrypt because
-    // Alice's ratchet is 2 messages ahead of Bob's.
+    // Transfer B (fresh, complete): the index-0 chunk restarts
+    // reassembly and the whole transfer decrypts.
     let fresh: Vec<u8> = vec![9u8; 1200];
     let fresh_packets = alice.send_smp(&fresh)?;
+    let mut got = None;
     for sealed in &fresh_packets {
-        assert!(bob.receive(sealed).is_err());
+        if let Some(InboundPayload::Smp(bytes)) = bob.receive(sealed)? {
+            got = Some(bytes);
+        }
     }
+    assert_eq!(got.ok_or("fresh transfer not delivered")?, fresh);
     Ok(())
 }
 

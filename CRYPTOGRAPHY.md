@@ -39,6 +39,12 @@ graph LR
 2. **Unbreakability Guarantee:**
    Even if an adversary solves the X25519 elliptic curve with a future quantum computer, they cannot reach the session secret as long as the ML-KEM lattice problem remains unsolved.
 
+### 2.1 Double Ratchet Delivery Semantics
+
+- The session root key boots the Signal-spec Double Ratchet (DH ratchet + symmetric chains; single-use message keys with deterministically derived nonces). Decryption is transactional (spec §3.5): on authentication failure all state changes are discarded.
+- Out-of-order delivery decrypts via a bounded skipped-key store: message keys for gaps are pre-derived and held (max 128 per receiving chain, 256 total; oldest evicted first — a bounded-memory DoS trade-off). Replayed or evicted-too-old messages fail closed (`DecryptFailed`).
+- A message lost beyond the store is unrecoverable **by design**: no automatic in-band resync exists — a new session must be established (fresh PQXDH handshake, same pairing; every messenger stream already opens one).
+
 ---
 
 ## 3. Post-Quantum Asynchronous Group Communication (PQ-MLS TreeKEM)

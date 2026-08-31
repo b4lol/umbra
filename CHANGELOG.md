@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Changed
+- **Wire-format revision (pre-release):** Double Ratchet header counters
+  corrected — `N` (0-based chain index) at bytes 32..40, `PN` (previous
+  chain length) at bytes 40..48; the previous encoding wrote them
+  overlapping and nothing consumed them. Ratchet sessions now tolerate
+  bounded out-of-order delivery via a skipped-key store (transactional
+  rollback on failure); SMP carriage restarts reassembly on a fresh
+  `index == 0` chunk, so abandoned transfers no longer wedge a session.
+
 ### Planned
 - Post-Quantum TreeKEM (PQ-MLS) module for multi-cell communication (v2+).
 - Linux Wayland GTK4/Libadwaita graphical interface (v2+) and the Ratatui TUI client (MVP).

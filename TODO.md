@@ -20,7 +20,7 @@ This list contains the technical tasks planned for the step-by-step implementati
 - [x] `ChaCha20-Poly1305` AEAD encryption and `subtle::ConstantTimeEq` timing protection.
 - [x] Secure memory hygiene with `zeroize` and guard pages. *(GuardedBuffer: PROT_NONE guards + mlock + MADV_DONTDUMP/DONTFORK/WIPEONFORK/UNMERGEABLE + zeroize-on-drop)*
 - [ ] Zero-copy in-place identity generation (the generator's return-slot bytes currently transit the stack, protected only by `mlockall`/non-dumpable; eliminate the copy).
-- [ ] Double Ratchet recovery: skipped-key store for out-of-order delivery and post-failure session resync (a failed decrypt currently desynchronizes permanently).
+- [x] Double Ratchet recovery: bounded skipped-key store for out-of-order delivery (128/chain, 256 total, FIFO eviction + rotation pruning, header gap bound, replay fail-closed, transactional rollback per Signal §3.5). *(Recovery after an unrecoverable loss = establishing a new session; no automatic in-band resync protocol.)*
 
 ## A.2 Network & Transport (`umbra-net`)
 
@@ -59,7 +59,7 @@ This list contains the technical tasks planned for the step-by-step implementati
 - [x] **Constant-Time Analysis Suite:** dudect-style pooled-mean Welch t-test suite (`constant_time_tests.rs`) over AEAD/ratchet/KDF hot paths.
 - [x] **Typestate Pattern Library:** `Session<Unauthenticated>` $\to$ `Session<HandshakeInProgress>` $\to$ `Session<EstablishedSession>`; illegal transitions unrepresentable.
 - [x] **Newtype Wrappers:** `SequenceNumber`, `EpochId`, `RatchetStep` and friends strongly typed in `umbra-protocol::newtypes`.
-- [x] **Property-Based Test Suite:** proptest invertibility and Double Ratchet sequence-unbrokenness suites.
+- [x] **Property-Based Test Suite:** proptest invertibility suite and ratchet recovery suite (out-of-order, replay, hostile headers, store bounds).
 - [x] **Mutation Testing Pipeline:** weekly `cargo-mutants` run in CI (`mutation.yml`).
 - [x] **Standard Pipeline Support:** `umbra send --peer NAME` reads stdin, establishes a PQXDH session against the stored peer record and emits length-prefixed handshake blob + 1024-byte sealed frames + SESSION_TERMINATE on stdout; `umbra recv` consumes the framing and writes plaintext to stdout. Binary or `--json` NDJSON (base64url `data` fields). Sandbox applies after keystore/peer-record loads.
 - [x] **Rule of Silence Audit:** `cli_silence.rs` asserts clean `stdout` on success and failure, diagnostics on `stderr` with the `umbra: ` prefix.
