@@ -122,3 +122,21 @@ fn envelope_roundtrip_direct() -> Result<(), Box<dyn std::error::Error + Send + 
     assert_eq!(plain, b"payload");
     Ok(())
 }
+
+/// Peer record roundtrip: save → load → parse gives the same identity.
+#[test]
+fn peer_record_roundtrip() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use umbra_cli::peers;
+    let dir = temp_keystore("peers");
+    let bundle = umbra_crypto::keys::IdentityBundle::generate();
+    let payload = umbra_cli::pairing::payload_for(&bundle)?;
+
+    peers::save_peer(&dir, "colleague", &payload)?;
+    let peer = peers::load_peer(&dir, "colleague")?;
+    assert_eq!(peer.ik_arr, bundle.x25519.public_bytes());
+
+    // Invalid names are rejected before touching the filesystem.
+    assert!(peers::save_peer(&dir, "../evil", &payload).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}

@@ -37,7 +37,8 @@ This list contains the technical tasks planned for the step-by-step implementati
 - [x] Media Metadata Sterilizer (EXIF, GPS, color-profile stripping and pixel re-encoding). *(full pixel re-encode to metadata-free PNG; fuzzed)*
 - [ ] MEDIA_CHUNK framing/chunking for sterilized media (who chunks, EFK keying per SPECIFICATION.md `0x06`).
 - [x] Socialist Millionaire Protocol (SMP) and SAS code verification engine. *(OTR v3 SMP engine, all 4 messages + ZKPs; SAS 6-digit codes)*
-- [x] Session-layer SMP carriage: tag multiplexer + multi-packet chunking over DATA_MESSAGE (SMP2 ≈ 1.5 KB > 990 B). *(SMP-engine driver lives with the pairing flow)*
+- [x] Session-layer SMP carriage: tag multiplexer + multi-packet chunking over DATA_MESSAGE (SMP2 ≈ 1.5 KB > 990 B) + messenger driver (smp_verify_initiator/responder over any stream).
+- [x] Peer record store: named peers with self-authenticating pairing payloads + `umbra pair` SAS command.
 - [ ] Pairing-authenticated identity binding: verify/record peer ML-DSA fingerprints out of band and bind them into `smp_secret` (currently per-run ephemeral identities).
 
 ## A.4 Linux Security & TUI (`umbra-cli`)

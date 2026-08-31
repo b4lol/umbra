@@ -9,5 +9,6 @@ pub mod clipboard;
 pub mod keystore;
 pub mod notify;
 pub mod pairing;
+pub mod peers;
 pub mod sandbox;
 pub mod tui;

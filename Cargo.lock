@@ -6514,6 +6514,7 @@ version = "0.1.0-alpha"
 dependencies = [
  "arti-client",
  "futures-util",
+ "num-bigint",
  "rustls",
  "safelog",
  "thiserror 2.0.20",

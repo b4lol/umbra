@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 umbra-protocol.workspace = true
 umbra-crypto.workspace = true
+num-bigint.workspace = true
 tokio.workspace = true
 zeroize.workspace = true
 thiserror.workspace = true

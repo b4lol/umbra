@@ -78,3 +78,95 @@ fn onion_fixture_parses() -> Result<(), Box<dyn std::error::Error>> {
     assert!(addr.to_string().ends_with(".onion"));
     Ok(())
 }
+
+/// Full SMP verification exchange over an established session and
+/// hermetic duplex streams: equal secrets succeed on both sides.
+#[tokio::test]
+async fn smp_verification_over_session() -> Result<(), Box<dyn std::error::Error>> {
+    use num_bigint::BigUint;
+    use umbra_net::messenger::{smp_verify_initiator, smp_verify_responder};
+    use umbra_protocol::session::Session;
+
+    let bob_bundle = IdentityBundle::generate();
+    let peer_ik =
+        umbra_crypto::keys::X25519PublicKey::from_bytes(&bob_bundle.x25519.public_bytes());
+    let peer_spk = umbra_crypto::keys::X25519PublicKey::from_bytes(&bob_bundle.spk.public_bytes());
+    let peer_kem = umbra_crypto::keys::MlKemPeerKey::from_bytes(&bob_bundle.kem.public_bytes())
+        .map_err(Box::new)?;
+
+    let (hs, blob) = Session::new()
+        .begin_handshake(
+            &peer_ik,
+            &peer_spk,
+            &bob_bundle.spk_signature,
+            &bob_bundle.dsa.public_bytes(),
+            &peer_kem,
+        )
+        .map_err(Box::new)?;
+    let mut alice = hs.complete_handshake().map_err(Box::new)?;
+    let mut bob = Session::with_identity(bob_bundle)
+        .accept_handshake(&blob)
+        .map_err(Box::new)?
+        .complete_handshake_incoming()
+        .map_err(Box::new)?;
+
+    let secret = std::sync::Arc::new(BigUint::from_bytes_be(
+        b"shared pairing password bytes 0123456789",
+    ));
+    let (mut a_side, mut b_side) = tokio::io::duplex(4096);
+
+    let secret_for_alice = secret.clone();
+    let alice_task = tokio::spawn(async move {
+        smp_verify_initiator(&mut alice, &mut a_side, &secret_for_alice).await
+    });
+    let bob_result = smp_verify_responder(&mut bob, &mut b_side, &secret).await?;
+    let alice_result = alice_task.await??;
+
+    assert!(bob_result, "responder must accept equal secrets");
+    assert!(alice_result, "initiator must accept equal secrets");
+    Ok(())
+}
+
+/// SMP with DIFFERENT secrets rejects on both sides.
+#[tokio::test]
+async fn smp_verification_mismatch_rejected() -> Result<(), Box<dyn std::error::Error>> {
+    use num_bigint::BigUint;
+    use umbra_net::messenger::{smp_verify_initiator, smp_verify_responder};
+    use umbra_protocol::session::Session;
+
+    let bob_bundle = IdentityBundle::generate();
+    let peer_ik =
+        umbra_crypto::keys::X25519PublicKey::from_bytes(&bob_bundle.x25519.public_bytes());
+    let peer_spk = umbra_crypto::keys::X25519PublicKey::from_bytes(&bob_bundle.spk.public_bytes());
+    let peer_kem = umbra_crypto::keys::MlKemPeerKey::from_bytes(&bob_bundle.kem.public_bytes())
+        .map_err(Box::new)?;
+
+    let (hs, blob) = Session::new()
+        .begin_handshake(
+            &peer_ik,
+            &peer_spk,
+            &bob_bundle.spk_signature,
+            &bob_bundle.dsa.public_bytes(),
+            &peer_kem,
+        )
+        .map_err(Box::new)?;
+    let mut alice = hs.complete_handshake().map_err(Box::new)?;
+    let mut bob = Session::with_identity(bob_bundle)
+        .accept_handshake(&blob)
+        .map_err(Box::new)?
+        .complete_handshake_incoming()
+        .map_err(Box::new)?;
+
+    let secret_a = BigUint::from_bytes_be(b"alice's password 0123456789abcdef");
+    let secret_b = BigUint::from_bytes_be(b"bob's password 0123456789abcdef");
+    let (mut a_side, mut b_side) = tokio::io::duplex(4096);
+
+    let alice_task =
+        tokio::spawn(async move { smp_verify_initiator(&mut alice, &mut a_side, &secret_a).await });
+    let bob_result = smp_verify_responder(&mut bob, &mut b_side, &secret_b).await?;
+    let alice_result = alice_task.await??;
+
+    assert!(!bob_result, "responder must reject mismatched secrets");
+    assert!(!alice_result, "initiator must reject mismatched secrets");
+    Ok(())
+}

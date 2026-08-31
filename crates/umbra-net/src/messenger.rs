@@ -26,8 +26,9 @@
 //! - **Read bound**: every stream read is time-bounded
 //!   ([`READ_IDLE_TIMEOUT`]) so a stalled peer cannot park the task.
 
+use num_bigint::BigUint;
 use umbra_crypto::keys::{IdentityBundle, MlKemPeerKey, X25519PublicKey};
-use umbra_protocol::session::{InboundPayload, Session};
+use umbra_protocol::session::{EstablishedSession, InboundPayload, Session};
 
 use crate::error::TransportError;
 
@@ -178,4 +179,129 @@ where
     text.ok_or(TransportError::Unsupported(
         "stream closed before a text payload arrived",
     ))
+}
+
+/// Reads one fully reassembled SMP message from the stream: packets are
+/// authenticated through the session (ratchet + wire AEAD) and SMP
+/// carriage chunks are reassembled by the session layer.
+async fn read_smp_message<S>(
+    session: &mut Session<EstablishedSession>,
+    stream: &mut S,
+) -> Result<Vec<u8>, TransportError>
+where
+    S: tokio::io::AsyncRead + Unpin + Send,
+{
+    use tokio::io::AsyncReadExt;
+
+    loop {
+        let mut packet = [0u8; umbra_protocol::types::PACKET_LEN];
+        match tokio::time::timeout(READ_IDLE_TIMEOUT, stream.read_exact(&mut packet)).await {
+            Ok(Ok(_read)) => {}
+            Ok(Err(_io)) => {
+                return Err(TransportError::Timeout {
+                    operation: "SMP message read",
+                });
+            }
+            Err(_elapsed) => {
+                return Err(TransportError::Timeout {
+                    operation: "SMP message read",
+                });
+            }
+        }
+        let sealed = umbra_protocol::packet::SealedPacket::from_bytes(&packet)
+            .map_err(TransportError::Protocol)?;
+        match session.receive(&sealed)? {
+            Some(InboundPayload::Smp(payload)) => return Ok(payload),
+            // Cover traffic and non-SMP payloads are skipped: SMP chunks
+            // are the only payloads expected during verification.
+            None | Some(InboundPayload::Text(_)) => continue,
+            Some(InboundPayload::Terminate) => {
+                return Err(TransportError::Unsupported(
+                    "peer terminated during SMP verification",
+                ));
+            }
+        }
+    }
+}
+
+/// Sends one serialized SMP message over the session's chunked carriage.
+async fn write_smp_message<S>(
+    session: &mut Session<EstablishedSession>,
+    stream: &mut S,
+    message_bytes: &[u8],
+) -> Result<(), TransportError>
+where
+    S: tokio::io::AsyncWrite + Unpin + Send,
+{
+    use tokio::io::AsyncWriteExt;
+
+    for packet in session.send_smp(message_bytes)? {
+        stream
+            .write_all(packet.as_bytes())
+            .await
+            .map_err(TransportError::Io)?;
+    }
+    stream.flush().await.map_err(TransportError::Io)?;
+    Ok(())
+}
+
+/// Runs the INITIATOR side of SMP verification over an established
+/// session (CRYPTOGRAPHY.md §5): sends SMP1, processes SMP2, sends SMP3,
+/// processes SMP4, and returns whether the shared secret matches.
+///
+/// # Errors
+///
+/// Returns [`TransportError`] for I/O failures and
+/// [`TransportError::Protocol`] for SMP proof failures.
+pub async fn smp_verify_initiator<S>(
+    session: &mut Session<EstablishedSession>,
+    stream: &mut S,
+    secret: &BigUint,
+) -> Result<bool, TransportError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+{
+    use umbra_protocol::smp::{SmpFirstParty, SmpMsg2, SmpMsg4};
+
+    let (first, msg1) = SmpFirstParty::start(secret).map_err(TransportError::Protocol)?;
+    write_smp_message(session, stream, &msg1.to_bytes()).await?;
+    let msg2 = SmpMsg2::from_bytes(&read_smp_message(session, stream).await?)
+        .map_err(TransportError::Protocol)?;
+    let (first, msg3) = first.receive_msg2(msg2).map_err(TransportError::Protocol)?;
+    write_smp_message(session, stream, &msg3.to_bytes()).await?;
+    let msg4 = SmpMsg4::from_bytes(&read_smp_message(session, stream).await?)
+        .map_err(TransportError::Protocol)?;
+    first.finish(msg4).map_err(TransportError::Protocol)
+}
+
+/// Runs the RESPONDER side of SMP verification over an established
+/// session: waits for SMP1, answers with SMP2/SMP4, and returns whether
+/// the shared secret matches.
+///
+/// # Errors
+///
+/// Returns [`TransportError`] for I/O failures and
+/// [`TransportError::Protocol`] for SMP proof failures.
+pub async fn smp_verify_responder<S>(
+    session: &mut Session<EstablishedSession>,
+    stream: &mut S,
+    secret: &BigUint,
+) -> Result<bool, TransportError>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+{
+    use umbra_protocol::smp::{SmpMsg1, SmpMsg3, SmpSecondParty};
+
+    let msg1 = SmpMsg1::from_bytes(&read_smp_message(session, stream).await?)
+        .map_err(TransportError::Protocol)?;
+    let (second, msg2) =
+        SmpSecondParty::receive_msg1(secret, msg1).map_err(TransportError::Protocol)?;
+    write_smp_message(session, stream, &msg2.to_bytes()).await?;
+    let msg3 = SmpMsg3::from_bytes(&read_smp_message(session, stream).await?)
+        .map_err(TransportError::Protocol)?;
+    let (_second, verdict, msg4) = second
+        .receive_msg3(msg3)
+        .map_err(TransportError::Protocol)?;
+    write_smp_message(session, stream, &msg4.to_bytes()).await?;
+    Ok(verdict)
 }

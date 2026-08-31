@@ -1,6 +1,8 @@
 //! Command definitions and dispatch (clap 4, derive API).
 
 use clap::{Parser, Subcommand};
+use std::path::Path;
+
 use umbra_crypto::keys::IdentityBundle;
 use umbra_hardware::memory::GuardedBuffer;
 
@@ -77,6 +79,16 @@ pub enum Command {
         /// Own base64url pairing payload.
         #[arg(long)]
         own_payload: String,
+        /// Peer base64url pairing payload.
+        #[arg(long)]
+        peer_payload: String,
+    },
+    /// Stores a peer's pairing payload under a name and prints the shared
+    /// SAS code (verify it with the peer over a trusted channel).
+    Pair {
+        /// Friendly name for the peer ([A-Za-z0-9_-]+).
+        #[arg(long)]
+        peer_name: String,
         /// Peer base64url pairing payload.
         #[arg(long)]
         peer_payload: String,
@@ -172,6 +184,10 @@ pub fn run() -> Result<(), CliError> {
             output::line(&code.to_string());
             Ok(())
         }
+        Command::Pair {
+            ref peer_name,
+            ref peer_payload,
+        } => pair(&cli, peer_name, peer_payload),
     }
 }
 
@@ -208,6 +224,26 @@ fn init_with(cli: &Cli) -> Result<(), CliError> {
         .ok_or_else(|| CliError::Keystore("missing --keystore PATH".into()))?;
     let passphrase = load_passphrase(cli)?;
     crate::keystore::save(path, &passphrase, &IdentityBundle::generate())?;
+    Ok(())
+}
+
+/// Implements `umbra pair`: store peer record + print the shared SAS code.
+fn pair(cli: &Cli, peer_name: &str, peer_payload: &str) -> Result<(), CliError> {
+    // The peer record lives next to the keystore.
+    let keystore_dir = cli
+        .keystore
+        .as_ref()
+        .and_then(|p| p.parent())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let peers_dir = keystore_dir.join("peers");
+    crate::peers::save_peer(&peers_dir, peer_name, peer_payload)?;
+
+    // SAS: own payload (from the keystore identity) vs the peer payload.
+    let bundle = load_identity(cli)?;
+    let own_payload = crate::pairing::payload_for(&bundle)?;
+    let code = crate::pairing::pairing_sas(&own_payload, peer_payload);
+    output::line(&format!("sas={}", code));
     Ok(())
 }
 
