@@ -6547,7 +6547,7 @@ dependencies = [
 
 [[package]]
 name = "umbra-cli"
-version = "0.1.0-alpha"
+version = "1.0.0-alpha.1"
 dependencies = [
  "base64",
  "clap",
@@ -6568,7 +6568,7 @@ dependencies = [
 
 [[package]]
 name = "umbra-crypto"
-version = "0.1.0-alpha"
+version = "1.0.0-alpha.1"
 dependencies = [
  "argon2",
  "blake3",
@@ -6590,7 +6590,7 @@ dependencies = [
 
 [[package]]
 name = "umbra-ffi"
-version = "0.1.0-alpha"
+version = "1.0.0-alpha.1"
 dependencies = [
  "thiserror 2.0.20",
  "umbra-crypto",
@@ -6599,11 +6599,11 @@ dependencies = [
 
 [[package]]
 name = "umbra-gui"
-version = "0.1.0-alpha"
+version = "1.0.0-alpha.1"
 
 [[package]]
 name = "umbra-hardware"
-version = "0.1.0-alpha"
+version = "1.0.0-alpha.1"
 dependencies = [
  "libc",
  "thiserror 2.0.20",
@@ -6612,7 +6612,7 @@ dependencies = [
 
 [[package]]
 name = "umbra-net"
-version = "0.1.0-alpha"
+version = "1.0.0-alpha.1"
 dependencies = [
  "arti-client",
  "futures-util",
@@ -6633,7 +6633,7 @@ dependencies = [
 
 [[package]]
 name = "umbra-protocol"
-version = "0.1.0-alpha"
+version = "1.0.0-alpha.1"
 dependencies = [
  "blake3",
  "getrandom 0.4.3",

@@ -6,7 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
-## [Unreleased]
+## [1.0.0-alpha.1] — 2026-08-31
+
+Section A (MVP) scope of TODO.md: 39/40 tasks complete (one blocked upstream).
+First tagged release: cryptographic core complete and CI-verified; interactive
+product surface and live-network field testing deferred.
+
+### Added
+- PQXDH (X25519 + ML-KEM-768, ML-DSA-65-signed pre-keys) and a Signal-spec
+  Double Ratchet with a bounded skipped-key store (out-of-order delivery),
+  hostile-header bounds, replay fail-closed and transactional decrypt (§3.5).
+- OTR v3 SMP engine with identity-fingerprint binding (`smp::bound_secret`)
+  and per-session transcript-SSID mixing; `umbra fingerprint` command.
+- Fixed 1024-byte packet framing, session-tag multiplexer, SMP carriage with
+  reassembly restart, media metadata sterilizer, MEDIA_CHUNK assembler.
+- Embedded Arti Tor v3 outbound + inbound onion services; persistent onion
+  identity (`bootstrap_persistent`, 0700 storage root, native keystore);
+  strict Vanguards-Lite pinning; inbound hs-pow with a bounded queue.
+- Client hardening: Landlock zero-FS sandbox (+ narrow exception mechanism),
+  Seccomp allowlist with the IPv4/UNIX-STREAM-only network kill-switch,
+  mlockall/PR_SET_DUMPABLE/RLIMIT_CORE, GuardedBuffer, Argon2id keystore,
+  pairing payloads + SAS, peer records, 60 s clipboard, masked D-Bus
+  notifications, TUI skeleton, pipe transport (`send`/`recv`, NDJSON).
+- Verification: 32+ hermetic suites, proptest, dudect-style constant-time
+  suite, 4 fuzz targets, ASan nightly CI, weekly mutation testing.
+
+### Changed
+- Wire-format revisions (pre-release): ratchet header counters corrected
+  (N 0-based at 32..40, PN at 40..48 — previously overlapping); pipe framing
+  documented in SPECIFICATION.md; hardening order refined (memory locks
+  before keystore reads, ADR-025).
+
+### Blocked
+- CPU register zeroing (`zero-call-used-regs`): flag removed from rustc
+  nightly 1.100.0 upstream; ADR-025 clause marked blocked (TODO A.4).
 
 ### Changed
 - **Wire-format revision (pre-release):** Double Ratchet header counters
