@@ -63,3 +63,48 @@ fn unlisted_syscall_gets_eperm() -> Result<(), Box<dyn std::error::Error + Send 
     result?;
     Ok(())
 }
+
+/// Kill-switch verification (TODO A.4, ADR-019): under the filter, IPv6
+/// sockets of any type and UDP sockets of any family fail with EPERM at
+/// the KERNEL level, while IPv4/UNIX STREAM sockets (the only transport
+/// embedded Arti needs) stay available.
+#[test]
+fn ipv6_and_udp_sockets_are_blocked() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let handle = std::thread::spawn(|| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        restrict_syscalls_for_tests()?;
+        // IPv6: blocked regardless of socket type.
+        for sock_type in [libc::SOCK_STREAM, libc::SOCK_DGRAM, libc::SOCK_RAW] {
+            let err = match umbra_hardware::process::probe_socket(libc::AF_INET6, sock_type) {
+                Err(err) => err,
+                Ok(_fd) => return Err("AF_INET6 must be blocked".into()),
+            };
+            assert!(
+                err.to_string().contains("EPERM")
+                    || err.to_string().contains("denied")
+                    || err.to_string().contains("peration not permitted"),
+                "AF_INET6 block must be EPERM: {err}"
+            );
+        }
+        // UDP (any family, including port 53 DNS): blocked.
+        for domain in [libc::AF_INET, libc::AF_UNIX] {
+            assert!(
+                umbra_hardware::process::probe_socket(domain, libc::SOCK_DGRAM).is_err(),
+                "SOCK_DGRAM must be blocked"
+            );
+        }
+        // IPv4 STREAM (Tor relay TCP): still available (probe closes the
+        // descriptor itself).
+        let fd = umbra_hardware::process::probe_socket(
+            libc::AF_INET,
+            libc::SOCK_STREAM | libc::SOCK_CLOEXEC,
+        )?;
+        assert!(fd >= 0, "AF_INET STREAM must remain allowed");
+        Ok(())
+    });
+    let result = match handle.join() {
+        Ok(result) => result,
+        Err(_panic) => return Err("worker thread panicked".into()),
+    };
+    result?;
+    Ok(())
+}

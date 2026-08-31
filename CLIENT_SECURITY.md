@@ -145,7 +145,26 @@ graph TD
 ### B. Zero Disk Access with Landlock LSM (Filesystem Sandbox)
 - Using the Linux kernel's `Landlock` security module, the Umbra process's read and write access to the filesystem is reduced to absolute zero — with one documented exception: the controlling terminal `/dev/tty` (READ-only, for TUI status detection; drawing itself goes through the already-open stdout descriptor) (CLIENT sandbox implementation: `umbra-cli::sandbox`).
 
-### C. Memory Locking (`mlock`) and Anti-Cold-Boot Security
+### C. Network Kill-Switch (DNS/IPv6 Seccomp Filter)
+- The Seccomp allowlist does not grant `socket(2)` unconditionally: argument rules allow ONLY IPv4/UNIX **STREAM** sockets. IPv6 of any type, UDP of any family (including DNS :53), raw and netlink sockets fail with `EPERM` at the kernel syscall level (`umbra-cli::sandbox::restrict_syscalls`). This is verified hermetically in `sandbox_seccomp.rs::ipv6_and_udp_sockets_are_blocked`.
+- Host-layer reference (defense in depth OUTSIDE the process; the embedded Arti client opens direct relay TCP per ADR-001, so an absolute host-level UDP/IPv6 DROP requires a process-scoped allowance, ADR-019):
+
+```nft
+table inet umbra_killswitch {
+  chain output {
+    type filter hook output priority 0; policy accept;
+    udp dport 53 reject
+    meta nfproto ipv6 drop
+    tcp dport 53 reject
+  }
+}
+```
+
+### D. CPU Register Zeroing (`zero-call-used-regs`)
+- Session commands are built with the LLVM `-Z zero-call-used-regs=all` rule on the NIGHTLY toolchain (`just secure-build`; enforced in the CI sanitizer job): every syscall boundary returns with call-used registers zeroed, shrinking register-residue leak surface.
+- Residual: the pinned stable toolchain cannot apply `-Z` flags, so local stable builds and the main CI job run without it; the sanitizer job (nightly) is the enforcement point.
+
+### E. Memory Locking (`mlock`) and Anti-Cold-Boot Security
 - To prevent memory pages from being written to `/swapfile` or swap space, sensitive pages are locked with `mlock`; the process additionally calls `mlockall` and FAILS CLOSED (`umbra: syscall mlockall failed`) when the kernel refuses. Operators must raise `RLIMIT_MEMLOCK` (e.g. a systemd `LimitMEMLOCK=infinity` unit override or a raised ulimit) — an unprivileged environment with the default limit cannot run session commands, by design.
 - **Canary Protection & Guard Pages:** `PROT_NONE` guard pages are placed around key memory blocks, so memory-overflow attacks are detected instantly.
 

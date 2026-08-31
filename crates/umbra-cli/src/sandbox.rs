@@ -119,7 +119,10 @@ fn allowed_syscalls() -> Vec<i64> {
         libc::SYS_dup3,
         // Networking (embedded Arti client: Tor relay TCP + DNS-over-TCP
         // through the network; Landlock does NOT touch networking).
-        libc::SYS_socket,
+        // NOTE: SYS_socket is NOT in this list — it is installed with
+        // ARGUMENT rules in `restrict_syscalls` that allow only IPv4/UNIX
+        // STREAM sockets, so IPv6 and UDP (including DNS :53) fail closed
+        // at the kernel level (ADR-019 kill-switch, CLIENT_SECURITY §4).
         libc::SYS_connect,
         libc::SYS_sendto,
         libc::SYS_recvfrom,
@@ -183,10 +186,42 @@ pub fn restrict_syscalls() -> Result<(), CliError> {
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     return Ok(()); // No table for this architecture: degrade open.
 
-    let rules: std::collections::BTreeMap<i64, Vec<SeccompRule>> = allowed_syscalls()
+    let mut rules: std::collections::BTreeMap<i64, Vec<SeccompRule>> = allowed_syscalls()
         .into_iter()
         .map(|number| (number, Vec::new()))
         .collect();
+    // Kill-switch (TODO A.4): `socket` is granted only for IPv4/UNIX
+    // STREAM sockets. Rules are OR'd across, AND'd within: everything
+    // else — IPv6 of any type, UDP of any family (DNS :53), raw, netlink
+    // — falls through to the mismatch action (EPERM). The masked type
+    // comparison keeps SOCK_CLOEXEC/SOCK_NONBLOCK variants working.
+    const SOCK_TYPE_MASK: u64 = 0x000F;
+    let stream_socket = |domain: i32| -> Result<SeccompRule, CliError> {
+        let domain64 = u64::try_from(domain)
+            .map_err(|_e| CliError::Seccomp("negative socket domain".into()))?;
+        SeccompRule::new(vec![
+            seccompiler::SeccompCondition::new(
+                0,
+                seccompiler::SeccompCmpArgLen::Qword,
+                seccompiler::SeccompCmpOp::Eq,
+                domain64,
+            )
+            .map_err(|e| CliError::Seccomp(e.to_string()))?,
+            seccompiler::SeccompCondition::new(
+                1,
+                seccompiler::SeccompCmpArgLen::Qword,
+                seccompiler::SeccompCmpOp::MaskedEq(SOCK_TYPE_MASK),
+                u64::try_from(libc::SOCK_STREAM)
+                    .map_err(|_e| CliError::Seccomp("negative socket type".into()))?,
+            )
+            .map_err(|e| CliError::Seccomp(e.to_string()))?,
+        ])
+        .map_err(|e| CliError::Seccomp(e.to_string()))
+    };
+    rules.insert(
+        libc::SYS_socket,
+        vec![stream_socket(libc::AF_INET)?, stream_socket(libc::AF_UNIX)?],
+    );
     let filter = SeccompFilter::new(
         rules,
         // Mismatch: every unlisted syscall gets EPERM (fail-closed).

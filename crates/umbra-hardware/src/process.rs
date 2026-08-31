@@ -117,3 +117,35 @@ pub fn get_parent_pid() -> Result<i64, HardwareError> {
     }
     Ok(rc as i64)
 }
+
+/// Performs a raw `socket(2)` and, on success, immediately closes the
+/// descriptor (test hook for the seccomp kill-switch probes; the
+/// production sandbox never opens sockets through this path).
+///
+/// # Errors
+///
+/// Returns [`HardwareError::Syscall`] if the syscall fails (for example,
+/// EPERM under the socket argument filter — the property this hook
+/// exists to test).
+#[doc(hidden)]
+pub fn probe_socket(domain: i32, sock_type: i32) -> Result<i32, HardwareError> {
+    // SAFETY: `socket(2)` has no side effects beyond the returned
+    // descriptor.
+    let fd = unsafe { libc::socket(domain, sock_type, 0) };
+    if fd < 0 {
+        return Err(HardwareError::Syscall {
+            name: "socket",
+            source: Error::last_os_error(),
+        });
+    }
+    // SAFETY: `fd` was created above, is owned by this function, and is
+    // not aliased.
+    let closed = unsafe { libc::close(fd) };
+    if closed == -1 {
+        return Err(HardwareError::Syscall {
+            name: "close",
+            source: Error::last_os_error(),
+        });
+    }
+    Ok(fd)
+}
