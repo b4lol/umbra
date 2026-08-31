@@ -26,7 +26,7 @@ This list contains the technical tasks planned for the step-by-step implementati
 
 - [x] Pure-Rust Tor v3 outbound P2P: embedded Arti client bootstrap (time-bounded) + anonymized streams to peer `.onion` services (`tor` feature).
 - [x] Inbound Tor v3 Hidden Service hosting (`tor-hsservice`): rendezvous accept loop (head-of-line protected), fixed-size packet pump, ephemeral identity keystore.
-- [ ] Pairing-tied identity-key persistence (per-run `.onion` address currently changes every run) and reconciliation with the Landlock zero-FS sandbox.
+- [x] Pairing-tied identity-key persistence (MECHANISM): `TorTransport::bootstrap_persistent(base)` roots the Arti state dir (native keystore under `base/state/keystore`, dirs 0700) so the `.onion` address is stable per nickname — by construction of Arti's keystore; NOT yet exercised against the live network, and no production call site wires it yet. Landlock reconciliation ships as `restrict_filesystem_with_exceptions` (narrowed grant: regular files/dirs only; no Execute/Make*/IoctlDev on the Tor tree) — API-only until a Tor-hosting flow exists.
 - [ ] Per-transport inbound hardening: hs-pow (proof-of-work) configuration and persistent peer streams.
 - [ ] Strict Vanguards-Lite circuit policy (TARGETED_DEFENSES §3B).
 

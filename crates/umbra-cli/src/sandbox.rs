@@ -1,11 +1,21 @@
 //! Process sandboxing for the Linux client (TODO A.4, ADR-007):
-//! Landlock LSM with a zero-access filesystem ruleset (plus a targeted
-//! read+write `/dev/tty` exception so the TUI can draw) and a Seccomp-BPF
+//! Landlock LSM with a zero-access filesystem ruleset (plus targeted
+//! exceptions: the controlling terminal for TUI input/termios, and — for
+//! onion-service flows — the caller-supplied Tor storage directory) and
+//! a Seccomp-BPF
 //! allowlist that returns `EPERM` for every non-listed syscall
 //! (fail-closed, non-killing so violations surface as errors instead of
 //! dead processes). The allowlist includes the network syscall family:
 //! the embedded Arti client opens its own relay TCP connections after
 //! `harden()` runs (ADR-001), and Landlock does not touch networking.
+//!
+//! Semantics notes: an exception grant pins the object opened at
+//! rule-add time (`PathFd` is an `O_PATH` open) — later symlinks out of
+//! the tree are evaluated against Landlock at access time and denied,
+//! while pre-existing hardlinks into the tree share the object. A
+//! `/dev/tty` that cannot be opened at ruleset time silently drops the
+//! tty rule (headless CI); caller-supplied exception paths FAIL CLOSED
+//! instead.
 
 use landlock::{
     ABI, Access, AccessFs, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset, RulesetAttr,
@@ -32,18 +42,69 @@ use crate::cli::CliError;
 /// Returns [`CliError::Sandbox`] if the ruleset cannot be created or is
 /// not fully enforced by the kernel.
 pub fn restrict_filesystem() -> Result<landlock::RestrictionStatus, CliError> {
+    restrict_filesystem_with_exceptions(&[])
+}
+
+/// [`restrict_filesystem`] with explicit, caller-supplied read+write
+/// exceptions (ADR-007 refinement for the embedded-Arti flows, TODO A.2).
+///
+/// The ONLY sanctioned use is the Tor storage directory for flows that
+/// host an onion service: Arti needs read+write for its guard state,
+/// directory cache and the native keystore that makes the `.onion`
+/// identity — and therefore the address peers know — persistent across
+/// runs. Every exception grants full `AccessFs` rights beneath the given
+/// path and nothing else; `/dev/tty` stays read-only.
+///
+/// # Errors
+///
+/// Returns [`CliError::Sandbox`] if the ruleset cannot be created, an
+/// exception path cannot be opened, or the kernel does not fully enforce
+/// the ruleset.
+pub fn restrict_filesystem_with_exceptions(
+    exceptions: &[&std::path::Path],
+) -> Result<landlock::RestrictionStatus, CliError> {
     let created = Ruleset::default()
         .set_compatibility(CompatLevel::HardRequirement)
         .handle_access(AccessFs::from_all(ABI::V5))?
         .create()?;
-    // Targeted exception: the TUI must be able to open its controlling
-    // terminal under the zero-FS sandbox. Everything else stays denied.
-    let created = match PathFd::new("/dev/tty") {
+    // Targeted exception: the TUI must be able to drive its controlling
+    // terminal under the zero-FS sandbox. Crossterm's raw mode issues
+    // termios ioctls (IoctlDev on char devices) and — with redirected
+    // stdin — re-opens /dev/tty O_RDWR (ReadFile|WriteFile). Everything
+    // else stays denied.
+    let tty_rights = AccessFs::ReadFile | AccessFs::WriteFile | AccessFs::IoctlDev;
+    let mut created = match PathFd::new("/dev/tty") {
         Ok(tty) => created
-            .add_rule(PathBeneath::new(tty, AccessFs::from_read(ABI::V5)))
+            .add_rule(PathBeneath::new(tty, tty_rights))
             .map_err(CliError::Sandbox)?,
         Err(_e) => created,
     };
+    // Caller-supplied exceptions (sanctioned use: ONLY the configured
+    // Tor storage root — see ADR-007 refinement). The grant is narrower
+    // than the handled set: regular files and directories only — no
+    // Execute, no Make* for device/socket/fifo nodes, no IoctlDev. The
+    // HANDLED set must stay from_all(V5): an unhandled right would be
+    // globally unrestricted.
+    let tor_grant = AccessFs::ReadFile
+        | AccessFs::WriteFile
+        | AccessFs::ReadDir
+        | AccessFs::MakeDir
+        | AccessFs::MakeReg
+        | AccessFs::RemoveDir
+        | AccessFs::RemoveFile
+        | AccessFs::Truncate
+        | AccessFs::Refer;
+    for path in exceptions {
+        let fd = PathFd::new(path).map_err(|err| {
+            CliError::Io(std::io::Error::other(format!(
+                "sandbox exception path {}: {err}",
+                path.display()
+            )))
+        })?;
+        created = created
+            .add_rule(PathBeneath::new(fd, tor_grant))
+            .map_err(CliError::Sandbox)?;
+    }
     let status = created.restrict_self()?;
     Ok(status)
 }

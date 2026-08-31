@@ -70,8 +70,9 @@ This document explains the rationale behind the foundational technical and archi
 - **Rationale:** Zero-day (0-day) spyware (Pegasus derivatives) has the ability to read in-process memory and manipulate the filesystem.
 - **Decision:** At process startup, all unnecessary system calls (`execve`, `ptrace`, etc.) are blocked with `seccomp`, and all read/write access to the filesystem is closed off with `Landlock`.
 - **Consequence:** Even if an unknown vulnerability exists in the codebase, the adversary cannot make a system call or reach files on disk.
-
+- **Refinement (2026-08, TODO A.2):** the zero-FS ruleset gains exactly two sanctioned exception kinds: the controlling terminal `/dev/tty` (ReadFile+WriteFile+IoctlDev — crossterm raw mode needs termios ioctls and, with redirected stdin, an O_RDWR reopen) and the caller-supplied Tor storage directory for onion-service flows (narrowed grant: regular files/dirs only, no Execute/Make*/IoctlDev). Everything else stays denied; the handled set remains full V5 so no right becomes globally unrestricted.
 ---
+
 
 ## ADR-008: Anti-Censorship Pluggable Transports and Offline Mesh Mode
 

@@ -401,3 +401,27 @@ async fn smp_relay_between_sessions_fails() -> Result<(), Box<dyn std::error::Er
     assert!(!alice_result, "relayed SMP must fail on the initiator side");
     Ok(())
 }
+
+/// The persistent Tor storage root (TODO A.2) is created on demand and
+/// yields a valid client configuration pointing at it. Behavioral proof
+/// of a stable `.onion` address needs a live bootstrap (not hermetic);
+/// this pins the storage layout contract instead.
+#[cfg(feature = "tor")]
+#[test]
+fn persistent_config_creates_storage_root() -> Result<(), Box<dyn std::error::Error>> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let base =
+        std::env::temp_dir().join(format!("umbra-tor-persist-{}-{nanos}", std::process::id()));
+    let config = umbra_net::tor::persistent_config(&base).map_err(Box::new)?;
+    // Arti accepted the configuration; the directories exist with 0700.
+    use std::os::unix::fs::PermissionsExt as _;
+    assert!(base.join("state").is_dir());
+    assert!(base.join("cache").is_dir());
+    let state_mode = std::fs::metadata(base.join("state"))?.permissions().mode();
+    assert_eq!(state_mode & 0o777, 0o700, "state dir must be 0700");
+    let _ = config; // built value is the assertion (FromDirectories validates)
+    let _ = std::fs::remove_dir_all(&base);
+    Ok(())
+}

@@ -8,9 +8,11 @@
 //! `tor-hsservice`), accepts rendezvous streams (semaphore-bounded), and
 //! hands each raw `DataStream` to the messenger layer
 //! ([`crate::messenger`] — handshake + packet flow per stream). The
-//! service identity key lives in the ephemeral per-run state directory,
-//! so the `.onion` address changes per run until pairing-tied key
-//! persistence lands (TODO A.2 second half).
+//! service identity key can live either in the ephemeral per-run state
+//! directory (default: the `.onion` address changes per run) or under a
+//! persistent storage root via [`TorTransport::bootstrap_persistent`]
+//! and [`persistent_config`] (TODO A.2: the Arti native keystore keeps
+//! the identity key, pinning the address across runs).
 //!
 //! Anonymity posture (honest scope): this layer provides Tor v3 anonymity
 //! for on-demand sends and inbound acceptance. It does **not** yet provide
@@ -63,6 +65,48 @@ const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Capacity of the inbound stream queue.
 const INBOUND_QUEUE: usize = 32;
+
+/// Builds a persistent `TorClientConfig` rooted at `base` (TODO A.2):
+/// guard state, directory cache and the Arti native keystore live under
+/// `base/state` and `base/cache` across runs, so the onion-service
+/// identity key persists and the `.onion` address stays stable for a
+/// given nickname (Arti stores it under `base/state/keystore`).
+///
+/// The directories are created if missing; on later runs Arti reuses the
+/// stored identity key instead of generating a new one.
+///
+/// # Errors
+///
+/// Returns [`TransportError::Io`] if the directories cannot be created
+/// and [`TransportError::Config`] if Arti rejects the configuration.
+pub fn persistent_config(base: &std::path::Path) -> Result<TorClientConfig, TransportError> {
+    use std::os::unix::fs::DirBuilderExt as _;
+    let state = base.join("state");
+    let cache = base.join("cache");
+    // 0700: the tree holds the onion identity key (plaintext at rest).
+    // Arti's fs-mistrust enforces the same strictness on its own writes
+    // and refuses a lax tree. Trade-off (documented): the key is NOT
+    // encrypted at rest — a local reader can impersonate the service
+    // ADDRESS (rendezvous only; PQXDH still gates payload plaintext).
+    // At-rest encryption would require a passphrase UX tracked for the
+    // keystore-reconciliation pass.
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&state)
+        .map_err(TransportError::Io)?;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&cache)
+        .map_err(TransportError::Io)?;
+    let config = arti_client::config::TorClientConfigBuilder::from_directories(state, cache)
+        .build()
+        .map_err(|err| TransportError::Config {
+            details: err.to_string(),
+        })?;
+    Ok(config)
+}
 
 /// Builds an ephemeral, per-run `TorClientConfig`.
 ///
@@ -139,6 +183,39 @@ impl TorTransport {
         })
     }
 
+    /// Bootstraps the embedded Arti client with a PERSISTENT storage root
+    /// (TODO A.2): the same `base` across runs keeps guard state and the
+    /// onion-service identity key, so peers see the same `.onion` address.
+    ///
+    /// The calling flow MUST grant Arti read+write access to `base` when
+    /// sandboxed — `umbra_cli::sandbox::restrict_filesystem_with_exceptions`
+    /// exists for exactly this (ADR-007 refinement); a zero-FS Landlock
+    /// ruleset makes this call fail closed on first keystore write.
+    ///
+    /// Bounded by [`BOOTSTRAP_TIMEOUT`]; must be called within a Tokio
+    /// context.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::bootstrap`].
+    pub async fn bootstrap_persistent(base: &std::path::Path) -> Result<Self, TransportError> {
+        let client = tokio::time::timeout(
+            BOOTSTRAP_TIMEOUT,
+            TorClient::<tor_rtcompat::PreferredRuntime>::create_bootstrapped(persistent_config(
+                base,
+            )?),
+        )
+        .await
+        .map_err(|_elapsed| TransportError::Timeout {
+            operation: "Tor bootstrap",
+        })??;
+        Ok(Self {
+            client,
+            service: None,
+            inbound_rx: None,
+        })
+    }
+
     /// Creates an unbootstrapped client — no network contact.
     ///
     /// Used by hermetic tests (CONTRIBUTING §"Hermetic and Deterministic
@@ -182,8 +259,9 @@ impl TorTransport {
     ///
     /// The service identity key is generated into the ephemeral keystore
     /// (the per-run state directory, `0700` per Arti's fs-mistrust defaults;
-    /// no explicit wipe — the OS reclaims /tmp), so the `.onion` address
-    /// changes per run until pairing-tied key persistence lands.
+    /// no explicit wipe — the OS reclaims /tmp), so with the ephemeral
+    /// config the `.onion` address changes per run; use
+    /// [`Self::bootstrap_persistent`] to pin the identity (TODO A.2).
     ///
     /// Calling this twice on one transport is refused (single service per
     /// transport).
