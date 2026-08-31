@@ -90,3 +90,27 @@ pub trait UmbraCoreController: Send + Sync {
     fn trigger_panic_wipe(&self);
 }
 ```
+
+## Local Pipe Transport (v1.0 addition)
+
+As a transport-agnostic core, `umbra send`/`umbra recv` accept and emit
+the sealed stream over the standard Unix pipes instead of Tor. The pipe
+framing is:
+
+```text
+[u32 BE handshake-blob length][PQXDH handshake blob]
+[1024-byte sealed packets...]            (DATA_MESSAGE frames)
+[1024-byte sealed packet]                (SESSION_TERMINATE, opcode 0x09)
+```
+
+Notes:
+- Each sealed frame is a full 1024-byte packet exactly as specified
+  above; only the handshake blob is length-prefixed (it predates the
+  established session and cannot ride the session layer).
+- The responder side of the pipe performs no initiator authentication;
+  SAS verification (Socialist Millionaire Protocol) is mandatory before
+  the channel is trusted. Peer-initiator fingerprint binding is tracked
+  as TODO A.3.
+- `--json` swaps the binary frames for NDJSON events (`handshake`,
+  `packet`, `terminate` from the sender; `text`, `terminate` from the
+  receiver) with base64url `data` fields.

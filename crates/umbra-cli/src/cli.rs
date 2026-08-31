@@ -64,9 +64,17 @@ pub struct Cli {
 pub enum Command {
     /// Generates a fresh identity bundle and prints its public parts.
     Keygen,
-    /// Sends a message over the Tor v3 P2P transport (TODO A.2/A.4).
-    Send,
-    /// Receives messages over the Tor v3 P2P transport (TODO A.2/A.4).
+    /// Encrypts stdin for a named peer; sealed frames to stdout.
+    Send {
+        /// Peer record name ([A-Za-z0-9_-]+), resolved from the peers/
+        /// directory next to the keystore.
+        #[arg(long)]
+        peer: String,
+    },
+    /// Decrypts a sealed pipe stream from stdin; plaintext to stdout.
+    ///
+    /// NOTE: the responder side does not authenticate the initiator —
+    /// verify the SAS code out of band (umbra pairing-sas).
     Recv,
     /// Opens the security-focused terminal UI (Ratatui).
     Tui,
@@ -129,21 +137,46 @@ pub enum CliError {
     /// TUI failure.
     #[error(transparent)]
     Tui(#[from] tui::TuiError),
+
+    /// Standard-stream I/O failure.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    /// Pipe-transport framing/handshake failure.
+    #[error("pipe transport failure: {0}")]
+    Pipe(String),
 }
 
-/// Applies ADR-025 process hardening before any session or key work:
-/// core-dump suppression (flag + `RLIMIT_CORE`), full-memory `mlockall`,
-/// and the fail-closed Landlock zero-filesystem sandbox (ADR-007).
+/// Applies ADR-025 memory hardening BEFORE any keystore read, so identity
+/// secrets are born under `mlockall` with core dumps already disabled.
 ///
 /// # Errors
 ///
-/// Returns [`CliError::Hardware`] or [`CliError::Sandbox`] on kernel refusal.
-fn harden() -> Result<(), CliError> {
+/// Returns [`CliError::Hardware`] on kernel refusal.
+fn harden_memory() -> Result<(), CliError> {
     umbra_hardware::process::harden_process()?;
+    Ok(())
+}
+
+/// Applies the fail-closed Landlock zero-filesystem sandbox (ADR-007) and
+/// the Seccomp allowlist AFTER keystore/peer-record reads are complete.
+///
+/// # Errors
+///
+/// Returns [`CliError::Sandbox`] or [`CliError::Seccomp`] on kernel refusal.
+fn harden_sandbox() -> Result<(), CliError> {
     let _status = crate::sandbox::restrict_filesystem()?;
-    // Seccomp is applied LAST: the Landlock and process-lock syscalls
-    // above have already run; afterwards the allowlist gates everything.
+    // Seccomp is applied LAST: the Landlock syscalls above have already
+    // run; afterwards the allowlist gates everything.
     crate::sandbox::restrict_syscalls()?;
+    Ok(())
+}
+
+/// Full hardening for commands that read nothing sensitive from disk:
+/// memory locks immediately followed by the sandbox.
+fn harden() -> Result<(), CliError> {
+    harden_memory()?;
+    harden_sandbox()?;
     Ok(())
 }
 
@@ -157,19 +190,31 @@ pub fn run() -> Result<(), CliError> {
     match cli.command {
         Command::Keygen => keygen(cli.json),
         Command::Init => init_with(&cli),
-        Command::Send => {
-            harden()?;
-            Err(umbra_protocol::ProtocolError::Unsupported(
-                "interactive send lands with the pairing driver (use the library flow)",
+        Command::Send { ref peer } => {
+            harden_memory()?;
+            let bundle = load_identity(&cli)?;
+            let peer_record = load_peer_record(&cli, peer)?;
+            harden_sandbox()?;
+            let mode = pipeline_mode(cli.json);
+            crate::pipeline::send_stream(
+                bundle,
+                &peer_record,
+                &mut std::io::stdin().lock(),
+                &mut std::io::stdout().lock(),
+                mode,
             )
-            .into())
         }
         Command::Recv => {
-            harden()?;
-            Err(umbra_protocol::ProtocolError::Unsupported(
-                "interactive recv lands with the pairing driver (use the library flow)",
+            harden_memory()?;
+            let bundle = load_identity(&cli)?;
+            harden_sandbox()?;
+            let mode = pipeline_mode(cli.json);
+            crate::pipeline::recv_stream(
+                bundle,
+                &mut std::io::stdin().lock(),
+                &mut std::io::stdout().lock(),
+                mode,
             )
-            .into())
         }
         Command::Tui => {
             harden()?;
@@ -188,6 +233,27 @@ pub fn run() -> Result<(), CliError> {
             ref peer_name,
             ref peer_payload,
         } => pair(&cli, peer_name, peer_payload),
+    }
+}
+
+/// Resolves a named peer record from the peers/ directory next to the
+/// keystore.
+fn load_peer_record(cli: &Cli, peer_name: &str) -> Result<crate::pairing::PeerIdentity, CliError> {
+    let keystore_dir = cli
+        .keystore
+        .as_ref()
+        .and_then(|p| p.parent())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    crate::peers::load_peer(&keystore_dir.join("peers"), peer_name)
+}
+
+/// Maps the `--json` flag onto the pipe output framing.
+fn pipeline_mode(json: bool) -> crate::pipeline::OutputMode {
+    if json {
+        crate::pipeline::OutputMode::Json
+    } else {
+        crate::pipeline::OutputMode::Binary
     }
 }
 

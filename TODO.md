@@ -35,18 +35,18 @@ This list contains the technical tasks planned for the step-by-step implementati
 - [x] 1024-byte fixed-block packet framing (`Packetizer`) and cryptographic random padding.
 - [x] Poisson-distributed artificial cover-traffic generator (`PoissonTimer`). *(scheduler + `umbra-net::cover` pump; must be started with the session)*
 - [x] Media Metadata Sterilizer (EXIF, GPS, color-profile stripping and pixel re-encoding). *(full pixel re-encode to metadata-free PNG; fuzzed)*
-- [ ] MEDIA_CHUNK framing/chunking for sterilized media (who chunks, EFK keying per SPECIFICATION.md `0x06`).
+- [x] MEDIA_CHUNK framing/chunking for sterilized media (who chunks, EFK keying per SPECIFICATION.md `0x06`). *(split/assembler with MAX_CHUNKS/MAX_MEDIA_BYTES caps; fuzzed)*
 - [x] Socialist Millionaire Protocol (SMP) and SAS code verification engine. *(OTR v3 SMP engine, all 4 messages + ZKPs; SAS 6-digit codes)*
 - [x] Session-layer SMP carriage: tag multiplexer + multi-packet chunking over DATA_MESSAGE (SMP2 ≈ 1.5 KB > 990 B) + messenger driver (smp_verify_initiator/responder over any stream).
 - [x] Peer record store: named peers with self-authenticating pairing payloads + `umbra pair` SAS command.
-- [ ] Pairing-authenticated identity binding: verify/record peer ML-DSA fingerprints out of band and bind them into `smp_secret` (currently per-run ephemeral identities).
+- [ ] Pairing-authenticated identity binding: verify/record peer ML-DSA fingerprints out of band and bind them into `smp_secret` (currently per-run ephemeral identities; pipe-mode recv is unauthenticated by design until this lands — SAS verification is mandatory in the interim).
 
 ## A.4 Linux Security & TUI (`umbra-cli`)
 
-- [x] Linux `seccomp-bpf` syscall filtering (seccompiler allowlist, fail-closed EPERM) and `Landlock` zero-filesystem-access sandboxing (+ read/write `/dev/tty` exception for the TUI).
-- [ ] Security-focused, low-resource Terminal TUI (`ratatui`).
-- [ ] Clipboard manager with a 60-second auto-destruct.
-- [ ] Linux D-Bus masked generic notification adapter (`org.freedesktop.Notifications`).
+- [x] Linux `seccomp-bpf` syscall filtering (seccompiler allowlist, fail-closed EPERM) and `Landlock` zero-filesystem-access sandboxing (+ read-only `/dev/tty` exception for the TUI).
+- [x] Security-focused, low-resource Terminal TUI (`ratatui`). *(state-machine skeleton; runs fully under the Landlock+Seccomp sandbox)*
+- [x] Clipboard manager with a 60-second auto-destruct. *(subprocess-based wl-clipboard/xclip interop; tested)*
+- [x] Linux D-Bus masked generic notification adapter (`org.freedesktop.Notifications`). *(zbus blocking client; app-name masked to a constant; tested)*
 - [x] **Memory Leak Locks:** `mlockall`, `prctl(PR_SET_DUMPABLE, 0)` and `MADV_DONTDUMP`/`MADV_DONTFORK` integration. *(plus `setrlimit(RLIMIT_CORE, 0)` and `MADV_UNMERGEABLE`; Landlock zero-FS sandbox in the CLI)*
 - [ ] **CPU Register Zeroing:** Adding the LLVM `-Z zero-call-used-regs=all` rule to the build configuration.
 - [ ] **DNS & IPv6 Blocking:** Verification of the absolute kernel/nftables-level `DROP` of UDP 53 and IPv6. *(Note: embedded Arti (ADR-001) opens direct relay TCP — the ADR-019 SOCKS5 exemption needs a process-scoped (UID/cgroup) allowance instead; see ADR-019/ADR-028.)*
@@ -54,16 +54,16 @@ This list contains the technical tasks planned for the step-by-step implementati
 
 ## A.5 Quality, Test & Security Verification Infrastructure
 
-- [ ] **Continuous Fuzzing Harness:** Setting up libFuzzer tests with `cargo-fuzz` for the 1024-byte packet parser and the PQXDH handshake state machine.
-- [ ] **LLVM Memory Sanitizer Integration:** Adding AddressSanitizer (ASan) and UndefinedBehaviorSanitizer (UBSan) test stages to the CI pipeline.
-- [ ] **Constant-Time Analysis Suite:** Automating timing-leak scanning of cryptographic functions with the `dudect`-based Welch t-test.
-- [ ] **Typestate Pattern Library:** Enforcing packet states (`Unauthenticated` $\to$ `HandshakeInProgress` $\to$ `EstablishedSession`) at the type level.
-- [ ] **Newtype Wrappers:** Strongly typing all critical IDs and counters such as `SequenceNumber`, `EpochId`, `RatchetStep`.
-- [ ] **Property-Based Test Suite:** Writing cryptographic invertibility and Double Ratchet sequence-unbrokenness tests with `proptest`.
-- [ ] **Mutation Testing Pipeline:** Auditing the catch rate of logical-operator mutations with `cargo mutants` in CI.
-- [ ] **Standard Pipeline Support:** Making the `umbra send` and `umbra recv` commands fully process `stdin`/`stdout` byte streams.
-- [ ] **Rule of Silence Audit:** Testing that successful CLI commands print no banners to `stdout` and that logs go to `stderr`.
-- [ ] **JSON/NDJSON Parseable Streams:** Output support compatible with standard Unix tools (`jq`, `awk`) via the `umbra --json` flag.
+- [x] **Continuous Fuzzing Harness:** libFuzzer targets via `cargo-fuzz` for the packet parser, media sterilizer, SMP wire format and media assembler; CI smoke runs two targets per push.
+- [x] **LLVM Memory Sanitizer Integration:** AddressSanitizer (ASan) test stage in CI on the nightly toolchain. *(UBSan is partially covered by debug overflow checks; a dedicated stage is deferred to v2 hardening)*
+- [x] **Constant-Time Analysis Suite:** dudect-style pooled-mean Welch t-test suite (`constant_time_tests.rs`) over AEAD/ratchet/KDF hot paths.
+- [x] **Typestate Pattern Library:** `Session<Unauthenticated>` $\to$ `Session<HandshakeInProgress>` $\to$ `Session<EstablishedSession>`; illegal transitions unrepresentable.
+- [x] **Newtype Wrappers:** `SequenceNumber`, `EpochId`, `RatchetStep` and friends strongly typed in `umbra-protocol::newtypes`.
+- [x] **Property-Based Test Suite:** proptest invertibility and Double Ratchet sequence-unbrokenness suites.
+- [x] **Mutation Testing Pipeline:** weekly `cargo-mutants` run in CI (`mutation.yml`).
+- [x] **Standard Pipeline Support:** `umbra send --peer NAME` reads stdin, establishes a PQXDH session against the stored peer record and emits length-prefixed handshake blob + 1024-byte sealed frames + SESSION_TERMINATE on stdout; `umbra recv` consumes the framing and writes plaintext to stdout. Binary or `--json` NDJSON (base64url `data` fields). Sandbox applies after keystore/peer-record loads.
+- [x] **Rule of Silence Audit:** `cli_silence.rs` asserts clean `stdout` on success and failure, diagnostics on `stderr` with the `umbra: ` prefix.
+- [x] **JSON/NDJSON Parseable Streams:** `umbra --json` NDJSON output; pipe transport events are jq/awk-compatible.
 
 ---
 

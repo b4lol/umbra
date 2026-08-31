@@ -1,7 +1,8 @@
 //! Paired-peer record store (TODO A.3): one file per peer under a
 //! `peers/` directory next to the keystore, containing the peer's
-//! base64url pairing payload. The payload is self-authenticating
-//! (SPK signature verified at parse).
+//! base64url pairing payload. The payload is internally signed (its
+//! embedded SPK signature is verified at parse); binding it to the
+//! *expected* peer happens out of band via the SAS code.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,11 +24,14 @@ fn record_path(peers_dir: &Path, name: &str) -> Result<PathBuf, CliError> {
     Ok(peers_dir.join(format!("{name}.peer")))
 }
 
-/// Saves (or overwrites) a peer's pairing payload under `name`.
+/// Saves (or overwrites) a peer's pairing payload under `name`. The
+/// payload is parsed (SPK signature verified) BEFORE it touches disk, so
+/// a typo fails here instead of at first use.
 ///
 /// # Errors
 ///
-/// Returns [`CliError`] on name validation or I/O failure.
+/// Returns [`CliError`] on name validation, invalid payload, or I/O
+/// failure.
 pub fn save_peer(peers_dir: &Path, name: &str, payload_b64: &str) -> Result<(), CliError> {
     let path = record_path(peers_dir, name)?;
     fs::create_dir_all(peers_dir)

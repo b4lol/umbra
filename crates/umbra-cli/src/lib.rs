@@ -10,5 +10,6 @@ pub mod keystore;
 pub mod notify;
 pub mod pairing;
 pub mod peers;
+pub mod pipeline;
 pub mod sandbox;
 pub mod tui;

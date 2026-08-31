@@ -67,10 +67,26 @@ fn keygen_json_is_single_object() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// `umbra send` fails with a diagnostic on stderr and NOTHING on stdout
-/// (Rule of Silence: errors never pollute the data channel).
+/// (Rule of Silence: errors never pollute the data channel). Both the
+/// clap parse error and the runtime diagnostic path are covered.
 #[test]
 fn send_errors_go_to_stderr() -> Result<(), Box<dyn std::error::Error>> {
     let out = Command::new(BIN).arg("send").output()?;
+    assert!(!out.status.success());
+    assert!(out.stdout.is_empty(), "stdout must stay clean on failure");
+    let stderr = String::from_utf8(out.stderr)?;
+    assert!(!stderr.trim().is_empty(), "a diagnostic must be present");
+
+    // Runtime failure (missing keystore) exercises the `umbra: ` printer.
+    let out = Command::new(BIN)
+        .args([
+            "send",
+            "--peer",
+            "nobody",
+            "--keystore",
+            "/nonexistent/umbra.enc",
+        ])
+        .output()?;
     assert!(!out.status.success());
     assert!(out.stdout.is_empty(), "stdout must stay clean on failure");
     let stderr = String::from_utf8(out.stderr)?;

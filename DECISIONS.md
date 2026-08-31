@@ -292,6 +292,7 @@ This document explains the rationale behind the foundational technical and archi
   - **Network Leak Block:** ALL TCP/UDP/IPv6 traffic other than the local Arti Tor SOCKS5 will be `DROP`ped in the kernel; system DNS will be bypassed entirely.
   - **Hardware Isolation:** Baseband DMA will be segregated with IOMMU/SMMU; data ports will be blacked out with Linux `USBGuard` and Android `USB Data Lockout`.
   - **Microarchitectural Protection:** `PR_SET_SPECULATION_CTRL` and `clflushopt` cache eviction will be applied.
+  - **Hardening Order (refinement):** Memory locks (`mlockall`, `PR_SET_DUMPABLE`, `RLIMIT_CORE`) apply BEFORE any keystore or peer-record read so identity secrets are born inside the locked, non-dumpable region; the Landlock zero-FS sandbox and the Seccomp allowlist apply immediately AFTER those reads complete (keystore and peer files are the only FS accesses a session command ever makes).
 - **Consequence:** The data and metadata leak surface is minimized at every layer; the residual leak risk is measured with leak-test suites and continuously monitored through CI.
 
 ---
