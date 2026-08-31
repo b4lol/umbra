@@ -75,7 +75,7 @@ jobs:
       - name: AddressSanitizer
         run: |
           RUSTFLAGS="-Zsanitizer=address -Zzero-call-used-regs=all" \
-        cargo test --workspace --all-targets \
+          cargo test --workspace --all-targets \
             --target x86_64-unknown-linux-gnu
       # NOTE: CONTRIBUTING lists UBSan; rustc's `-Zsanitizer` does not yet
       # accept `undefined` (accepted set: address, cfi, leak, memory, thread,
