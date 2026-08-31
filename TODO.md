@@ -42,7 +42,7 @@ This list contains the technical tasks planned for the step-by-step implementati
 
 ## A.4 Linux Security & TUI (`umbra-cli`)
 
-- [ ] Linux `seccomp-bpf` syscall filtering and `Landlock` zero-filesystem-access sandboxing.
+- [x] Linux `seccomp-bpf` syscall filtering (seccompiler allowlist, fail-closed EPERM) and `Landlock` zero-filesystem-access sandboxing (+ read/write `/dev/tty` exception for the TUI).
 - [ ] Security-focused, low-resource Terminal TUI (`ratatui`).
 - [ ] Clipboard manager with a 60-second auto-destruct.
 - [ ] Linux D-Bus masked generic notification adapter (`org.freedesktop.Notifications`).

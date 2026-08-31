@@ -76,6 +76,10 @@ pub enum CliError {
     #[error(transparent)]
     Sandbox(#[from] landlock::RulesetError),
 
+    /// Seccomp filter failure.
+    #[error("seccomp failure: {0}")]
+    Seccomp(String),
+
     /// TUI failure.
     #[error(transparent)]
     Tui(#[from] tui::TuiError),
@@ -91,6 +95,9 @@ pub enum CliError {
 fn harden() -> Result<(), CliError> {
     umbra_hardware::process::harden_process()?;
     let _status = crate::sandbox::restrict_filesystem()?;
+    // Seccomp is applied LAST: the Landlock and process-lock syscalls
+    // above have already run; afterwards the allowlist gates everything.
+    crate::sandbox::restrict_syscalls()?;
     Ok(())
 }
 

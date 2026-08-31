@@ -10,6 +10,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[lib]
+name = "umbra_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "umbra"
 path = "src/main.rs"
@@ -19,8 +23,11 @@ umbra-crypto.workspace = true
 umbra-protocol.workspace = true
 umbra-net.workspace = true
 umbra-hardware = { path = "../umbra-hardware" }
+zeroize.workspace = true
 clap.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 landlock.workspace = true
+seccompiler = "0.5.0"
+libc.workspace = true
 thiserror.workspace = true

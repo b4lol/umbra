@@ -98,3 +98,22 @@ pub fn harden_process() -> Result<(), HardwareError> {
     limit_core_dumps()?;
     lock_all_memory()
 }
+
+/// Returns the parent process id (test hook for seccomp EPERM probes).
+///
+/// # Errors
+///
+/// Returns [`HardwareError::Syscall`] if the syscall fails (for example,
+/// EPERM under a seccomp filter — the property this hook exists to test).
+#[doc(hidden)]
+pub fn get_parent_pid() -> Result<i64, HardwareError> {
+    // SAFETY: `getppid` is a stateless, argument-free syscall.
+    let rc = unsafe { libc::getppid() };
+    if rc == -1 {
+        return Err(HardwareError::Syscall {
+            name: "getppid",
+            source: Error::last_os_error(),
+        });
+    }
+    Ok(rc as i64)
+}

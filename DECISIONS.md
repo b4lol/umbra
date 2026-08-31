@@ -327,5 +327,6 @@ This document explains the rationale behind the foundational technical and archi
   - C-bearing dependencies are permitted **only** as transitive dependencies of the feature-gated `tor` transport in `crates/umbra-net`; no Umbra crate may link them directly for its own cryptography or storage.
   - Umbra's own cryptography stays 100% pure-Rust RustCrypto (ADR-026 unchanged); the `crates/umbra-hardware` FFI exception (ADR-012) is unchanged.
   - `ring` is selected explicitly (single CryptoProvider) to keep the choice auditable.
+  - Same-deviation scope: `seccompiler` (Landlock/Seccomp sandbox frontend, pure Rust with internal `unsafe` BPF emission) is accepted under this ADR as a transitive exception; Umbra-owned crates remain `#![forbid(unsafe_code)]`.
   - This deviation is revisited on every Tor-stack dependency bump; if a pure-Rust provider (e.g., a RustCrypto TLS backend) becomes viable, the deviation is retired.
 - **Consequence:** The "no C" policy is scoped to Umbra-owned code paths with an audited, minimal, feature-gated transitive exception; CI license/audit scanning (cargo-deny, cargo-audit) continues to cover the C-bearing components.

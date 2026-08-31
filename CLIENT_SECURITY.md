@@ -143,7 +143,7 @@ graph TD
   - Only the kernel system calls required for asynchronous networking and memory management are permitted.
 
 ### B. Zero Disk Access with Landlock LSM (Filesystem Sandbox)
-- Using the Linux kernel's `Landlock` security module, the Umbra process's read and write access to the filesystem is reduced to absolute zero.
+- Using the Linux kernel's `Landlock` security module, the Umbra process's read and write access to the filesystem is reduced to absolute zero — with one documented exception: the controlling terminal `/dev/tty` (read/write) so the sandboxed TUI can draw (CLIENT sandbox implementation: `umbra-cli::sandbox`).
 
 ### C. Memory Locking (`mlock`) and Anti-Cold-Boot Security
 - To prevent memory pages from being written to `/swapfile` or swap space, sensitive pages are locked with `mlock`.

@@ -4,13 +4,9 @@
 //! `stdin`/`stdout`, Rule of Silence (successful commands print only the
 //! requested data; diagnostics go to `stderr`).
 
-mod cli;
-mod sandbox;
-mod tui;
-
 use std::process::ExitCode;
 
-use crate::cli::run;
+use umbra_cli::cli::run;
 
 fn main() -> ExitCode {
     match run() {
