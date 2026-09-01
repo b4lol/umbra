@@ -33,7 +33,7 @@ This list contains the technical tasks planned for the step-by-step implementati
 ## A.3 Protocol & Metadata Masking (`umbra-protocol`)
 
 - [x] 1024-byte fixed-block packet framing (`Packetizer`) and cryptographic random padding.
-- [x] Poisson-distributed artificial cover-traffic generator (`PoissonTimer`). *(scheduler + `umbra-net::cover` pump; must be started with the session)*
+- [x] Poisson-distributed artificial cover-traffic generator (`PoissonTimer`). *(scheduler + `umbra-net::cover` pump; burst-level cover WIRED into the pipe and Tor send paths — receiver destroys cover silently; idle-gap cover is v2)*
 - [x] Media Metadata Sterilizer (EXIF, GPS, color-profile stripping and pixel re-encoding). *(full pixel re-encode to metadata-free PNG; fuzzed)*
 - [x] MEDIA_CHUNK framing/chunking for sterilized media (who chunks, EFK keying per SPECIFICATION.md `0x06`). *(split/assembler with MAX_CHUNKS/MAX_MEDIA_BYTES caps; fuzzed)*
 - [x] Socialist Millionaire Protocol (SMP) and SAS code verification engine. *(OTR v3 SMP engine, all 4 messages + ZKPs; SAS 6-digit codes)*

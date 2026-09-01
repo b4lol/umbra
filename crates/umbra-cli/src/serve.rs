@@ -18,8 +18,9 @@
 //!    Ratchet), text payloads emitted as NDJSON on stdout.
 //!
 //! Honest scope: the outbound counterpart is `send --onion`
-//! (`tor_send`); no cover traffic on this path (GPA resistance TODO);
-//! SMP is not run on inbound streams (SAS verification is out of band).
+//! (`tor_send`); inbound cover frames are destroyed silently (ADR-005),
+//! while idle-gap cover between sessions is v2; SMP is not run on
+//! inbound streams (SAS verification is out of band).
 
 use std::path::PathBuf;
 use std::time::Duration;

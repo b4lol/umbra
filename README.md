@@ -2,7 +2,7 @@
 
 **Zero-Trust, Zero-Metadata, Post-Quantum Anonymous Communication System**
 
-`Umbra` is an end-to-end encrypted communication protocol and client designed for journalists, government officials, and intelligence professionals operating in high-threat environments. It is serverless (no central server) and built on zero-metadata principles. Under its Tor transport the goal is no IP or identity trace — cover-traffic wiring and live-network field testing are still pending (see the honest-scope table), so treat every absolute anonymity claim as a design goal, not a measured property.
+`Umbra` is an end-to-end encrypted communication protocol and client designed for journalists, government officials, and intelligence professionals operating in high-threat environments. It is serverless (no central server) and built on zero-metadata principles. Under its Tor transport the goal is no IP or identity trace — burst-level cover traffic is wired, while idle-gap cover and live-network field testing are still pending (see the honest-scope table), so treat every absolute anonymity claim as a design goal, not a measured property.
 
 > **Release status — `v1.0.0-alpha.1`:** the Section A (MVP) scope of [TODO.md](TODO.md) is implemented and CI-verified (39/40 tasks; one task is blocked upstream — see the honest-scope table below). This is an **alpha**: the cryptographic core is complete and continuously tested, while the interactive product surface (GUI, Android) and live-network field testing are not yet done. Every claim in this README is scoped to what is on disk; the honest-scope notes are authoritative over any marketing language inherited from the specification documents.
 
@@ -23,7 +23,7 @@
 - **Embedded Arti** (pure-Rust Tor) v3 outbound + inbound onion services, head-of-line-protected inbound with bounded concurrency and idle timeouts.
 - **Persistent onion identity** (`bootstrap_persistent`): Arti native keystore under a `0700` storage root keeps the `.onion` address stable per nickname.
 - **Strict Vanguards-Lite** circuit pinning on both config paths (mode pinned explicitly; consensus cannot weaken it), **hs-pow** enabled inbound with a memory-bounded rendezvous queue.
-- Poisson-scheduled **cover-traffic pump** (library; not yet wired into the interactive flows — honest scope note in `umbra-net::messenger`).
+- **Burst-level cover traffic** (ADR-005): Poisson-driven `DUMMY_COVER` frames interleaved with real frames on every send path (pipe + Tor), wire-indistinguishable; receiver destroys them silently. Idle-gap cover is v2.
 
 ### Client security (`umbra-cli`, `umbra-hardware`)
 - **Landlock zero-FS sandbox** with exactly two sanctioned exceptions (the `/dev/tty` terminal — read/write/ioctl for crossterm raw mode, silently dropped on headless systems; the caller-supplied Tor storage dir with a narrowed regular-files grant). The zero-FS default and the exception mechanism are verified hermetically.
@@ -47,7 +47,6 @@
 | Android client (`FLAG_SECURE`, TEE, Skia canvas) | Deferred (Section B) |
 | View-once media engine, 24 h crypto-shredding | Deferred (Section B; media *metadata sterilizer* IS implemented) |
 | `hardened_malloc` integration | Deferred (Section B) |
-| Cover traffic in interactive flows | Pump exists (library); not wired into `send`/`recv` flows yet |
 | Persistent onion identity in production flows | Wired: `umbra serve` (inbound daemon) + `umbra send --onion` (outbound, 64 KiB ceiling); address stability not live-verified. Tor transport state (guard descriptors, consensus cache) persists under the Tor tree — messages stay RAM-only, transport state does not |
 | CPU register zeroing (`zero-call-used-regs`) | **Blocked upstream** — flag removed from rustc nightly 1.100.0 (TODO A.4, ADR-025 revision note) |
 | Live-network field testing of the Tor paths | Not performed; config surfaces are hermetically tested |

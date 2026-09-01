@@ -280,3 +280,52 @@ fn recv_rejects_truncated_and_oversized_framing() -> TestResult {
     );
     Ok(())
 }
+
+/// A hand-built wire with interleaved DUMMY_COVER frames decrypts
+/// exactly like a cover-free stream: the receiver destroys cover
+/// silently and reassembles the real payload (ADR-005 burst-level
+/// cover contract).
+#[test]
+fn pipe_roundtrip_with_interleaved_cover() -> TestResult {
+    use umbra_protocol::session::Session;
+
+    let alice = umbra_crypto::keys::IdentityBundle::generate();
+    let bob = umbra_crypto::keys::IdentityBundle::generate();
+    let peer = peer_of(&bob)?;
+
+    let peer_ik = umbra_crypto::keys::X25519PublicKey::from_bytes(&peer.ik_arr);
+    let peer_spk = umbra_crypto::keys::X25519PublicKey::from_bytes(&peer.spk_arr);
+    let peer_kem = umbra_crypto::keys::MlKemPeerKey::from_bytes(&peer.kem_arr).map_err(Box::new)?;
+    let (hs, blob) = Session::with_identity(alice)
+        .begin_handshake(
+            &peer_ik,
+            &peer_spk,
+            &peer.spk_signature,
+            &peer.dsa,
+            &peer_kem,
+        )
+        .map_err(Box::new)?;
+    let mut session = hs.complete_handshake().map_err(Box::new)?;
+
+    // Build the pipe framing by hand: blob + [data | cover]* + terminate.
+    let mut wire = Vec::new();
+    wire.extend_from_slice(&u32::try_from(blob.len())?.to_be_bytes());
+    wire.extend_from_slice(&blob);
+    let plaintext = test_bytes(1_500);
+    for chunk in plaintext.chunks(900) {
+        wire.extend_from_slice(session.send_data(chunk)?.as_bytes());
+        wire.extend_from_slice(session.cover_packet()?.as_bytes());
+        wire.extend_from_slice(session.cover_packet()?.as_bytes());
+    }
+    wire.extend_from_slice(session.send_termination()?.as_bytes());
+
+    let mut recovered = Vec::new();
+    recv_stream(
+        bob,
+        &mut Cursor::new(wire),
+        &mut recovered,
+        OutputMode::Binary,
+    )?;
+    assert_eq!(recovered, plaintext);
+    Ok(())
+}

@@ -140,6 +140,7 @@ pub fn send_stream<R: Read, W: Write>(
     }
 
     let mut chunk = [0u8; MAX_CHUNK];
+    let mut cover_sent: u64 = 0;
     loop {
         let n = match input.read(&mut chunk) {
             Ok(0) => break,
@@ -150,6 +151,31 @@ pub fn send_stream<R: Read, W: Write>(
         let (filled, _rest) = chunk.split_at(n);
         let sealed = session.send_data(filled)?;
         emit_frame(output, sealed.as_bytes(), "packet", mode)?;
+        // Burst-level cover (ADR-005, TODO A.3): hide the real frame
+        // count/size within the session. Same injection policy as the
+        // Tor path (`umbra_net::messenger::send_text_stream`); the
+        // receiver destroys cover frames silently.
+        while cover_sent < umbra_net::messenger::MAX_COVER_PER_SEND {
+            let uniform = umbra_protocol::cover::PoissonScheduler::sample_uniform()
+                .map_err(CliError::from)?;
+            let dummies = if uniform < umbra_net::messenger::COVER_PROBABILITY / 2.0 {
+                2
+            } else if uniform < umbra_net::messenger::COVER_PROBABILITY {
+                1
+            } else {
+                0
+            };
+            if dummies == 0 {
+                break;
+            }
+            for _ in 0..dummies {
+                let cover = session.cover_packet()?;
+                emit_frame(output, cover.as_bytes(), "cover", mode)?;
+                cover_sent = cover_sent
+                    .checked_add(1)
+                    .ok_or_else(|| CliError::Pipe("cover counter overflow".into()))?;
+            }
+        }
     }
 
     let terminate = session.send_termination()?;
@@ -214,9 +240,11 @@ pub fn recv_stream<R: Read, W: Write>(
             ));
         }
         let sealed = SealedPacket::from_bytes(&frame)?;
-        let payload = session.receive(&sealed)?.ok_or(CliError::Keystore(
-            "unexpected partial SMP chunk in pipe mode".into(),
-        ))?;
+        // `None` = DUMMY_COVER (or a partial SMP chunk, which the pipe
+        // never produces): destroyed silently per ADR-005.
+        let Some(payload) = session.receive(&sealed)? else {
+            continue;
+        };
         match payload {
             InboundPayload::Text(plaintext) => {
                 // Same heap buffer, now zeroized on drop; the base64url

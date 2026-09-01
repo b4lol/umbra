@@ -54,7 +54,7 @@ already shipped; see below).
 
 ## Item 2 — Cover-traffic pump not wired into interactive flows
 
-**Status: real and open.** `CoverPump` (`umbra-net::cover`) and
+**Status: LANDED (burst-level).** `CoverPump` (`umbra-net::cover`) and
 `Session::cover_packet()` exist and are tested; **no flow calls them**.
 
 **Fact-check corrections:**

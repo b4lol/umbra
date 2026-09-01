@@ -14,8 +14,9 @@
 //!    `send_text_stream`); NDJSON `sent` event on stdout.
 //!
 //! Honest scope: stdin is bounded (mlockall'd RAM — an unbounded read
-//! would be a lock-exhaustion DoS against ourselves); no cover traffic
-//! on this path; the responder is unauthenticated until SAS is verified
+//! would be a lock-exhaustion DoS against ourselves); burst-level cover
+//! rides the same session (messenger `send_text_stream`), idle-gap
+//! cover is v2; the responder is unauthenticated until SAS is verified
 //! out of band. The `sent` event means "accepted by Arti's stream", NOT
 //! delivered-and-acknowledged (no end-to-end ACK exists); retrying a
 //! failed send therefore DUPLICATES the message at the responder — the

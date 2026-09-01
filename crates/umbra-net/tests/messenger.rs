@@ -545,3 +545,50 @@ async fn receive_reassembly_bounded() -> Result<(), Box<dyn std::error::Error + 
     let _ = sender.await;
     Ok(())
 }
+
+/// Real and cover frames are wire-indistinguishable (ADR-005): both are
+/// PACKET_LEN sealed packets, both parse through the session layer; the
+/// receiver yields Text for data and silently destroys cover.
+#[tokio::test]
+async fn cover_frames_are_indistinguishable() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+{
+    use umbra_protocol::session::{InboundPayload, Session};
+    use umbra_protocol::types::PACKET_LEN;
+
+    let alice_bundle = IdentityBundle::generate();
+    let bob_bundle = IdentityBundle::generate();
+    let peer_ik =
+        umbra_crypto::keys::X25519PublicKey::from_bytes(&bob_bundle.x25519.public_bytes());
+    let peer_spk = umbra_crypto::keys::X25519PublicKey::from_bytes(&bob_bundle.spk.public_bytes());
+    let peer_kem = umbra_crypto::keys::MlKemPeerKey::from_bytes(&bob_bundle.kem.public_bytes())
+        .map_err(Box::new)?;
+    let (hs, blob) = Session::with_identity(alice_bundle)
+        .begin_handshake(
+            &peer_ik,
+            &peer_spk,
+            &bob_bundle.spk_signature,
+            &bob_bundle.dsa.public_bytes(),
+            &peer_kem,
+        )
+        .map_err(Box::new)?;
+    let mut alice = hs.complete_handshake().map_err(Box::new)?;
+    let mut bob = Session::with_identity(bob_bundle)
+        .accept_handshake(&blob)
+        .map_err(Box::new)?
+        .complete_handshake_incoming()
+        .map_err(Box::new)?;
+
+    let real = alice.send_data(b"real payload")?;
+    let cover = alice.cover_packet()?;
+    // Identical wire shape.
+    assert_eq!(real.as_bytes().len(), PACKET_LEN);
+    assert_eq!(cover.as_bytes().len(), PACKET_LEN);
+
+    // The receiver sees Text for data, and cover is destroyed silently.
+    assert_eq!(
+        bob.receive(&real)?,
+        Some(InboundPayload::Text(b"real payload".to_vec()))
+    );
+    assert_eq!(bob.receive(&cover)?, None);
+    Ok(())
+}

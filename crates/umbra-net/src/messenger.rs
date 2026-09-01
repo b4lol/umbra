@@ -17,9 +17,11 @@
 //! holds the peer's public keys from the pairing payload.
 //!
 //! Honest scope:
-//! - **No cover traffic**: the messenger sends exactly one handshake +
-//!   one message + one termination per stream — the ADR-005 Poisson pump
-//!   (`crate::cover`) must be run alongside for GPA resistance (TODO).
+//! - **Burst-level cover traffic** (ADR-005): `send_text_stream`
+//!   interleaves Poisson-driven `DUMMY_COVER` frames with real data
+//!   frames (bounded by [`MAX_COVER_PER_SEND`]); the receiver destroys
+//!   them silently. Idle-gap cover (dummies BETWEEN bursts/sessions)
+//!   is v2 — it needs a cancel-safe frame reader.
 //! - **Unauthenticated initiator**: the responder accepts any PQXDH
 //!   handshake; peer authentication is the SAS/SMP pairing layer's job
 //!   (the SMP driver below folds the pairing-level `bound_secret` with
@@ -43,6 +45,32 @@ const READ_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30
 /// could pin unbounded RAM under `mlockall` across concurrent streams
 /// (lock-exhaustion DoS). Fail closed beyond the cap.
 pub const MAX_TEXT_MESSAGE: usize = 64 * 1024;
+
+/// Probability that a burst-level cover frame follows any given data
+/// frame (Bernoulli draw from the Poisson scheduler's uniform source).
+/// Hides real message count and size WITHIN a send burst; idle-gap
+/// cover (between bursts) is v2 scope — see the module docs.
+pub const COVER_PROBABILITY: f64 = 0.5;
+
+/// Hard cap on cover frames per send burst (doctrine: bounded memory
+/// and bounded amplification, whatever the draw sequence).
+pub const MAX_COVER_PER_SEND: u64 = 64;
+
+/// Draws the number of cover frames that follow one data frame (0, 1
+/// or 2 — a stochastically bounded amplification, hard-capped by
+/// [`MAX_COVER_PER_SEND`] across the burst).
+fn draw_cover_count() -> Result<u64, TransportError> {
+    let uniform = umbra_protocol::cover::PoissonScheduler::sample_uniform()
+        .map_err(TransportError::Protocol)?;
+    let count = if uniform < COVER_PROBABILITY / 2.0 {
+        2
+    } else if uniform < COVER_PROBABILITY {
+        1
+    } else {
+        0
+    };
+    Ok(count)
+}
 
 /// The peer's PQXDH public keys, taken from a verified pairing payload.
 pub struct PeerPqxdhKeys {
@@ -134,6 +162,7 @@ where
     let mut session = handshake_session.complete_handshake()?;
 
     let mut frames: u64 = 0;
+    let mut cover_sent: u64 = 0;
     for chunk in plaintext.chunks(CHUNK) {
         let packet = session.send_data(chunk)?;
         stream
@@ -143,6 +172,24 @@ where
         frames = frames
             .checked_add(1)
             .ok_or(TransportError::Unsupported("frame counter overflow"))?;
+        // Burst-level cover: hide the real frame count and size within
+        // the session (ADR-005). Cover frames ride the packet key, so
+        // the ratchet chains and the receiver's skipped-key store are
+        // unaffected; the responder destroys them silently.
+        while cover_sent < MAX_COVER_PER_SEND {
+            let dummies = draw_cover_count()?;
+            if dummies == 0 {
+                break;
+            }
+            let cover = session.cover_packet()?;
+            stream
+                .write_all(cover.as_bytes())
+                .await
+                .map_err(TransportError::Io)?;
+            cover_sent = cover_sent
+                .checked_add(1)
+                .ok_or(TransportError::Unsupported("cover counter overflow"))?;
+        }
     }
     let termination = session.send_termination()?;
     stream
