@@ -11,6 +11,9 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+# Best-effort register scrub at sensitive-call boundaries (ADR-025
+# revision note); umbra-hardware is a leaf crate — no cycle.
+umbra-hardware = { path = "../umbra-hardware" }
 # Post-quantum (ADR-026: pure-Rust RustCrypto only)
 ml-kem.workspace = true
 ml-dsa.workspace = true

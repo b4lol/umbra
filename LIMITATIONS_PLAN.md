@@ -11,7 +11,7 @@ already shipped; see below).
 
 ## Item 1 — CPU register zeroing (upstream flag removed)
 
-**Status: BLOCKED upstream (TODO A.4, ADR-025 revision note).**
+**Status: LANDED (best-effort mitigation).**
 
 **Fact-check corrections to the original proposal:**
 - Safe Rust **cannot** scrub the register file: there is no mechanism to

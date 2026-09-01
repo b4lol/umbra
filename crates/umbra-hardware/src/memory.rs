@@ -248,6 +248,9 @@ impl<T> Drop for GuardedBuffer<T> {
             munlock(self.base.add(self.data_offset).cast(), self.data_len);
             Self::unmap(self.base, self.total);
         }
+        // Best-effort register scrub (ADR-025 revision note): derived key
+        // material may transit caller-saved registers before the wipe.
+        crate::hardening::scrub_volatile_registers();
     }
 }
 

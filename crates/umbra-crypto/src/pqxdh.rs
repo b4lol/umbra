@@ -95,6 +95,9 @@ pub fn initiator_start(
     kdf::write_at(&mut ikm, 96, &kem_ss)?;
 
     let root = kdf::derive_root_key(&ikm)?;
+    // Best-effort register scrub (ADR-025 revision note): DH scalars and
+    // the KEM shared secret transit caller-saved registers above.
+    umbra_hardware::hardening::scrub_volatile_registers();
     Ok((
         InitialHandshake {
             ik_a: ik_a.public_bytes(),
@@ -135,5 +138,10 @@ pub fn responder_respond(
     kdf::write_at(&mut ikm, 64, &dh3)?;
     kdf::write_at(&mut ikm, 96, &kem_ss)?;
 
-    kdf::derive_root_key(&ikm)
+    let root = kdf::derive_root_key(&ikm)?;
+    // Best-effort register scrub (ADR-025 revision note): the KEM shared
+    // secret (decapsulate above) and DH scalars transit caller-saved
+    // registers.
+    umbra_hardware::hardening::scrub_volatile_registers();
+    Ok(root)
 }

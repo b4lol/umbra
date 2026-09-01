@@ -253,6 +253,10 @@ impl DoubleRatchet {
             .iter()
             .position(|entry| bool::from(entry.dh.ct_eq(dh)) && entry.n == n)?;
         let entry = self.skipped.remove(index);
+        // Best-effort register scrub (ADR-025 revision note): the store
+        // index arithmetic and comparison intermediates transit
+        // caller-saved registers.
+        umbra_hardware::hardening::scrub_volatile_registers();
         Some(entry.mk)
     }
 

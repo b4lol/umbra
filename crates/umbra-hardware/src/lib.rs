@@ -16,8 +16,12 @@
 //!
 //! - [`memory`]: guard-page-protected, RAM-locked key storage.
 //! - [`process`]: `mlockall` + core-dump suppression.
+//! - [`hardening`]: best-effort CPU register scrubbing (ADR-025
+//!   revision note — the upstream `zero-call-used-regs` flag was
+//!   removed from rustc).
 //! - [`token`]: external FIDO2/YubiKey driver surface.
 
+pub mod hardening;
 pub mod memory;
 pub mod process;
 pub mod token;
