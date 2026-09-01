@@ -38,6 +38,12 @@ use crate::error::TransportError;
 /// longer than this between bytes.
 const READ_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
+/// Upper bound for a reassembled inbound text message. Mirrors the
+/// sender's 64 KiB Tor-send ceiling: without it, an anonymous client
+/// could pin unbounded RAM under `mlockall` across concurrent streams
+/// (lock-exhaustion DoS). Fail closed beyond the cap.
+pub const MAX_TEXT_MESSAGE: usize = 64 * 1024;
+
 /// The peer's PQXDH public keys, taken from a verified pairing payload.
 pub struct PeerPqxdhKeys {
     /// Peer X25519 identity public key.
@@ -90,8 +96,33 @@ pub async fn send_message<S>(
 where
     S: tokio::io::AsyncWrite + Unpin + Send,
 {
+    // Single-message special case of [`send_text_stream`].
+    send_text_stream(stream, peer, plaintext)
+        .await
+        .map(|_frames| ())
+}
+
+/// Sends a plaintext of ARBITRARY length over `stream` on ONE PQXDH
+/// session: handshake blob, the plaintext split into max-size ratchet
+/// messages, then the authenticated termination. Returns the number of
+/// data frames written.
+///
+/// # Errors
+///
+/// Returns [`TransportError`] for I/O and session failures.
+pub async fn send_text_stream<S>(
+    stream: &mut S,
+    peer: &PeerPqxdhKeys,
+    plaintext: &[u8],
+) -> Result<u64, TransportError>
+where
+    S: tokio::io::AsyncWrite + Unpin + Send,
+{
     use tokio::io::AsyncWriteExt;
 
+    // MAX_PLAINTEXT - 1: the session layer spends one payload byte on
+    // the text/SMP multiplexer tag ("user-text budget per packet").
+    const CHUNK: usize = umbra_crypto::ratchet::MAX_PLAINTEXT - 1;
     let (handshake_session, blob) = Session::new().begin_handshake(
         &peer.ik,
         &peer.spk,
@@ -101,18 +132,25 @@ where
     )?;
     stream.write_all(&blob).await.map_err(TransportError::Io)?;
     let mut session = handshake_session.complete_handshake()?;
-    let packet = session.send_data(plaintext)?;
-    stream
-        .write_all(packet.as_bytes())
-        .await
-        .map_err(TransportError::Io)?;
+
+    let mut frames: u64 = 0;
+    for chunk in plaintext.chunks(CHUNK) {
+        let packet = session.send_data(chunk)?;
+        stream
+            .write_all(packet.as_bytes())
+            .await
+            .map_err(TransportError::Io)?;
+        frames = frames
+            .checked_add(1)
+            .ok_or(TransportError::Unsupported("frame counter overflow"))?;
+    }
     let termination = session.send_termination()?;
     stream
         .write_all(termination.as_bytes())
         .await
         .map_err(TransportError::Io)?;
     stream.flush().await.map_err(TransportError::Io)?;
-    Ok(())
+    Ok(frames)
 }
 
 /// Runs the responder side over `stream`: reconstructs the handshake,
@@ -176,9 +214,21 @@ where
         match session.receive(&sealed)? {
             Some(InboundPayload::Terminate) => break,
             Some(InboundPayload::Text(payload)) => {
-                // First text wins (MVP sends exactly one).
-                if text.is_none() {
-                    text = Some(payload);
+                // Concatenate: `send_text_stream` splits long messages
+                // into ordered ratchet messages on the same session.
+                // BOUNDED: an anonymous client must not pin unbounded RAM
+                // under mlockall (lock-exhaustion DoS).
+                let over_cap = text.as_ref().is_some_and(|collected| {
+                    collected.len().saturating_add(payload.len()) > MAX_TEXT_MESSAGE
+                });
+                if over_cap {
+                    return Err(TransportError::Unsupported(
+                        "inbound message exceeds the 64 KiB reassembly ceiling",
+                    ));
+                }
+                match text.as_mut() {
+                    Some(collected) => collected.extend_from_slice(&payload),
+                    None => text = Some(payload),
                 }
             }
             Some(InboundPayload::Smp(_)) => {

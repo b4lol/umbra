@@ -95,6 +95,7 @@ pub fn parse_payload(encoded: &str) -> Result<PeerIdentity, CliError> {
         spk_signature,
         kem_arr,
         dsa,
+        onion: None,
     })
 }
 
@@ -113,6 +114,9 @@ pub struct PeerIdentity {
     pub kem_arr: [u8; 1184],
     /// ML-DSA verification key.
     pub dsa: Vec<u8>,
+    /// The peer's `.onion` service address, when the operator recorded
+    /// one (`umbra pair --onion`); absent for payload-only records.
+    pub onion: Option<String>,
 }
 
 /// Derives the shared 6-digit SAS code from BOTH pairing payloads
@@ -139,7 +143,3 @@ pub fn pairing_sas(own_payload: &str, peer_payload: &str) -> SasCode {
     let digest = umbra_crypto::kdf::derive_key("Umbra pairing SAS v1", &material);
     SasCode::derive(&digest)
 }
-
-/// Unused-import guard: `CliError` re-export used by the pairing API.
-#[allow(dead_code)]
-fn cli_error_marker(_: &CliError) {}

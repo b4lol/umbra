@@ -41,8 +41,10 @@ pub mod output {
 pub struct Cli {
     /// Emit machine-readable NDJSON instead of key=value lines
     /// (ADR-022: parseable JSON streams for `jq`/`awk` pipelines).
-    /// Honored by `keygen`, `send` and `recv` (NDJSON events); `serve`
-    /// emits NDJSON unconditionally; other commands ignore the flag.
+    /// Honored by `keygen`, `send` (pipe path) and `recv` (NDJSON
+    /// events). `serve` and the `send --onion` path emit NDJSON
+    /// UNCONDITIONALLY (the flag is ignored there); other commands
+    /// ignore the flag.
     #[arg(long, global = true)]
     pub json: bool,
 
@@ -66,12 +68,20 @@ pub struct Cli {
 pub enum Command {
     /// Generates a fresh identity bundle and prints its public parts.
     Keygen,
-    /// Encrypts stdin for a named peer; sealed frames to stdout.
+    /// Encrypts stdin for a named peer. WITHOUT `--onion`: sealed frames
+    /// to stdout (pipe transport). WITH `--onion` — explicit or stored in
+    /// the peer record, which FORCES the Tor transport (requires the
+    /// `tor` build feature) — delivered over embedded Arti to the peer's
+    /// onion service; NDJSON events on stdout.
     Send {
         /// Peer record name ([A-Za-z0-9_-]+), resolved from the peers/
         /// directory next to the keystore.
         #[arg(long)]
         peer: String,
+        /// Peer's `.onion` address; overrides the value stored with the
+        /// peer record. Transport switches from pipe to embedded Tor.
+        #[arg(long)]
+        onion: Option<String>,
     },
     /// Decrypts a sealed pipe stream from stdin; plaintext to stdout.
     ///
@@ -119,6 +129,10 @@ pub enum Command {
         /// Peer base64url pairing payload.
         #[arg(long)]
         peer_payload: String,
+        /// Peer's `.onion` service address (published by `umbra serve`);
+        /// stored with the record for `send --peer`.
+        #[arg(long)]
+        onion: Option<String>,
     },
 }
 
@@ -209,19 +223,52 @@ pub fn run() -> Result<(), CliError> {
     match cli.command {
         Command::Keygen => keygen(cli.json),
         Command::Init => init_with(&cli),
-        Command::Send { ref peer } => {
-            harden_memory()?;
-            let bundle = load_identity(&cli)?;
+        Command::Send {
+            ref peer,
+            ref onion,
+        } => {
+            // Peer records are public material: read them before the
+            // flow split; memory locks and the sandbox are applied per
+            // branch (the Tor path does NOT load the keystore identity —
+            // its initiator is per-session ephemeral by design).
             let peer_record = load_peer_record(&cli, peer)?;
-            harden_sandbox()?;
-            let mode = pipeline_mode(cli.json);
-            crate::pipeline::send_stream(
-                bundle,
-                &peer_record,
-                &mut std::io::stdin().lock(),
-                &mut std::io::stdout().lock(),
-                mode,
-            )
+            match onion.as_deref().or(peer_record.onion.as_deref()) {
+                #[cfg(feature = "tor")]
+                Some(address) => {
+                    let keystore = cli
+                        .keystore
+                        .as_ref()
+                        .ok_or_else(|| CliError::Keystore("missing --keystore PATH".into()))?
+                        .clone();
+                    crate::tor_send::run(
+                        &keystore,
+                        &peer_record,
+                        address,
+                        &mut std::io::stdin().lock(),
+                    )
+                }
+                #[cfg(not(feature = "tor"))]
+                Some(_address) => Err(CliError::Keystore(
+                    "this binary was built without the tor feature; rebuild with \
+                     --features tor"
+                        .into(),
+                )),
+                None => {
+                    // Pipe path: memory locks BEFORE the identity load
+                    // (ADR-025), sandbox after the reads.
+                    harden_memory()?;
+                    let bundle = load_identity(&cli)?;
+                    harden_sandbox()?;
+                    let mode = pipeline_mode(cli.json);
+                    crate::pipeline::send_stream(
+                        bundle,
+                        &peer_record,
+                        &mut std::io::stdin().lock(),
+                        &mut std::io::stdout().lock(),
+                        mode,
+                    )
+                }
+            }
         }
         Command::Recv => {
             harden_memory()?;
@@ -282,7 +329,8 @@ pub fn run() -> Result<(), CliError> {
         Command::Pair {
             ref peer_name,
             ref peer_payload,
-        } => pair(&cli, peer_name, peer_payload),
+            ref onion,
+        } => pair(&cli, peer_name, peer_payload, onion.as_deref()),
     }
 }
 
@@ -352,7 +400,12 @@ fn init_with(cli: &Cli) -> Result<(), CliError> {
 }
 
 /// Implements `umbra pair`: store peer record + print the shared SAS code.
-fn pair(cli: &Cli, peer_name: &str, peer_payload: &str) -> Result<(), CliError> {
+fn pair(
+    cli: &Cli,
+    peer_name: &str,
+    peer_payload: &str,
+    onion: Option<&str>,
+) -> Result<(), CliError> {
     // The peer record lives next to the keystore.
     let keystore_dir = cli
         .keystore
@@ -361,7 +414,7 @@ fn pair(cli: &Cli, peer_name: &str, peer_payload: &str) -> Result<(), CliError> 
         .map(Path::to_path_buf)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let peers_dir = keystore_dir.join("peers");
-    crate::peers::save_peer(&peers_dir, peer_name, peer_payload)?;
+    crate::peers::save_peer(&peers_dir, peer_name, peer_payload, onion)?;
 
     // SAS: own payload (from the keystore identity) vs the peer payload.
     let bundle = load_identity(cli)?;

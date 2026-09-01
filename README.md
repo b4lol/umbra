@@ -48,7 +48,7 @@
 | View-once media engine, 24 h crypto-shredding | Deferred (Section B; media *metadata sterilizer* IS implemented) |
 | `hardened_malloc` integration | Deferred (Section B) |
 | Cover traffic in interactive flows | Pump exists (library); not wired into `send`/`recv` flows yet |
-| Persistent onion identity in production flows | Wired via `umbra serve` (inbound NDJSON daemon; address stability not live-verified); no OUTBOUND Tor flow yet |
+| Persistent onion identity in production flows | Wired: `umbra serve` (inbound daemon) + `umbra send --onion` (outbound, 64 KiB ceiling); address stability not live-verified. Tor transport state (guard descriptors, consensus cache) persists under the Tor tree — messages stay RAM-only, transport state does not |
 | CPU register zeroing (`zero-call-used-regs`) | **Blocked upstream** — flag removed from rustc nightly 1.100.0 (TODO A.4, ADR-025 revision note) |
 | Live-network field testing of the Tor paths | Not performed; config surfaces are hermetically tested |
 | SMP in the product surface | Library-only (drivers + tests); no CLI command runs SMP yet — the pipe layer runs none |
@@ -111,8 +111,10 @@ cargo run -p umbra-cli -- pair --keystore ~/.umbra/umbra.enc --passphrase-file ~
     --peer-name alice --peer-payload <their-base64url-payload>
 cargo run -p umbra-cli -- fingerprint --peer alice   # compare out of band
 
-# pipe transport (transport-agnostic core); inbound Tor daemon
-# (built with --features tor): umbra serve --nickname myname --keystore ... --passphrase-file ...
+# Tor transport (built with --features tor):
+cargo run -p umbra-cli --features tor -- serve --nickname myname --keystore ~/.umbra/umbra.enc --passphrase-file ~/.umbra-pass
+# ... then the peer stores the published address: pair --onion <addr>
+echo "hello" | cargo run -p umbra-cli --features tor -- send --peer alice --keystore ~/.umbra/umbra.enc --passphrase-file ~/.umbra-pass
 echo "hello" | cargo run -p umbra-cli -- send --peer alice --keystore ~/.umbra/umbra.enc --passphrase-file ~/.umbra-pass > wire.bin
 cargo run -p umbra-cli -- recv --keystore ~/.umbra/umbra.enc --passphrase-file ~/.umbra-pass < wire.bin
 ```

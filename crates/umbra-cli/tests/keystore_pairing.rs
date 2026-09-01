@@ -131,12 +131,22 @@ fn peer_record_roundtrip() -> Result<(), Box<dyn std::error::Error + Send + Sync
     let bundle = umbra_crypto::keys::IdentityBundle::generate();
     let payload = umbra_cli::pairing::payload_for(&bundle)?;
 
-    peers::save_peer(&dir, "colleague", &payload)?;
+    peers::save_peer(&dir, "colleague", &payload, None)?;
     let peer = peers::load_peer(&dir, "colleague")?;
     assert_eq!(peer.ik_arr, bundle.x25519.public_bytes());
+    assert!(peer.onion.is_none());
+
+    // Onion address roundtrip (validated BEFORE the record is written).
+    let addr = "5vzwalpq2cyjrhm5lvzhcjn6mbnwbv42xakxiqhunwpgz6hr32f7gxad";
+    peers::save_peer(&dir, "colleague", &payload, Some(addr))?;
+    let peer = peers::load_peer(&dir, "colleague")?;
+    assert_eq!(peer.onion.as_deref(), Some(addr));
+
+    // Invalid onion addresses are rejected before touching the record.
+    assert!(peers::save_peer(&dir, "colleague", &payload, Some("not-onion")).is_err());
 
     // Invalid names are rejected before touching the filesystem.
-    assert!(peers::save_peer(&dir, "../evil", &payload).is_err());
+    assert!(peers::save_peer(&dir, "../evil", &payload, None).is_err());
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }

@@ -450,3 +450,98 @@ fn inbound_service_config_enables_pow() -> Result<(), Box<dyn std::error::Error>
     let _ = config;
     Ok(())
 }
+
+/// `send_text_stream` splits a multi-chunk plaintext across ONE PQXDH
+/// session; a manual receiver loop reassembles it exactly.
+#[tokio::test]
+async fn send_text_stream_multi_chunk_roundtrip()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use tokio::io::AsyncReadExt;
+
+    use umbra_net::messenger::{PeerPqxdhKeys, send_text_stream};
+    use umbra_protocol::packet::SealedPacket;
+    use umbra_protocol::session::{InboundPayload, Session};
+    use umbra_protocol::types::PACKET_LEN;
+
+    let bob_bundle = IdentityBundle::generate();
+    let peer_keys = PeerPqxdhKeys::from_parts(
+        &bob_bundle.x25519.public_bytes(),
+        &bob_bundle.spk.public_bytes(),
+        bob_bundle.spk_signature.clone(),
+        bob_bundle.dsa.public_bytes(),
+        &bob_bundle.kem.public_bytes(),
+    )
+    .map_err(Box::new)?;
+
+    // 2500 bytes -> ceil(2500/925) = 3 data frames + 1 terminate.
+    let plaintext: Vec<u8> = (0..2_500u32)
+        .map(|i| u8::try_from(i.wrapping_mul(7)).unwrap_or(0))
+        .collect();
+
+    let (mut a_side, mut b_side) = tokio::io::duplex(4096);
+    let sender =
+        tokio::spawn(async move { send_text_stream(&mut a_side, &peer_keys, &plaintext).await });
+
+    // Manual receiver: complete the handshake, collect Text payloads.
+    let mut blob = vec![0u8; umbra_crypto::pqxdh::HANDSHAKE_BLOB_LEN];
+    b_side.read_exact(&mut blob).await?;
+    let mut session = Session::with_identity(bob_bundle)
+        .accept_handshake(&blob)
+        .map_err(Box::new)?
+        .complete_handshake_incoming()
+        .map_err(Box::new)?;
+
+    let mut received: Vec<u8> = Vec::new();
+    let mut terminated = false;
+    while !terminated {
+        let mut frame = [0u8; PACKET_LEN];
+        b_side.read_exact(&mut frame).await?;
+        let sealed = SealedPacket::from_bytes(&frame)?;
+        match session.receive(&sealed)? {
+            Some(InboundPayload::Text(part)) => received.extend_from_slice(&part),
+            Some(InboundPayload::Terminate) => terminated = true,
+            _ => {}
+        }
+    }
+    let frames = sender.await??;
+    assert_eq!(frames, 3);
+    assert_eq!(received.len(), 2_500);
+    let expected: Vec<u8> = (0..2_500u32)
+        .map(|i| u8::try_from(i.wrapping_mul(7)).unwrap_or(0))
+        .collect();
+    assert_eq!(received, expected);
+    Ok(())
+}
+
+/// The inbound reassembly ceiling (mlockall lock-exhaustion DoS bound):
+/// a sender exceeding `MAX_TEXT_MESSAGE` fails the responder closed.
+#[tokio::test]
+async fn receive_reassembly_bounded() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use umbra_net::messenger::{PeerPqxdhKeys, receive_message, send_text_stream};
+
+    let bob_bundle = IdentityBundle::generate();
+    let peer_keys = PeerPqxdhKeys::from_parts(
+        &bob_bundle.x25519.public_bytes(),
+        &bob_bundle.spk.public_bytes(),
+        bob_bundle.spk_signature.clone(),
+        bob_bundle.dsa.public_bytes(),
+        &bob_bundle.kem.public_bytes(),
+    )
+    .map_err(Box::new)?;
+
+    // 64 KiB + 1 byte: above the reassembly ceiling.
+    let oversized = vec![7u8; umbra_net::messenger::MAX_TEXT_MESSAGE + 1];
+    let (mut a_side, mut b_side) = tokio::io::duplex(4096);
+    let sender =
+        tokio::spawn(async move { send_text_stream(&mut a_side, &peer_keys, &oversized).await });
+
+    // `peer_keys` holds only PUBLIC bytes; `bob_bundle` still owns the
+    // secrets, so it can be consumed by the receiver directly.
+    let result = receive_message(bob_bundle, &mut b_side).await;
+    assert!(
+        result.is_err(),
+        "an oversized message must fail the responder"
+    );
+    let _ = sender.await;
+    Ok(())
+}

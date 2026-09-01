@@ -17,9 +17,9 @@
 //! 5. one session per accepted stream: `receive_message` (PQXDH + Double
 //!    Ratchet), text payloads emitted as NDJSON on stdout.
 //!
-//! Honest scope: no outbound Tor flow yet (`send` stays on the pipe
-//! transport); no cover traffic on this path (GPA resistance TODO); SMP
-//! is not run on inbound streams (SAS verification is out of band).
+//! Honest scope: the outbound counterpart is `send --onion`
+//! (`tor_send`); no cover traffic on this path (GPA resistance TODO);
+//! SMP is not run on inbound streams (SAS verification is out of band).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -62,9 +62,10 @@ fn emit_event(event: &str, data: Option<&[u8]>) -> Result<(), CliError> {
     line.push_str("}\n");
     use std::io::Write as _;
     let mut stdout = std::io::stdout().lock();
-    let _ = stdout.write_all(line.as_bytes());
-    let _ = stdout.flush();
-    Ok(())
+    stdout
+        .write_all(line.as_bytes())
+        .and_then(|()| stdout.flush())
+        .map_err(CliError::Io)
 }
 
 /// Runs the `serve` flow. Never returns under normal operation: it loops

@@ -14,4 +14,6 @@ pub mod pipeline;
 pub mod sandbox;
 #[cfg(feature = "tor")]
 pub mod serve;
+#[cfg(feature = "tor")]
+pub mod tor_send;
 pub mod tui;

@@ -1,8 +1,9 @@
 //! Paired-peer record store (TODO A.3): one file per peer under a
 //! `peers/` directory next to the keystore, containing the peer's
-//! base64url pairing payload. The payload is internally signed (its
-//! embedded SPK signature is verified at parse); binding it to the
-//! *expected* peer happens out of band via the SAS code.
+//! base64url pairing payload and an optional `.onion` service address.
+//! The payload is internally signed (its embedded SPK signature is
+//! verified at parse); binding it to the *expected* peer happens out of
+//! band via the SAS code.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,31 +25,85 @@ fn record_path(peers_dir: &Path, name: &str) -> Result<PathBuf, CliError> {
     Ok(peers_dir.join(format!("{name}.peer")))
 }
 
-/// Saves (or overwrites) a peer's pairing payload under `name`. The
-/// payload is parsed (SPK signature verified) BEFORE it touches disk, so
-/// a typo fails here instead of at first use.
+/// Validates an `.onion` address or fails with a transport-flavored
+/// error (shared by the record store and the outbound flow).
 ///
 /// # Errors
 ///
-/// Returns [`CliError`] on name validation, invalid payload, or I/O
-/// failure.
-pub fn save_peer(peers_dir: &Path, name: &str, payload_b64: &str) -> Result<(), CliError> {
+/// Returns [`CliError::Io`] for an invalid address.
+pub fn validate_onion(address: &str) -> Result<(), CliError> {
+    // The unvalidated address is NOT echoed into the error: hostile
+    // input must not reach stderr verbatim.
+    umbra_net::addr::OnionAddr::parse(address)
+        .map(|_addr| ())
+        .map_err(|_e| {
+            CliError::Io(std::io::Error::other(
+                "invalid onion address (56-char base32 v3 expected)",
+            ))
+        })
+}
+
+/// Saves (or overwrites) a peer's pairing payload under `name`, with an
+/// optional `.onion` service address (the value `umbra serve` publishes).
+/// The payload is parsed (SPK signature verified) and the address is
+/// validated BEFORE anything touches disk, so a typo fails here instead
+/// of at first use.
+///
+/// Record file format: line 1 = base64url payload, optional line 2 =
+/// `onion <address>`.
+///
+/// # Errors
+///
+/// Returns [`CliError`] on name validation, invalid payload or address,
+/// or I/O failure.
+pub fn save_peer(
+    peers_dir: &Path,
+    name: &str,
+    payload_b64: &str,
+    onion: Option<&str>,
+) -> Result<(), CliError> {
+    parse_payload(payload_b64)?;
+    let mut contents = format!("{payload_b64}\n");
+    if let Some(address) = onion {
+        validate_onion(address)?;
+        contents.push_str(&format!("onion {address}\n"));
+    }
     let path = record_path(peers_dir, name)?;
     fs::create_dir_all(peers_dir)
         .map_err(|e| CliError::Keystore(format!("cannot create {}: {e}", peers_dir.display())))?;
-    fs::write(&path, format!("{payload_b64}\n"))
+    fs::write(&path, contents)
         .map_err(|e| CliError::Keystore(format!("cannot write {}: {e}", path.display())))
 }
 
-/// Loads a peer's pairing payload by name and parses it (verifying the
-/// embedded SPK signature).
+/// Loads a peer's record by name and parses it (verifying the embedded
+/// SPK signature and, when present, the `.onion` address). Unknown
+/// record lines are rejected instead of silently ignored.
 ///
 /// # Errors
 ///
-/// Returns [`CliError`] on missing file or invalid payload.
+/// Returns [`CliError`] on missing file, invalid payload, invalid
+/// address, or an unknown record line.
 pub fn load_peer(peers_dir: &Path, name: &str) -> Result<crate::pairing::PeerIdentity, CliError> {
     let path = record_path(peers_dir, name)?;
     let raw = fs::read_to_string(&path)
         .map_err(|e| CliError::Keystore(format!("cannot read {}: {e}", path.display())))?;
-    parse_payload(raw.trim())
+    let mut lines = raw.lines();
+    let payload_line = lines.next().unwrap_or_default().trim();
+    let mut identity = parse_payload(payload_line)?;
+    for address_line in lines {
+        let address_line = address_line.trim();
+        if address_line.is_empty() {
+            continue; // trailing newline
+        }
+        if let Some(address) = address_line.strip_prefix("onion ") {
+            let address = address.trim();
+            validate_onion(address)?;
+            identity.onion = Some(address.to_string());
+        } else {
+            return Err(CliError::Keystore(format!(
+                "unknown peer-record line: {address_line}"
+            )));
+        }
+    }
+    Ok(identity)
 }
