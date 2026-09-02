@@ -11,7 +11,7 @@ This document describes the post-quantum hybrid encryption mechanisms used by th
 | **Classical Key Exchange** | Curve25519 (X25519 ECDH) | `x25519-dalek` (RFC 7748) | 128-bit Classical |
 | **Post-Quantum KEM** | ML-KEM-768 (CRYSTALS-Kyber-768) | NIST FIPS 203 (`ml-kem` — RustCrypto, pure Rust) | Level 3 (Quantum, AES-192 equivalent) |
 | **Post-Quantum Signatures** | ML-DSA-65 (CRYSTALS-Dilithium-3) | NIST FIPS 204 (`ml-dsa` — RustCrypto, pure Rust) | Level 3 Quantum-Resilient |
-| **Fallback Hash-Based Signature** | SLH-DSA / SPHINCS+ | NIST FIPS 205 (`slh-dsa` — RustCrypto, pure Rust) | Stateless Hash-Based (Zero Risk of Mathematical Attacks) |
+| **Fallback Hash-Based Signature** | SLH-DSA / SPHINCS+ | NIST FIPS 205 (`slh-dsa` — RustCrypto, pure Rust) | Stateless Hash-Based (security reduces to the preimage/second-preimage security of the underlying hash functions — no known structured mathematical attack) |
 | **Symmetric AEAD Encryption** | ChaCha20-Poly1305 | `chacha20poly1305` (RFC 8439) | 256-bit Authenticated Encryption |
 | **Key Derivation (KDF)** | HKDF-SHA512 & BLAKE3 | `hkdf` / `blake3` | High-Entropy KDF |
 | **Password-Based KDF** | Argon2id ($t=4, m=2^{18}, p=4$) | `argon2` (RFC 9106) | Memory-Hard (ASIC/GPU Protected) |
@@ -37,9 +37,9 @@ graph LR
 ```
 
 1. **Hybrid Root Key Formula:**
-   $$SK = \text{HKDF-SHA512}(DH_1 \parallel DH_2 \parallel DH_3 \parallel SS_{\text{ML-KEM}} \parallel \text{ContextInfo})$$
-2. **Unbreakability Guarantee:**
-   Even if an adversary solves the X25519 elliptic curve with a future quantum computer, they cannot reach the session secret as long as the ML-KEM lattice problem remains unsolved.
+   $$SK = \text{HKDF-SHA512}(\text{ROOT\_SALT},\ DH_1 \parallel DH_2 \parallel DH_3 \parallel SS_{\text{ML-KEM}},\ \text{ROOT\_INFO})$$
+2. **Post-Quantum Security Property (conditional):**
+   IF an adversary solves the X25519 elliptic curve with a future quantum computer, reaching the session secret still requires breaking ML-KEM-768's lattice problem (AES-192-equivalent, per NIST FIPS 203 security category 3). This is a conditional reduction, not an unconditional guarantee — it holds as long as ML-KEM stands and the implementation matches the specification.
 
 ### 2.1 Double Ratchet Delivery Semantics
 
@@ -51,7 +51,7 @@ graph LR
 
 ## 3. Post-Quantum Asynchronous Group Communication (PQ-MLS TreeKEM)
 
-For multiple secure cells and diplomatic working groups, Umbra combines the IETF **Messaging Layer Security (MLS)** protocol with Post-Quantum TreeKEM:
+For multiple secure cells and diplomatic working groups, Umbra intends to combine the IETF **Messaging Layer Security (MLS)** protocol with Post-Quantum TreeKEM (v2+ scope per ADR-027; research/prototyping phase — see TODO.md Section B.2):
 
 - **Tree Structure (TreeKEM):** Group members are defined as leaf nodes in a binary key tree.
 - **Logarithmic Scaling ($O(\log N)$):** When a member is removed from or added to the group, only the tree path is updated instead of re-distributing keys to the entire group from scratch.
@@ -61,7 +61,7 @@ For multiple secure cells and diplomatic working groups, Umbra combines the IETF
 
 ## 4. Anonymous Device Attestation with Zero-Knowledge Proofs (Zk-Attestation)
 
-- When devices pair, the **Zk-SNARKs / Bulletproofs** mechanism is used to verify that the other party is a secure Umbra client.
+- Device pairing is designed to use **Zk-SNARKs / Bulletproofs** to verify that the other party is a secure Umbra client (v2+ scope per ADR-027; not implemented in v1.0).
 - Without revealing its fingerprint or serial number, the device mathematically presents the proof *"I have a valid hardware/software configuration"*.
 
 ---

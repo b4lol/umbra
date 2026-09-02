@@ -67,7 +67,7 @@ graph TD
 ## 2. Advanced and Goal-Oriented Security Modules
 
 1. **Zero-Click-Hardened, Doubly-Protected Subprocess (Out-of-Process Media Sanitizer):**
-   - Against Pegasus zero-click exploits, images are never opened in the main process; they are parsed in a **single-use subprocess limited to 2 MB of RAM**, confined with `Landlock` zero file permissions and `Seccomp`, to extract pure RGB pixels.
+   - Against Pegasus zero-click exploits, images are designed to be parsed OUT of the main process in a **single-use subprocess limited to 2 MB of RAM**, confined with `Landlock` zero file permissions and `Seccomp`, extracting pure RGB pixels (v1.0 ships the in-process deterministic sterilizer per ADR-017; the subprocess variant is v2+).
 2. **Encrypted-in-RAM Memory Rings & Cache Eviction:**
    - Messages and keys never remain in plaintext even in RAM; they are instantly encrypted with AES-NI, processed only in the CPU L1/L2 cache, and immediately evicted from the cache with `clflushopt`.
 3. **Quad-Source Hybrid Entropy Generator (CSPRNG):**
@@ -79,6 +79,6 @@ graph TD
 6. **Physical Security and Anti-Surveillance:**
    - Shoulder surfing is blocked via **Scratch-to-Reveal** dynamic masking.
    - Under coercion, **Decoy Vault** opens a deniable fake profile and the real keys are destroyed.
-   - A mandatory **YubiKey / FIDO2** hardware key requirement provides full protection against physical device theft.
+   - An **optional YubiKey / FIDO2** hardware key requirement (ADR-009) is designed as a strong mitigation against physical device theft (v2 scope; it raises the bar — it is not absolute).
 7. **24-Hour Universal Crypto-Shredding:**
-   - Exactly 24 hours after being created or received, all messages, photos, videos, voice recordings, and documents are permanently erased at the forensic level by destroying their $EFK$ keys with reference to Tor Consensus Time and via NIST SP 800-88 3-layer overwriting.
+   - 24 hours after being created or received, all messages, photos, videos, voice recordings, and documents become undecryptable — ASSUMING the AEAD holds and every $EFK$ key copy is destroyed (crypto-shredding; NIST SP 800-88 overwrite + Tor Consensus Time reference).

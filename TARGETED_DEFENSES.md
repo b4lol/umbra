@@ -84,9 +84,9 @@ graph TD
 ### C. Quad-Source Hybrid Entropy Blending (Quad-Source Entropy Blending)
 - **Targeted Attack:** Manipulation of the OS `/dev/urandom` pool, virtual-machine cloning, or hardware RNG backdoors (Dual_EC_DRBG-style).
 - **Targeted Defense Mechanism:**
-  - The random number generator (CSPRNG) is fed from 4 independent, isolated sources:
+  - The random number generator (CSPRNG) is fed from three independent, isolated entropy sources plus a chained previous-ephemeral-secret value:
     $$\text{Seed} = \text{BLAKE3}\Big(\text{CPU RDRAND/RDSEED} \parallel \text{Linux getrandom()} \parallel \text{Accelerometer/Touch Jitter} \parallel \text{Previous Ephemeral Secret}\Big)$$
-  - Even if three of the sources fail completely or are manipulated, the generated keys remain mathematically unpredictable.
+  - Under the design's entropy assumptions, even if three of the sources fail completely or are manipulated, the remaining sources are intended to keep the generated keys unpredictable (v2 hardware scope; verified against the real entropy sources when that phase lands).
 
 ---
 

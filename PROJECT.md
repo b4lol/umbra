@@ -2,7 +2,7 @@
 
 ## 📌 Mission
 
-**Umbra** aims to provide an independent, decentralized communication system that delivers full anonymity, zero metadata, and post-quantum security for human-rights defenders, investigative journalists, diplomatic delegations, and intelligence professionals — even under the harshest digital surveillance and censorship regimes.
+**Umbra** aims to provide an independent, decentralized communication system DESIGNED to maximize anonymity and minimize metadata (design goals, not measured properties) with post-quantum security, for human-rights defenders, investigative journalists, diplomatic delegations, and intelligence professionals — even under the harshest digital surveillance and censorship regimes.
 
 ---
 
@@ -49,7 +49,7 @@ In the Umbra project, memory safety, type safety, and deterministic resource man
 
 ### ✅ Allowed Memory-Safe Languages
 - **Rust (100% Safe Rust by Default & Isolated Unsafe Only for Hardware):**
-  - **Core & Protocol Guarantee (`#![forbid(unsafe_code)]`):** `#![forbid(unsafe_code)]` is mandatory across all cryptography, state machines, the P2P Tor network layer, message parsing, and UI layers. Over 99% of the code carries an absolute memory-safety guarantee at compile time.
+  - **Core & Protocol Guarantee (`#![forbid(unsafe_code)]`):** `#![forbid(unsafe_code)]` is mandatory across all cryptography, state machines, the P2P Tor network layer, message parsing, and UI layers. All Umbra-OWNED Rust source carries memory safety at compile time (Safe Rust; the isolated `unsafe` exception is audited per ADR-012). Transitive C via the Tor stack (`ring`, bundled SQLite) is a recorded deviation (ADR-028).
   - **Single and Strict Exception (Direct Hardware Communication Only):** `unsafe` is allowed **only and exclusively in isolated modules that communicate directly with physical hardware and OS kernel/hardware interfaces** (`umbra-hardware` / `mlock` page locking, TPM/Secure Enclave chips, FIDO2/YubiKey USB-NFC raw hardware drivers, hardware TRNG).
   - **Hardware Unsafe Rules:**
     1. All `unsafe` calls are fully encapsulated (`encapsulated`) behind a 100% Safe wrapper API. No `unsafe` function may ever leak to the outside world.
@@ -61,7 +61,7 @@ In the Umbra project, memory safety, type safety, and deterministic resource man
 ### ❌ Strictly Banned Languages
 - **C and C++ (STRICTLY BANNED):**
   - Banned with zero tolerance due to manual memory management (`malloc`/`free`, raw pointers), buffer overflows, use-after-free, memory corruption, and undefined-behavior risks.
-  - C-based external libraries (`OpenSSL`, `libcurl`, the C `tor` daemon, etc.) may not be included in the project; pure-Rust equivalents (`rustls`, `arti`) are mandatory.
+  - Umbra-owned C/C++ is banned; pure-Rust equivalents (`rustls`, `arti`) are mandatory for directly depended-on libraries. Transitive C inside the pure-Rust Tor stack (`ring`, bundled SQLite) is the single recorded deviation (ADR-028).
 - **JavaScript / TypeScript / Node.js / Electron (STRICTLY BANNED):**
   - Banned due to V8 JIT engine vulnerabilities, massive dependency trees (npm supply-chain attacks), prototype pollution, and excessive RAM consumption.
 - **Python / Ruby / PHP / Dynamic Scripting Languages (STRICTLY BANNED):**

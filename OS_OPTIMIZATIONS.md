@@ -36,7 +36,7 @@ graph TD
 To optimize memory security and forensic resistance, the following kernel flags are mandatory on every sensitive memory allocation:
 - **`MADV_DONTDUMP`:** Prevents sensitive key pages from being written into the Core Dump file the kernel would generate even if the app receives an unexpected signal.
 - **`MADV_DONTFORK` & `MADV_WIPEONFORK`:** Prevents memory pages from being copied into the child when the process forks, and automatically wipes the memory in the child process.
-- **`MADV_MERGEABLE` Ban:** Disabling Linux KSM (Kernel Samepage Merging) makes side-channel attacks that could be mounted through memory deduplication impossible.
+- **`MADV_MERGEABLE` Ban:** Umbra never marks its own pages `MADV_MERGEABLE`, keeping them out of KSM (Kernel Samepage Merging) deduplication — removing the memory-deduplication side-channel vector for Umbra memory (one vector among several — see TARGETED_DEFENSES for the others).
 
 ### C. Linux Heap Hardening with GrapheneOS `hardened_malloc`
 - **GrapheneOS `hardened_malloc`** is used as `#[global_allocator]` instead of Rust's default system allocator.

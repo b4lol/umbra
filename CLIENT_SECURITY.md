@@ -25,12 +25,12 @@ sequenceDiagram
     UI->>Core: Close Event
     Core->>SecureRAM: Overwrite Pixels with 0x00 (zeroize)
     Core->>Core: Permanently Destroy the EFK Key (Key Shredding)
-    Note over Core,SecureRAM: A second open is mathematically impossible.
+    Note over Core,SecureRAM: A second open is designed to be infeasible (v2 media-engine design goal).
 ```
 
 - **Ephemeral Key Shredding:** Every photo is encrypted with a unique, single-use Ephemeral File Key ($EFK$). The moment the dialog is closed after the photo has been viewed, the $EFK$ key is destroyed by `zeroize`-ing it out of memory.
 - **Zero Disk Writes:** Media files are never written to the disk cache (`cache`, `/tmp`, etc.); they are processed exclusively in RAM locked with `mlock`.
-- **Impossibility of a Second Open:** Once the key is destroyed, the encrypted data turns into mathematically undecryptable random noise.
+- **Second Open Prevented by Design** (v2 media-engine design goal): once the key is destroyed, the encrypted data is undecryptable assuming the AEAD holds and no key copy survives.
 
 ---
 
@@ -79,7 +79,7 @@ graph TD
 - To bypass hooks in the Java/ART layer, directly in the **pure Rust native layer**:
   1. **`ptrace(PTRACE_TRACEME)`:** As soon as the app starts, it traces itself; Frida, GDB, or LLDB cannot attach from the outside.
   2. **Memory Map Scan:** `/proc/self/maps` is scanned to detect the presence of the `lsposed`, `xposed`, `substrate`, and `frida-agent` libraries.
-  3. **Breach Action:** The instant any dynamic injection or `FLAG_SECURE` manipulation is detected, the app **zeroizes all RAM within 1 millisecond (`zeroize`) and terminates the process (`SIGKILL`)**.
+  3. **Breach Action:** The instant any dynamic injection or `FLAG_SECURE` manipulation is detected, the app **zeroizes all RAM as fast as the platform allows (`zeroize`; a millisecond-scale target, not a guarantee — ADR-009) and terminates the process (`SIGKILL`)**.
 
 ### E. Overlay and Tapjacking Blocking
 - `View.setFilterTouchesWhenObscured(true)` and `WindowManager.LayoutParams.SYSTEM_FLAG_HIDE_NON_SYSTEM_OVERLAYS` are activated.
@@ -96,7 +96,7 @@ graph TD
 
 ## 3. Automatic Lifecycle and 24-Hour Irreversible Destruction Policy (Crypto-Shredding)
 
-Nothing in Umbra persists forever. Without exception, **all data (messages, photos, videos, voice recordings, and documents)** is permanently destroyed **24 Hours (1 Day)** after it is created or received, **in a way that cannot be recovered even by forensic analysis**:
+Nothing in Umbra persists forever. Without exception, **all data (messages, photos, videos, voice recordings, and documents)** is permanently destroyed **24 Hours (1 Day)** after it is created or received, **undecryptable assuming the AEAD holds and every $EFK$ key copy is destroyed** (crypto-shredding):
 
 | Data Type | Default Retention Period (TTL) | Destruction Method |
 |---|---|---|
@@ -178,7 +178,7 @@ table inet umbra_killswitch {
 - When the **Duress PIN** is entered under coercion, a fake, harmless profile opens while the real keys and data are permanently destroyed in the background (`Duress Wipe`).
 
 ### C. Motion-Triggered Emergency Trigger (Motion / Tamper Wipe)
-- An emergency sentinel that wipes RAM within 5 milliseconds when the device is forcibly snatched from the hand (a sudden accelerometer spike) or a USB cable is suddenly plugged in.
+- An emergency sentinel that wipes RAM on a millisecond-scale TARGET (not a guarantee — ADR-009) when the device is forcibly snatched from the hand (a sudden accelerometer spike) or a USB cable is suddenly plugged in.
 
 ### D. Media Metadata Sanitizer (Deterministic Media Sanitizer)
 - EXIF, GPS, camera serial numbers, and sensor noise are stripped from every image sent; the pixel matrix is re-encoded in memory before transmission.

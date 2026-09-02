@@ -154,7 +154,7 @@ All commands honor the **Rule of Silence** (data on `stdout`, diagnostics prefix
 5. **Metadata Is Data** — who talks to whom and when is masked as aggressively as content.
 6. **No Footprint** — messages never touch disk; every claim in every document is honest-scope audited (ADR-027 two-section delivery, honest residuals).
 7. **Mandatory Documentation** — `#![deny(missing_docs, missing_docs_in_private_items)]` workspace-wide; undocumented code is not accepted.
-8. **Aggressive Verification on Every Change** — cargo-audit/deny/geiger, ASan nightly, fuzz smoke, mutation testing, dudect constant-time analysis (CI-enforced).
+8. **Aggressive Verification on Every Change** — cargo-audit/deny (CI), ASan nightly, fuzz smoke, mutation testing, dudect constant-time analysis (CI-enforced); `cargo geiger` via `just scan`, with the `// SAFETY:` lint CI-enforced.
 9. **Illegal States Unrepresentable** — typestate session machine, newtype counters, checked arithmetic, proptest + cargo-mutants.
 
 ---

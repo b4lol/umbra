@@ -27,7 +27,7 @@ This document explains the rationale behind the foundational technical and archi
 
 - **Status:** Accepted
 - **Rationale:** On NAND Flash and SSD disks, deleted data remains in blocks due to "Wear Leveling" and can be recovered by forensic analysis. Even encrypted databases like SQLCipher expose past messages when the key is compromised.
-- **Decision:** Messages are, by default, absolutely never written to disk. They are kept only in locked RAM (`mlock`) and destroyed with `zeroize` when the session ends.
+- **Decision:** Messages are, by default, never written to disk by Umbra processes (v1.0 Linux scope): they live in locked RAM (`mlockall`) and are destroyed with `zeroize` when the session ends. Residual: transport state (Arti guard/cache files) is intentionally persistent — see the README honest-scope table.
 - **Consequence:** Even if the device is physically seized, forensic experts cannot reach any fragment of a message through the flash disk.
 
 ---
@@ -88,6 +88,8 @@ This document explains the rationale behind the foundational technical and archi
 
 ## ADR-009: Hardware Security Key (FIDO2 / YubiKey) and Sudden-Motion Sentinel
 
+> **Scope:** v2 per ADR-027 (tracked in TODO.md Section B); the FIDO2 gate and Motion Wipe are NOT implemented in v1.0.
+
 - **Status:** Accepted
 - **Rationale:** During physical dominance or a snatch-and-grab forcible taking of the phone, the device may remain unlocked.
 - **Decision:**
@@ -118,7 +120,7 @@ This document explains the rationale behind the foundational technical and archi
   - **Allowed Safe Languages:** Only **Rust** for the system core, cryptography, network layer, and Linux clients; only **Kotlin** for the Android UI.
   - **Strictly Banned:** C, C++, JavaScript/TypeScript, Electron, Python, Ruby, PHP, and other dynamic languages entering the project directly or indirectly is strictly prohibited.
   - External C libraries (`OpenSSL`, `libcurl`, the C `tor`, etc.) are rejected outright; pure-Rust equivalents (`rustls`, `arti`) are mandatory.
-- **Consequence:** The codebase receives a memory-safety guarantee at compile time; memory corruption and JIT attack vectors are eliminated.
+- **Consequence:** Safe Rust provides memory safety at compile time for all non-`umbra-hardware` code; the classic memory-corruption and JIT vectors are removed from that surface (residual: the isolated `unsafe` in `umbra-hardware`, audited per ADR-012).
 
 ---
 
@@ -145,7 +147,7 @@ This document explains the rationale behind the foundational technical and archi
   - **`#![deny(missing_docs)]` Compiler Rule:** `#![deny(missing_docs)]` and `#![warn(clippy::missing_docs_in_private_items)]` are enforced in all crates. No undocumented function, struct, or module can compile.
   - **In-Code Explanatory Comment Mandate:** Not only `///` docstrings; within every function, critical steps, cryptographic formulas, RFC/NIST references, and memory-management decisions must be explained with explanatory inline comments (`// ...`) in Turkish/English.
   - Writing uncommented, unexplained code will be rejected in CI pipelines.
-- **Consequence:** The codebase gains a structure that is 100% transparent, easily auditable, high in educational value, and crystal-clear in reliability.
+- **Consequence:** The codebase gains a highly transparent, easily auditable structure with high educational value and clear reliability expectations.
 
 ---
 
@@ -169,7 +171,7 @@ This document explains the rationale behind the foundational technical and archi
   - **View-Once Photos by Default:** All photos are encrypted with single-use $EFK$ keys; the moment the dialog is closed, they are wiped from RAM and the key is destroyed.
   - **Advanced Screen-Recording Block:** When screen capture is detected with the Android 14+ `ScreenCaptureCallback`, open media is deleted instantly (`Emergency Media Eviction`) and the image is blacked out on virtual-display/mirroring connections. On Linux, all capture protocols other than Wayland are rejected.
   - **Universal Irreversible Destruction in 24 Hours:** Without exception, all messages, photos, videos, voice recordings, and files are permanently destroyed after **24 Hours (1 Day)** by destroying the $EFK$ keys via Tor Consensus Time and `CLOCK_MONOTONIC_RAW` (`Crypto-Shredding`) and by NIST SP 800-88 3-pass overwriting.
-- **Consequence:** Even if the device is seized, no data, message, or media older than 24 hours can be recovered by forensic analysis.
+- **Consequence:** Even if the device is seized, no data, message, or media older than 24 hours should be recoverable — ASSUMING the AEAD holds and every $EFK$ key copy is destroyed (crypto-shredding).
 
 ---
 
