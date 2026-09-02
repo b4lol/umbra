@@ -6,6 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [1.0.0-alpha.2] — 2026-09-02
+
+Interactive Tor flows landed; the three known alpha.1 limitations are
+resolved (two in code, one live-verified).
+
+### Added
+- **`umbra serve`**: inbound onion-service daemon — identity seeds load
+  once, bundle rebuilt per connection (no Argon2 per peer); Landlock
+  zero-FS + [Tor tree rw, /etc ro] + Seccomp; concurrent per-stream
+  PQXDH sessions behind a result queue; NDJSON `ready`/`text` events.
+- **`umbra send --onion`**: outbound Tor flow — bounded 64 KiB stdin in
+  locked RAM, shared Tor storage root, per-session ephemeral initiator,
+  one PQXDH session with chunked ratchet messages, NDJSON `sent` event.
+- **Burst-level cover traffic** (ADR-005): Poisson-driven DUMMY_COVER
+  frames interleaved with real frames on every send path (p=0.5, hard
+  cap 64/burst), wire-indistinguishable; receivers destroy cover
+  silently (the pipe path previously REJECTED it — fixed).
+- **Best-effort register scrub** (`umbra-hardware::hardening`): `asm!`
+  zeroing caller-saved GPRs after PQXDH root derivation, skipped-key
+  consumption and `GuardedBuffer::drop` (mitigates the upstream removal
+  of `zero-call-used-regs`; residuals documented).
+- **Live identity-persistence test** (`just live-test`, `#[ignore]`d):
+  two consecutive bootstraps over one storage root publish the same
+  `.onion` address — PASSED on the real Tor network (2026-09).
+- Peer records carry an optional `onion <addr>` line (`pair --onion`);
+  `--passphrase-file` reads the FIRST line per its documented contract.
+
+### Fixed
+- `/dev/tty` Landlock rule used directory rights invalid on character
+  devices under HardRequirement (latent: any production harden() with a
+  tty would fail) — now ReadFile+WriteFile+IoctlDev.
+- Seccomp allowlist gained the filesystem-mutation syscalls Arti's
+  atomic state/keystore writes need (post-sandbox persistence no longer
+  fails closed) plus `socketpair`.
+- `receive_message`: handshake-blob read is time-bounded (an idle peer
+  could park a session forever); inbound reassembly bounded at 64 KiB
+  (anonymous clients must not pin unbounded locked RAM).
+- Release-docs claim sweep (README rewritten to the honest scope).
+
+### Verification
+- 117 test cases across 18 integration suites; hermetic CI unchanged
+  (4 required checks). Live: `just live-test` passed on the real
+  network; TODO A.2 address-stability claim is field-verified.
+
 ## [1.0.0-alpha.1] — 2026-08-31
 
 Section A (MVP) scope of TODO.md: 39/40 tasks complete (one blocked upstream).

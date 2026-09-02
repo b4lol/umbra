@@ -4,7 +4,7 @@
 
 `Umbra` is an end-to-end encrypted communication protocol and client designed for journalists, government officials, and intelligence professionals operating in high-threat environments. It is serverless (no central server) and built on zero-metadata principles. Under its Tor transport the goal is no IP or identity trace — burst-level cover traffic is wired, while idle-gap cover and live-network field testing are still pending (see the honest-scope table), so treat every absolute anonymity claim as a design goal, not a measured property.
 
-> **Release status — `v1.0.0-alpha.1`:** the Section A (MVP) scope of [TODO.md](TODO.md) is implemented and CI-verified (39/40 tasks; one task is blocked upstream — see the honest-scope table below). This is an **alpha**: the cryptographic core is complete and continuously tested, while the interactive product surface (GUI, Android) and live-network field testing are not yet done. Every claim in this README is scoped to what is on disk; the honest-scope notes are authoritative over any marketing language inherited from the specification documents.
+> **Release status — `v1.0.0-alpha.2`:** the Section A (MVP) scope of [TODO.md](TODO.md) is implemented and CI-verified, and the onion-identity persistence is LIVE-VERIFIED on the real Tor network (`just live-test`). This is an **alpha**: the cryptographic core is complete and continuously tested, while the interactive product surface (GUI, Android) is not yet done. Every claim in this README is scoped to what is on disk; the honest-scope notes are authoritative over any marketing language inherited from the specification documents.
 
 ---
 
@@ -34,7 +34,7 @@
 - 60-second clipboard manager (in-process; system-backend integration is v2), D-Bus masked notifications (implemented, unwired; the D-Bus path is untested), TUI skeleton (Ratatui).
 
 ### Verification infrastructure
-- **112 test cases** across 17 integration suites plus per-crate unit tests, hermetic by policy; **proptest** (invertibility, ratchet recovery), **dudect-style constant-time suite**, **cargo-fuzz** (4 targets), **ASan nightly CI**, weekly **cargo-mutants**, `cargo-deny`/`cargo-audit` on every push.
+- **117 test cases** across 18 integration suites plus per-crate unit tests, hermetic by policy; **proptest** (invertibility, ratchet recovery), **dudect-style constant-time suite**, **cargo-fuzz** (4 targets), **ASan nightly CI**, weekly **cargo-mutants**, `cargo-deny`/`cargo-audit` on every push.
 - CI (4 required checks): fmt+clippy+tests (workspace `-D warnings`), deny+audit, fuzz smoke, ASan (nightly).
 
 ---
