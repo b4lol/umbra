@@ -37,18 +37,21 @@ const PUBLISH_WAIT: Duration = Duration::from_secs(240);
 
 /// Unique storage root for this test run. Arti's fs-mistrust refuses a
 /// path chain containing a group/world-writable ancestor, so `/tmp` is
-/// NOT eligible; the user-owned `target/` directory (gitignored) is.
+/// NOT eligible; the WORKSPACE-root `target/` (gitignored, user-owned)
+/// is. Anchored via CARGO_MANIFEST_DIR so cargo's per-package working
+/// directory can never scatter state into a committable path.
 fn live_base() -> PathBuf {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
-    let base = std::env::current_dir()
-        .unwrap_or_else(|_e| std::env::temp_dir())
-        .join("target")
-        .join(format!(
-            "umbra-live-identity-{}-{nanos}",
-            std::process::id()
-        ));
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .map_or_else(|| std::env::temp_dir(), std::path::Path::to_path_buf);
+    let base = workspace.join("target").join(format!(
+        "umbra-live-identity-{}-{nanos}",
+        std::process::id()
+    ));
     let _ = std::fs::create_dir_all(&base);
     base
 }

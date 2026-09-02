@@ -4,3 +4,7 @@ fuzz/artifacts
 fuzz/coverage
 mutants.out*/
 *.profraw
+
+# Nested crate targets (e.g. crates/*/target) must NEVER be committed:
+# test flows write Arti runtime state (keystores!) under them.
+**/target/
