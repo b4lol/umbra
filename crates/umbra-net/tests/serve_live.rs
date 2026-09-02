@@ -47,7 +47,7 @@ fn live_base() -> PathBuf {
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|p| p.parent())
-        .map_or_else(|| std::env::temp_dir(), std::path::Path::to_path_buf);
+        .map_or_else(std::env::temp_dir, std::path::Path::to_path_buf);
     let base = workspace.join("target").join(format!(
         "umbra-live-identity-{}-{nanos}",
         std::process::id()
@@ -107,11 +107,7 @@ fn verify_persistence(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("run 1: bootstrapping (this can take minutes on the live network)…");
     let first = run_in_fresh_runtime(base)?;
-    println!(
-        "run 1 published: {}…{}",
-        &first[..8],
-        &first[(first.len() - 4)..]
-    );
+    println!("run 1 published: {}", redact(&first));
 
     // Belt-and-braces: let the previous runtime's Arti tasks finish
     // releasing the onion-service lockfile before the next launch.
@@ -119,17 +115,30 @@ fn verify_persistence(
 
     println!("run 2: bootstrapping again over the SAME storage root…");
     let second = run_in_fresh_runtime(base)?;
-    println!(
-        "run 2 published: {}…{}",
-        &second[..8],
-        &second[(second.len() - 4)..]
-    );
+    println!("run 2 published: {}", redact(&second));
 
     assert_eq!(
         first, second,
         "the onion identity must persist across runs (TODO A.2 contract)"
     );
     Ok(())
+}
+
+/// Redacts an onion address for operator output: first 8 and last 4
+/// characters only (a controllable address must never be logged whole).
+fn redact(address: &str) -> String {
+    let bytes = address.as_bytes();
+    if bytes.len() <= 12 {
+        return "…redacted…".to_string();
+    }
+    let head = bytes
+        .get(..8)
+        .map_or("…", |slice| std::str::from_utf8(slice).unwrap_or("…"));
+    let tail_start = bytes.len().saturating_sub(4);
+    let tail = bytes
+        .get(tail_start..)
+        .map_or("…", |slice| std::str::from_utf8(slice).unwrap_or("…"));
+    format!("{head}…{tail}")
 }
 
 /// Runs one full bootstrap-publish cycle on a dedicated runtime.
