@@ -47,7 +47,7 @@
 | Android client (`FLAG_SECURE`, TEE, Skia canvas) | Deferred (Section B) |
 | View-once media engine, 24 h crypto-shredding | Deferred (Section B; media *metadata sterilizer* IS implemented) |
 | `hardened_malloc` integration | Deferred (Section B) |
-| Persistent onion identity in production flows | Wired: `umbra serve` (inbound daemon) + `umbra send --onion` (outbound, 64 KiB ceiling); address stability not live-verified. Tor transport state (guard descriptors, consensus cache) persists under the Tor tree — messages stay RAM-only, transport state does not |
+| Persistent onion identity in production flows | Wired: `umbra serve` (inbound daemon) + `umbra send --onion` (outbound, 64 KiB ceiling); address stability has a `#[ignore]`d live test (`just live-test`; first real-network pass pending). Tor transport state (guard descriptors, consensus cache) persists under the Tor tree — messages stay RAM-only, transport state does not |
 | CPU register zeroing (`zero-call-used-regs`) | Best-effort `asm!` scrub of caller-saved registers at sensitive boundaries (`umbra-hardware::hardening`); the upstream rustc flag remains removed, vector registers are a documented residual |
 | Live-network field testing of the Tor paths | Not performed; config surfaces are hermetically tested |
 | SMP in the product surface | Library-only (drivers + tests); no CLI command runs SMP yet — the pipe layer runs none |

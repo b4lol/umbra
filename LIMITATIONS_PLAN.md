@@ -114,13 +114,13 @@ production call site already shipped** (serve round + outbound round):
   refinement note).
 
 **Remaining work (the only real gap): live-network verification** — two
-consecutive `umbra serve` runs publishing the SAME `.onion` address.
-This cannot be hermetic (needs the live Tor network, minutes of
-bootstrap). Agreed shape: a `#[ignore]`d integration test
-(`serve::live_identity_persistence`) behind `--ignored`, run manually /
-in a periodic nightly-with-network job, NOT in the required CI set.
-Until then the README row keeps its "not live-verified" caveat — it is
-NOT removed by this plan.
+consecutive bootstraps publishing the SAME `.onion` address.
+
+**Status: test LANDED** (`crates/umbra-net/tests/serve_live.rs`, gated
+`#[ignore]`; `just live-test`). It cannot be hermetic (live Tor,
+minutes of bootstrap) and stays OUT of the required CI set. The README
+row keeps its "not live-verified" caveat until the test passes on the
+real network — after a pass, update the row to cite the run.
 
 ---
 
