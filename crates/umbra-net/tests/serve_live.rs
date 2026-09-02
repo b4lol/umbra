@@ -18,6 +18,11 @@
 //! consecutive runs published the same address. Known cosmetic noise:
 //! arti's internal timer tasks panic during Tokio runtime teardown
 //! AFTER a successful publish (upstream, non-fatal).
+//!
+//! OPSEC: every run generates a THROWAWAY identity (the storage root is
+//! wiped afterwards — key destroyed, service never resurrected) and the
+//! published address is REDACTED in test output; never log a controllable
+//! address in full.
 
 #![cfg(feature = "tor")]
 
@@ -85,24 +90,42 @@ async fn boot_and_publish(
 #[ignore = "requires the live Tor network and ~5 minutes of bootstrap time"]
 fn onion_address_persists_across_runs() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let base = live_base();
+    // OPSEC: the identity key is DESTROYED on every exit path — the
+    // test's throwaway identity must never outlive the verification.
+    let outcome = verify_persistence(&base);
+    let _ = std::fs::remove_dir_all(&base);
+    outcome
+}
 
+/// The two-run persistence check proper (storage root wiped by the
+/// caller on every path).
+fn verify_persistence(
+    base: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("run 1: bootstrapping (this can take minutes on the live network)…");
-    let first = run_in_fresh_runtime(&base)?;
-    println!("run 1 published: {first}");
+    let first = run_in_fresh_runtime(base)?;
+    println!(
+        "run 1 published: {}…{}",
+        &first[..8],
+        &first[(first.len() - 4)..]
+    );
 
     // Belt-and-braces: let the previous runtime's Arti tasks finish
     // releasing the onion-service lockfile before the next launch.
     std::thread::sleep(Duration::from_secs(5));
 
     println!("run 2: bootstrapping again over the SAME storage root…");
-    let second = run_in_fresh_runtime(&base)?;
-    println!("run 2 published: {second}");
+    let second = run_in_fresh_runtime(base)?;
+    println!(
+        "run 2 published: {}…{}",
+        &second[..8],
+        &second[(second.len() - 4)..]
+    );
 
     assert_eq!(
         first, second,
         "the onion identity must persist across runs (TODO A.2 contract)"
     );
-    let _ = std::fs::remove_dir_all(&base);
     Ok(())
 }
 

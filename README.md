@@ -98,7 +98,7 @@ git clone https://github.com/b4lol/umbra && cd umbra
 just check                 # fmt + clippy (-D warnings) + full test suite
 
 # a real passphrase file (FIRST LINE is the passphrase; 0600 recommended)
-printf '%s\n' 'correct horse battery staple' > ~/.umbra-pass && chmod 600 ~/.umbra-pass
+printf '%s\n' '<YOUR-LONG-RANDOM-PASSPHRASE>' > ~/.umbra-pass && chmod 600 ~/.umbra-pass
 
 # create an identity keystore (Argon2id envelope)
 cargo run -p umbra-cli -- init --keystore ~/.umbra/umbra.enc --passphrase-file ~/.umbra-pass
