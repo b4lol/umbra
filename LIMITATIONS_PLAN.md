@@ -116,11 +116,13 @@ production call site already shipped** (serve round + outbound round):
 **Remaining work (the only real gap): live-network verification** — two
 consecutive bootstraps publishing the SAME `.onion` address.
 
-**Status: test LANDED** (`crates/umbra-net/tests/serve_live.rs`, gated
-`#[ignore]`; `just live-test`). It cannot be hermetic (live Tor,
-minutes of bootstrap) and stays OUT of the required CI set. The README
-row keeps its "not live-verified" caveat until the test passes on the
-real network — after a pass, update the row to cite the run.
+**Status: PASSED ON THE LIVE NETWORK.** The test
+(`crates/umbra-net/tests/serve_live.rs`, `#[ignore]`d, `just live-test`)
+ran against the real Tor network: two consecutive bootstraps over one
+storage root published the SAME `.onion` address. The README
+honest-scope row now cites the verification. Known cosmetic noise:
+arti's timer tasks panic during runtime teardown AFTER a successful
+publish (upstream, non-fatal).
 
 ---
 
