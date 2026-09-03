@@ -34,6 +34,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "socks5.h"
+
 /* Default endpoint; override with --socks HOST:PORT. */
 #define DEFAULT_HOST "127.0.0.1"
 #define DEFAULT_PORT "9444"
@@ -211,13 +213,10 @@ int main(int argc, char **argv)
     if (listener < 0) {
         return 1;
     }
-    fprintf(stderr, "umbra-pt-proxy: listening on %s:%u (SKELETON — obfs4 not implemented)\n",
+    fprintf(stderr, "umbra-pt-proxy: listening on %s:%u (SCAFFOLD — relay disabled until obfs4)\n",
             host, (unsigned int)port);
 
     while (!g_stop) {
-        /* The protocol is not implemented: accept and close, so a
-         * misconfigured client gets a fast, visible failure instead of
-         * a hung connection. */
         int conn = accept4(listener, NULL, NULL, SOCK_CLOEXEC);
         if (conn < 0) {
             if (errno == EINTR) {
@@ -226,7 +225,11 @@ int main(int argc, char **argv)
             perror("umbra-pt-proxy: accept");
             break;
         }
-        fprintf(stderr, "umbra-pt-proxy: connection closed (obfs4 handshake not implemented)\n");
+        /* Sequential handling is deliberate for the scaffold: the
+         * listener is loopback-only and per-connection work is bounded
+         * by the I/O deadlines in socks5_handle. Threading arrives with
+         * the real relay (and its own review). */
+        socks5_handle(conn);
         close(conn);
     }
 

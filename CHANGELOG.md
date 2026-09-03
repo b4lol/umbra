@@ -19,7 +19,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **`pt-proxy/` skeleton**: a standalone, loopback-only SOCKS5 proxy
   component in C under ADR-030's scoped, owner-granted language
   exception (process-isolated, hardening-flag build, ASan/UBSan gate
-  target). NOT functional: the obfs4 protocol is not implemented.
+  target). The SOCKS5 front-end (RFC 1928, no-auth CONNECT, bounded
+  parsing, exact reply codes, deadline-guarded upstream dial) is
+  implemented and integration-tested (`pt-proxy/tests/socks5.sh`, also
+  clean under ASan/UBSan); the DATA RELAY stays disabled until the
+  obfs4 protocol lands.
 - Hermetic tests: PT config validation + builder tests (umbra-net),
   CLI/bridges-file plumbing tests (umbra-cli).
 
