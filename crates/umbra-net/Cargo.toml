@@ -29,6 +29,7 @@ arti-client = { version = "0.45.0", default-features = false, features = [
     "rustls",
     "static",
     "tokio",
+    "onion-service-client",
     "onion-service-service",
     "vanguards",
 ], optional = true }

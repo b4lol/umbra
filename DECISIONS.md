@@ -10,6 +10,7 @@ This document explains the rationale behind the foundational technical and archi
 - **Rationale:** Using the traditional C-language `tor` daemon would require external process management, root privileges, or complex IPC (Inter-Process Communication) mechanisms on Android and Linux.
 - **Decision:** The Tor Project's pure-Rust `arti-client` will be embedded directly into the binary and compiled.
 - **Addendum (2026-08, TODO A.2):** enabling `hs-pow-full` on `tor-hsservice` transitively enables the `__is_experimental` API unification on tor-hsservice/tor-hscrypto/tor-netdoc/tor-cell and pulls `equix`/`arrayvec`/`num-traits` (pure Rust — no new C surface beyond the recorded deviations above).
+- **Addendum (2026-09, TUI live verification):** the outbound flows (`send --onion`, the TUI send path) additionally require arti-client's `onion-service-client` feature (`tor-hsclient` + `tor-hscrypto`, pure Rust — no new C surface beyond the recorded deviations). alpha.2 shipped WITHOUT it, so live outbound connects were refused at runtime; caught and fixed by the `tui_live` self-send test.
 - **Consequence:** A portable, monolithic Tor client free of C memory errors is obtained, with no external system dependency at all.
 
 ---

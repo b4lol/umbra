@@ -18,6 +18,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   buffers. Hardening order mirrors `serve` (ADR-025): memory locks
   before the keystore read, Landlock zero-FS + [Tor tree rw, /etc ro,
   /dev/tty] and Seccomp before the runtime starts.
+- **Live TUI background-path test** (`crates/umbra-cli/tests/tui_live.rs`,
+  `#[ignore]`d): self-send through the client's own onion service —
+  PASSED on the real Tor network (2026-09), closing the outbound
+  live-verification gap below.
+
+### Fixed
+- **Outbound onion connections were impossible on the live network:**
+  `arti-client` was compiled with `onion-service-service` (hosting) but
+  WITHOUT `onion-service-client` (connecting to `.onion`), so every
+  `send --onion` / TUI send failed at connect time with "feature
+  onion-service-client not compiled in". The alpha.2 outbound flow had
+  never been live-tested; the gap is now closed in code and verified by
+  the self-send live test.
 
 ### Changed
 - **`umbra tui` now requires `--keystore`** and takes `--nickname`
