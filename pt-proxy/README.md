@@ -40,8 +40,12 @@ make clean
 
 1. [x] Skeleton: loopback-only SOCKS5 listener, hardening flags,
        hygiene rules (explicit_bzero on teardown paths).
-2. [ ] SOCKS5 CONNECT handshake (RFC 1929, no-auth, loopback peers
-       only) with hermetic reply codes.
+2. [x] SOCKS5 CONNECT handshake (RFC 1928, no-auth only, loopback
+       peers) with exact reply codes, bounded parsing, I/O deadlines,
+       and a deadline-guarded non-blocking upstream dial — integration
+       tested (`make test`, also under ASan/UBSan). The data relay is
+       deliberately DISABLED until obfs4 lands: a successful dial is
+       answered and immediately torn down with a stderr diagnostic.
 3. [ ] obfs4 handshake: X25519 + Elligator 2 representative, ntor
        variant per the obfs4 spec — requires a constant-time field
        arithmetic audit BEFORE first use.
