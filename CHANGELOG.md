@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Interactive Tor TUI client** (`umbra tui`, `tor` feature): live
+  inbound onion feed and compose-and-send over Tor in one sandboxed
+  process. The UI thread owns the terminal; a Tokio runtime runs
+  bootstrap, the accept loop, and outbound sends in the background over
+  channels. Tab cycles the peer selection; the log is bounded
+  (400 lines); per-session plaintext copies move in `Zeroizing`
+  buffers. Hardening order mirrors `serve` (ADR-025): memory locks
+  before the keystore read, Landlock zero-FS + [Tor tree rw, /etc ro,
+  /dev/tty] and Seccomp before the runtime starts.
+
+### Changed
+- **`umbra tui` now requires `--keystore`** and takes `--nickname`
+  (default `umbra-tui`) for its persistent inbound onion identity; the
+  command and the `tui` module are gated behind the `tor` feature.
+- `serve`: the address wait and the accept loop are extracted as the
+  shared `wait_for_address` / `inbound_loop` helpers (reused by the
+  TUI); seeds are `Arc`-shared. NDJSON behaviour unchanged.
+- `tor_send`: the send core is extracted as `send_over` (bounded
+  120 s connect, one PQXDH session) so the TUI reuses it; the CLI flow
+  is unchanged.
+- `peers`: new `list_names` (sorted record names; a missing directory
+  is an empty list) for pre-sandbox peer loading.
+
+---
+
 ## [1.0.0-alpha.2] — 2026-09-02
 
 Interactive Tor flows landed; the three known alpha.1 limitations are

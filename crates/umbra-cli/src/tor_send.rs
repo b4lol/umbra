@@ -112,49 +112,63 @@ pub fn run(
     crate::sandbox::restrict_syscalls()?;
 
     crate::peers::validate_onion(onion_address)?;
-    let address = umbra_net::addr::OnionAddr::parse(onion_address)
-        .map_err(|_e| CliError::Io(std::io::Error::other("invalid onion address")))?;
-    let peer_keys = umbra_net::messenger::PeerPqxdhKeys::from_parts(
-        &peer.ik_arr,
-        &peer.spk_arr,
-        peer.spk_signature.clone(),
-        peer.dsa.clone(),
-        &peer.kem_arr,
-    )
-    .map_err(|error| CliError::Io(std::io::Error::other(format!("peer keys: {error}"))))?;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|e| CliError::Io(std::io::Error::other(format!("tokio runtime: {e}"))))?;
     runtime.block_on(async move {
-        let transport_error = |error: umbra_net::TransportError| {
-            CliError::Io(std::io::Error::other(format!("tor transport: {error}")))
-        };
         let transport = TorTransport::bootstrap_persistent(&tor_base)
             .await
-            .map_err(transport_error)?;
-        // Bounded connect: a dead or hostile service must not hang the
-        // send indefinitely (mirrors the bootstrap/read bounds).
-        let mut stream = tokio::time::timeout(
-            std::time::Duration::from_secs(120),
-            transport.open_stream(&address),
-        )
-        .await
-        .map_err(|_elapsed| {
-            CliError::Io(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "onion connect timed out",
-            ))
-        })?
-        .map_err(transport_error)?;
-        let bytes = plaintext.len();
-        let frames = umbra_net::messenger::send_text_stream(&mut stream, &peer_keys, &plaintext)
+            .map_err(|error| {
+                CliError::Io(std::io::Error::other(format!("tor transport: {error}")))
+            })?;
+        let (frames, bytes) = send_over(&transport, peer, onion_address, &plaintext)
             .await
-            .map_err(transport_error)?;
+            .map_err(|error| {
+                CliError::Io(std::io::Error::other(format!("tor transport: {error}")))
+            })?;
         emit_event(
             "sent",
             &[("bytes", bytes.to_string()), ("frames", frames.to_string())],
         )
     })
+}
+
+/// The outbound send core shared by the CLI and the TUI: opens a
+/// BOUNDED-connect stream to `address` (120 s — a dead or hostile
+/// service must not hang the caller) and delivers `plaintext` as one
+/// PQXDH session (handshake + chunked ratchet messages + termination).
+/// Returns (data frames, bytes).
+///
+/// # Errors
+///
+/// Returns [`TransportError`] for connect/session/I-O failures.
+pub async fn send_over(
+    transport: &TorTransport,
+    peer: &PeerIdentity,
+    onion_address: &str,
+    plaintext: &[u8],
+) -> Result<(u64, usize), umbra_net::TransportError> {
+    let address = umbra_net::addr::OnionAddr::parse(onion_address)?;
+    let peer_keys = umbra_net::messenger::PeerPqxdhKeys::from_parts(
+        &peer.ik_arr,
+        &peer.spk_arr,
+        peer.spk_signature.clone(),
+        peer.dsa.clone(),
+        &peer.kem_arr,
+    )?;
+    // Bounded connect: a dead or hostile service must not hang the
+    // send indefinitely (mirrors the bootstrap/read bounds).
+    let mut stream = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        transport.open_stream(&address),
+    )
+    .await
+    .map_err(|_elapsed| umbra_net::TransportError::Timeout {
+        operation: "onion connect",
+    })??;
+    let bytes = plaintext.len();
+    let frames = umbra_net::messenger::send_text_stream(&mut stream, &peer_keys, plaintext).await?;
+    Ok((frames, bytes))
 }

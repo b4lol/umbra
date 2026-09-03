@@ -82,8 +82,10 @@ pub fn run(keystore: &std::path::Path, passphrase: &[u8], nickname: &str) -> Res
     umbra_hardware::process::harden_process()?;
 
     // 2. Identity seeds load ONCE; the keystore file is never opened
-    //    again (it would be denied by the sandbox below).
-    let seeds: IdentitySeeds = crate::keystore::load_seeds(keystore, passphrase)?;
+    //    again (it would be denied by the sandbox below). Arc-shared so
+    //    the TUI can reuse the same cores for outbound sends.
+    let seeds: std::sync::Arc<IdentitySeeds> =
+        std::sync::Arc::new(crate::keystore::load_seeds(keystore, passphrase)?);
 
     // 3. Tor storage root must EXIST before the Landlock ruleset pins
     //    the exception (PathFd opens the path at rule-add time).
@@ -124,65 +126,117 @@ pub fn run(keystore: &std::path::Path, passphrase: &[u8], nickname: &str) -> Res
             .spawn_inbound(nickname)
             .await
             .map_err(transport_error)?;
+        let transport = std::sync::Arc::new(transport);
 
-        // Wait for descriptor publication, then announce the address.
-        let started = tokio::time::Instant::now();
-        let deadline = started
-            .checked_add(ADDRESS_WAIT)
-            .ok_or_else(|| publication_timeout("onion address publication"))?;
-        let address = loop {
-            if let Some(address) = transport.onion_address() {
-                break address;
-            }
-            if tokio::time::Instant::now() >= deadline {
-                return Err(publication_timeout("onion address publication"));
-            }
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        };
+        let address = wait_for_address(&transport).await?;
         emit_event("ready", Some(format!("onion:{address}").as_bytes()))?;
 
-        // Accept loop: one PQXDH session per stream, each handled in its
-        // OWN task (the stream's semaphore permit moves with it, keeping
-        // Arti's concurrency bound intact). Tasks deliver session results
-        // over a channel; the loop serializes the NDJSON output (line
-        // atomicity) and treats stdout failure as fatal — dropping
-        // inbound messages silently would be a correctness lie. Every
-        // session failure is contained to its connection.
+        // Accept loop shared with the TUI; results serialize onto the
+        // NDJSON stdout channel. Stdout failure is FATAL — dropping
+        // inbound messages silently would be a correctness lie.
         let (results_tx, mut results_rx) = tokio::sync::mpsc::channel::<
             Result<Vec<u8>, umbra_net::TransportError>,
         >(INBOUND_RESULT_QUEUE);
-        loop {
-            tokio::select! {
-                accepted = transport.next_inbound_stream() => {
-                    let (mut stream, permit) = accepted.map_err(transport_error)?;
-                    let bundle = IdentityBundle::from_seeds(&seeds);
-                    let tx = results_tx.clone();
-                    tokio::spawn(async move {
-                        let _permit = permit; // held for the whole session
-                        let result =
-                            umbra_net::messenger::receive_message(bundle, &mut stream).await;
-                        let _ = tx.send(result).await;
-                    });
+        let loop_handle = tokio::spawn(inbound_loop(
+            transport,
+            seeds,
+            results_tx,
+            INBOUND_RESULT_QUEUE,
+        ));
+        while let Some(result) = results_rx.recv().await {
+            match result {
+                Ok(plaintext) => {
+                    let plaintext = zeroize::Zeroizing::new(plaintext);
+                    emit_event("text", Some(&plaintext))?;
                 }
-                result = results_rx.recv() => {
-                    match result {
-                        Some(Ok(plaintext)) => {
-                            let plaintext = zeroize::Zeroizing::new(plaintext);
-                            emit_event("text", Some(&plaintext))?;
+                Err(error) => {
+                    eprintln!("umbra: inbound session failed: {error}");
+                }
+            }
+        }
+        loop_handle
+            .await
+            .map_err(|e| CliError::Io(std::io::Error::other(format!("accept loop: {e}"))))?
+    })
+}
+
+/// Waits until the onion descriptor is published and returns the
+/// address (bounded by [`ADDRESS_WAIT`]).
+///
+/// # Errors
+///
+/// Returns [`CliError::Io`] (timeout) if publication does not complete.
+pub async fn wait_for_address(transport: &TorTransport) -> Result<String, CliError> {
+    let started = tokio::time::Instant::now();
+    let deadline = started
+        .checked_add(ADDRESS_WAIT)
+        .ok_or_else(|| publication_timeout("onion address publication"))?;
+    loop {
+        if let Some(address) = transport.onion_address() {
+            return Ok(address);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(publication_timeout("onion address publication"));
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// The accept loop shared by `serve` (NDJSON stdout) and the TUI
+/// (message log): one PQXDH session per accepted stream, each handled
+/// in its OWN task (the stream's semaphore permit moves with it,
+/// keeping Arti's concurrency bound intact). Every session result flows
+/// to `results_tx`; session failures are contained to their connection.
+///
+/// # Errors
+///
+/// Returns [`CliError`] on accept failures (the loop only ends on a
+/// transport error or when the results channel closes).
+pub async fn inbound_loop(
+    transport: std::sync::Arc<TorTransport>,
+    seeds: std::sync::Arc<IdentitySeeds>,
+    forward_tx: tokio::sync::mpsc::Sender<Result<Vec<u8>, umbra_net::TransportError>>,
+    queue_capacity: usize,
+) -> Result<(), CliError> {
+    let transport_error = |error: umbra_net::TransportError| {
+        CliError::Io(std::io::Error::other(format!("tor transport: {error}")))
+    };
+    // Internal per-session result queue; the loop forwards to the
+    // caller's channel (kept distinct to avoid self-delivery loops).
+    let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(queue_capacity);
+    loop {
+        tokio::select! {
+            accepted = transport.next_inbound_stream() => {
+                let (mut stream, permit) = accepted.map_err(transport_error)?;
+                let bundle = IdentityBundle::from_seeds(&seeds);
+                let tx = session_tx.clone();
+                tokio::spawn(async move {
+                    let _permit = permit; // held for the whole session
+                    let result =
+                        umbra_net::messenger::receive_message(bundle, &mut stream).await;
+                    let _ = tx.send(result).await;
+                });
+            }
+            result = session_rx.recv() => {
+                match result {
+                    Some(Ok(plaintext)) => {
+                        let plaintext = zeroize::Zeroizing::new(plaintext);
+                        if forward_tx.send(Ok(plaintext.to_vec())).await.is_err() {
+                            return Ok(()); // consumer gone: stop the loop
                         }
-                        Some(Err(error)) => {
-                            eprintln!("umbra: inbound session failed: {error}");
-                        }
-                        None => {
-                            return Err(CliError::Io(std::io::Error::other(
-                                "inbound session queue closed",
-                            )));
-                        }
+                    }
+                    Some(Err(error)) => {
+                        let _ = forward_tx.send(Err(error)).await;
+                    }
+                    None => {
+                        return Err(CliError::Io(std::io::Error::other(
+                            "inbound session queue closed",
+                        )));
                     }
                 }
             }
         }
-    })
+    }
 }
 
 /// Internal timeout error for the publication wait.
