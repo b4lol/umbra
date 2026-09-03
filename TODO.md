@@ -44,7 +44,7 @@ This list contains the technical tasks planned for the step-by-step implementati
 ## A.4 Linux Security & TUI (`umbra-cli`)
 
 - [x] Linux `seccomp-bpf` syscall filtering (seccompiler allowlist, fail-closed EPERM) and `Landlock` zero-filesystem-access sandboxing (+ `/dev/tty` read/write/ioctl exception for the TUI — crossterm raw mode).
-- [x] Security-focused, low-resource Terminal TUI (`ratatui`). *(state-machine skeleton; runs fully under the Landlock+Seccomp sandbox)*
+- [x] Security-focused, low-resource Terminal TUI (`ratatui`). *(interactive client: live inbound onion feed via the shared `serve::inbound_loop`, compose-and-send over Tor via `tor_send::send_over`, Tab-cycled peer selection, bounded 400-line log; runs fully under the Landlock+Seccomp sandbox — the caller hardens before `tui::run`)*
 - [x] Clipboard manager with a 60-second auto-destruct. *(in-process manager: `Zeroizing` RAM buffer + TTL wipe, tested against a memory backend; the Wayland system-clipboard backend is v2 scope)*
 - [x] Linux D-Bus masked generic notification adapter (`org.freedesktop.Notifications`). *(zbus backend implemented, unwired to any production flow; masking logic tested against a memory backend — the D-Bus path itself is untested)*
 - [x] **Memory Leak Locks:** `mlockall`, `prctl(PR_SET_DUMPABLE, 0)` and `MADV_DONTDUMP`/`MADV_DONTFORK` integration. *(plus `setrlimit(RLIMIT_CORE, 0)` and `MADV_UNMERGEABLE`; Landlock zero-FS sandbox in the CLI)*

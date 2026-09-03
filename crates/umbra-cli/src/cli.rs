@@ -6,6 +6,7 @@ use std::path::Path;
 use umbra_crypto::keys::IdentityBundle;
 use umbra_hardware::memory::GuardedBuffer;
 
+#[cfg(feature = "tor")]
 use crate::tui;
 
 /// Rule-of-Silence output helpers: only requested data hits `stdout`.
@@ -98,8 +99,16 @@ pub enum Command {
         #[arg(long)]
         nickname: String,
     },
-    /// Opens the security-focused terminal UI (Ratatui).
-    Tui,
+    /// Opens the interactive terminal client: live inbound onion feed,
+    /// compose-and-send over Tor, peer selection. (Requires the `tor`
+    /// build feature.)
+    #[cfg(feature = "tor")]
+    Tui {
+        /// Onion service nickname for the inbound identity (persistent
+        /// across runs under the Tor tree).
+        #[arg(long, default_value = "umbra-tui")]
+        nickname: String,
+    },
     /// Creates a new persistent identity keystore.
     Init,
     /// Prints the 32-byte identity fingerprint (hex) of this identity,
@@ -168,6 +177,7 @@ pub enum CliError {
     Crypto(#[from] umbra_crypto::CryptoError),
 
     /// TUI failure.
+    #[cfg(feature = "tor")]
     #[error(transparent)]
     Tui(#[from] tui::TuiError),
 
@@ -202,14 +212,6 @@ fn harden_sandbox() -> Result<(), CliError> {
     // Seccomp is applied LAST: the Landlock syscalls above have already
     // run; afterwards the allowlist gates everything.
     crate::sandbox::restrict_syscalls()?;
-    Ok(())
-}
-
-/// Full hardening for commands that read nothing sensitive from disk:
-/// memory locks immediately followed by the sandbox.
-fn harden() -> Result<(), CliError> {
-    harden_memory()?;
-    harden_sandbox()?;
     Ok(())
 }
 
@@ -282,9 +284,47 @@ pub fn run() -> Result<(), CliError> {
                 mode,
             )
         }
-        Command::Tui => {
-            harden()?;
-            tui::run().map_err(CliError::from)
+        #[cfg(feature = "tor")]
+        Command::Tui { ref nickname } => {
+            // Ordering mirrors `serve`: memory locks BEFORE secrets,
+            // identity + peer reads BEFORE the sandbox, the Tor tree as
+            // the sanctioned read+write exception, Seccomp last.
+            harden_memory()?;
+            let keystore = cli
+                .keystore
+                .as_ref()
+                .ok_or_else(|| CliError::Keystore("missing --keystore PATH".into()))?
+                .clone();
+            let passphrase = zeroize::Zeroizing::new(load_passphrase(&cli)?);
+            let seeds = std::sync::Arc::new(crate::keystore::load_seeds(&keystore, &passphrase)?);
+            let peers_dir = crate::serve::tor_base_from_keystore(&keystore)?
+                .parent()
+                .map_or_else(|| std::path::PathBuf::from("peers"), |p| p.join("peers"));
+            let mut peers = Vec::new();
+            for name in crate::peers::list_names(&peers_dir)? {
+                let identity = crate::peers::load_peer(&peers_dir, &name)?;
+                peers.push((name, identity));
+            }
+            let tor_base = crate::serve::tor_base_from_keystore(&keystore)?;
+            {
+                use std::os::unix::fs::DirBuilderExt as _;
+                std::fs::DirBuilder::new()
+                    .recursive(true)
+                    .mode(0o700)
+                    .create(&tor_base)
+                    .map_err(CliError::Io)?;
+            }
+            crate::sandbox::restrict_filesystem_with_exceptions(
+                &[tor_base.as_path()],
+                &[std::path::Path::new("/etc")],
+            )?;
+            crate::sandbox::restrict_syscalls()?;
+            crate::tui::run(crate::tui::TuiConfig {
+                seeds,
+                peers,
+                tor_base,
+                nickname: nickname.clone(),
+            })
         }
         #[cfg(feature = "tor")]
         Command::Serve { ref nickname } => {

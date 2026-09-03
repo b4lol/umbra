@@ -31,7 +31,7 @@
 - **Memory locks**: `mlockall`, `PR_SET_DUMPABLE=0`, `RLIMIT_CORE=0`, guard-page `GuardedBuffer` (`PROT_NONE` + `MADV_DONTDUMP/DONTFORK/WIPEONFORK`), `zeroize` everywhere.
 - **Keystore** (Argon2id m=2¹⁸/t=4/p=4 + ChaCha20-Poly1305 envelope), seed-based identity, pairing payloads with **SAS codes**, named peer records.
 - **Pipe transport**: `umbra send --peer NAME | umbra recv` (binary or `--json` NDJSON), sandbox applied after keystore loads.
-- 60-second clipboard manager (in-process; system-backend integration is v2), D-Bus masked notifications (implemented, unwired; the D-Bus path is untested), TUI skeleton (Ratatui).
+- 60-second clipboard manager (in-process; system-backend integration is v2), D-Bus masked notifications (implemented, unwired; the D-Bus path is untested), interactive Tor TUI client (Ratatui: live inbound onion feed, compose-and-send, Tab-cycled peer selection).
 
 ### Verification infrastructure
 - **117 test cases** across 18 integration suites plus per-crate unit tests, hermetic by policy; **proptest** (invertibility, ratchet recovery), **dudect-style constant-time suite**, **cargo-fuzz** (4 targets), **ASan nightly CI**, weekly **cargo-mutants**, `cargo-deny`/`cargo-audit` on every push.

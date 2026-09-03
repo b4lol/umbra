@@ -25,6 +25,39 @@ fn record_path(peers_dir: &Path, name: &str) -> Result<PathBuf, CliError> {
     Ok(peers_dir.join(format!("{name}.peer")))
 }
 
+/// Lists peer record NAMES found under `peers_dir` (sorted). A missing
+/// directory is an empty list, not an error (fresh keystore).
+///
+/// # Errors
+///
+/// Returns [`CliError::Keystore`] if the directory exists but cannot be
+/// read.
+pub fn list_names(peers_dir: &Path) -> Result<Vec<String>, CliError> {
+    let mut names = Vec::new();
+    let entries = match fs::read_dir(peers_dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(names),
+        Err(e) => {
+            return Err(CliError::Keystore(format!(
+                "cannot read {}: {e}",
+                peers_dir.display()
+            )));
+        }
+    };
+    for entry in entries {
+        let path = entry
+            .map_err(|e| CliError::Keystore(format!("peer entry: {e}")))?
+            .path();
+        if path.extension().is_some_and(|ext| ext == "peer")
+            && let Some(stem) = path.file_stem().and_then(|stem| stem.to_str())
+        {
+            names.push(stem.to_string());
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
 /// Validates an `.onion` address or fails with a transport-flavored
 /// error (shared by the record store and the outbound flow).
 ///
