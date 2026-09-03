@@ -560,4 +560,15 @@ mod tests {
             Some(format!("line {}", MAX_LOG_LINES + 24).as_str())
         );
     }
+
+    /// Onion addresses are never logged whole: short inputs collapse to
+    /// a placeholder, long ones keep only an 8+4 character window.
+    #[test]
+    fn redact_hides_the_middle() {
+        assert_eq!(redact("short"), "…redacted…");
+        let addr = "5vzwalpq2cyjrhm5lvzhcjn6mbnwbv42xakxiqhunwpgz6hr32f7gxad";
+        let out = redact(addr);
+        assert_eq!(out, "5vzwalpq…gxad");
+        assert!(out.len() < addr.len());
+    }
 }

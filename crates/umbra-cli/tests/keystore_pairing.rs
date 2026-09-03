@@ -151,6 +151,26 @@ fn peer_record_roundtrip() -> Result<(), Box<dyn std::error::Error + Send + Sync
     Ok(())
 }
 
+/// `list_names` is the pre-sandbox peer loader for the interactive TUI:
+/// a MISSING directory is an empty list (fresh keystore, not an error),
+/// non-`.peer` files are ignored, and names come back sorted.
+#[test]
+fn list_names_sorted_and_tolerant() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use umbra_cli::peers;
+    let missing = std::env::temp_dir().join("umbra-test-no-such-peers-dir");
+    let _ = std::fs::remove_dir_all(&missing);
+    assert!(peers::list_names(&missing)?.is_empty());
+
+    let dir = temp_keystore("peers-list");
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("zeta.peer"), b"x")?;
+    std::fs::write(dir.join("alpha.peer"), b"x")?;
+    std::fs::write(dir.join("notes.txt"), b"x")?; // not a record: ignored
+    assert_eq!(peers::list_names(&dir)?, vec!["alpha", "zeta"]);
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
 /// `serve` resolves the Tor storage root next to the keystore (TODO A.2
 /// production call site); a parentless keystore path fails cleanly.
 #[cfg(feature = "tor")]
