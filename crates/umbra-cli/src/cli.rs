@@ -83,6 +83,11 @@ pub enum Command {
         /// peer record. Transport switches from pipe to embedded Tor.
         #[arg(long)]
         onion: Option<String>,
+        /// Censorship circumvention (ADR-030 unmanaged PT model);
+        /// Tor-transport only.
+        #[cfg(feature = "tor")]
+        #[command(flatten)]
+        pt: crate::pt::PtArgs,
     },
     /// Decrypts a sealed pipe stream from stdin; plaintext to stdout.
     ///
@@ -98,6 +103,9 @@ pub enum Command {
         /// Onion service nickname (letters/digits; arti-validated).
         #[arg(long)]
         nickname: String,
+        /// Censorship circumvention (ADR-030 unmanaged PT model).
+        #[command(flatten)]
+        pt: crate::pt::PtArgs,
     },
     /// Opens the interactive terminal client: live inbound onion feed,
     /// compose-and-send over Tor, peer selection. (Requires the `tor`
@@ -108,6 +116,9 @@ pub enum Command {
         /// across runs under the Tor tree).
         #[arg(long, default_value = "umbra-tui")]
         nickname: String,
+        /// Censorship circumvention (ADR-030 unmanaged PT model).
+        #[command(flatten)]
+        pt: crate::pt::PtArgs,
     },
     /// Creates a new persistent identity keystore.
     Init,
@@ -228,6 +239,8 @@ pub fn run() -> Result<(), CliError> {
         Command::Send {
             ref peer,
             ref onion,
+            #[cfg(feature = "tor")]
+            ref pt,
         } => {
             // Peer records are public material: read them before the
             // flow split; memory locks and the sandbox are applied per
@@ -247,6 +260,7 @@ pub fn run() -> Result<(), CliError> {
                         &peer_record,
                         address,
                         &mut std::io::stdin().lock(),
+                        pt,
                     )
                 }
                 #[cfg(not(feature = "tor"))]
@@ -256,6 +270,14 @@ pub fn run() -> Result<(), CliError> {
                         .into(),
                 )),
                 None => {
+                    // PT options are meaningless on the pipe transport —
+                    // reject them loudly instead of silently ignoring.
+                    #[cfg(feature = "tor")]
+                    if pt.pt_socks.is_some() || !pt.bridges.is_empty() {
+                        return Err(CliError::Keystore(
+                            "--pt-socks/--bridge require the Tor transport (--onion)".into(),
+                        ));
+                    }
                     // Pipe path: memory locks BEFORE the identity load
                     // (ADR-025), sandbox after the reads.
                     harden_memory()?;
@@ -285,7 +307,10 @@ pub fn run() -> Result<(), CliError> {
             )
         }
         #[cfg(feature = "tor")]
-        Command::Tui { ref nickname } => {
+        Command::Tui {
+            ref nickname,
+            ref pt,
+        } => {
             // Ordering mirrors `serve`: memory locks BEFORE secrets,
             // identity + peer reads BEFORE the sandbox, the Tor tree as
             // the sanctioned read+write exception, Seccomp last.
@@ -297,6 +322,9 @@ pub fn run() -> Result<(), CliError> {
                 .clone();
             let passphrase = zeroize::Zeroizing::new(load_passphrase(&cli)?);
             let seeds = std::sync::Arc::new(crate::keystore::load_seeds(&keystore, &passphrase)?);
+            // PT configuration is read PRE-sandbox alongside the peer
+            // records (bridge lines are operational secrets; ADR-030).
+            let pt_config = crate::pt::load_config(&keystore, pt)?;
             let peers_dir = crate::serve::tor_base_from_keystore(&keystore)?
                 .parent()
                 .map_or_else(|| std::path::PathBuf::from("peers"), |p| p.join("peers"));
@@ -324,17 +352,21 @@ pub fn run() -> Result<(), CliError> {
                 peers,
                 tor_base,
                 nickname: nickname.clone(),
+                pt: pt_config,
             })
         }
         #[cfg(feature = "tor")]
-        Command::Serve { ref nickname } => {
+        Command::Serve {
+            ref nickname,
+            ref pt,
+        } => {
             let keystore = cli
                 .keystore
                 .as_ref()
                 .ok_or_else(|| CliError::Keystore("missing --keystore PATH".into()))?
                 .clone();
             let passphrase = zeroize::Zeroizing::new(load_passphrase(&cli)?);
-            crate::serve::run(&keystore, &passphrase, nickname)
+            crate::serve::run(&keystore, &passphrase, nickname, pt)
         }
         Command::ExportPairing => export_pairing(),
         Command::Fingerprint { ref peer } => match peer {

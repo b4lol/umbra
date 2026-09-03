@@ -23,7 +23,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use umbra_crypto::keys::IdentitySeeds;
 use umbra_net::TransportError;
-use umbra_net::tor::TorTransport;
+use umbra_net::tor::{PtProxyConfig, TorTransport};
 use zeroize::Zeroizing;
 
 use crate::cli::CliError;
@@ -55,6 +55,9 @@ pub struct TuiConfig {
     pub tor_base: PathBuf,
     /// Onion service nickname for the inbound service.
     pub nickname: String,
+    /// Optional unmanaged PT proxy configuration (ADR-030); `None` is a
+    /// direct guard connection.
+    pub pt: Option<PtProxyConfig>,
 }
 
 /// Events flowing from the background runtime to the UI loop.
@@ -373,13 +376,14 @@ async fn background(
     mut cmd_rx: tokio::sync::mpsc::UnboundedReceiver<UiCommand>,
 ) {
     let _ = event_tx.send(UiEvent::Bootstrapping);
-    let mut transport = match TorTransport::bootstrap_persistent(&cfg.tor_base).await {
-        Ok(transport) => transport,
-        Err(error) => {
-            let _ = event_tx.send(UiEvent::Fatal(format!("bootstrap failed: {error}")));
-            return;
-        }
-    };
+    let mut transport =
+        match TorTransport::bootstrap_persistent_with_pt(&cfg.tor_base, cfg.pt.as_ref()).await {
+            Ok(transport) => transport,
+            Err(error) => {
+                let _ = event_tx.send(UiEvent::Fatal(format!("bootstrap failed: {error}")));
+                return;
+            }
+        };
     if let Err(error) = transport.spawn_inbound(&cfg.nickname).await {
         let _ = event_tx.send(UiEvent::Fatal(format!("inbound service: {error}")));
         return;

@@ -96,6 +96,106 @@ const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(180);
 /// Capacity of the inbound stream queue.
 const INBOUND_QUEUE: usize = 32;
 
+/// Unmanaged pluggable-transport proxy configuration (TODO B.1,
+/// ADR-030): an OS-managed PT proxy (lyrebird today; a future
+/// standalone C proxy per the ADR-030 scoped exception) exposes a
+/// LOOPBACK SOCKS5 endpoint, and Arti connects through it to reach
+/// bridges. Umbra NEVER spawns or links PT code — the managed-PT model
+/// is rejected (Seccomp no-execve, Landlock zero-FS).
+///
+/// Validated at construction (fail closed): the endpoint must be
+/// loopback, at least one protocol and one bridge line must parse.
+pub struct PtProxyConfig {
+    /// Loopback SOCKS5 endpoint of the unmanaged PT proxy.
+    proxy_addr: std::net::SocketAddr,
+    /// Transport protocol names the proxy provides (e.g. `obfs4`).
+    protocols: Vec<String>,
+    /// Bridge lines in Tor "Bridge …" format (operational secrets
+    /// supplied by the user; never logged).
+    bridges: Vec<String>,
+}
+
+impl PtProxyConfig {
+    /// Builds a validated PT configuration. Every protocol name and
+    /// bridge line is parse-checked HERE, before any bootstrap attempt,
+    /// so a malformed line fails fast with a config error instead of a
+    /// mid-bootstrap surprise.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError::Config`] if the endpoint is not
+    /// loopback, the lists are empty, or any protocol/bridge line fails
+    /// to parse.
+    pub fn new(
+        proxy_addr: std::net::SocketAddr,
+        protocols: Vec<String>,
+        bridges: Vec<String>,
+    ) -> Result<Self, TransportError> {
+        if !proxy_addr.ip().is_loopback() {
+            // Loopback-only: a remote "PT proxy" would see plaintext Tor
+            // entry traffic AND learn bridge usage — fail closed (ADR-030).
+            return Err(TransportError::Config {
+                details: format!("PT proxy endpoint {proxy_addr} is not loopback"),
+            });
+        }
+        if protocols.is_empty() || bridges.is_empty() {
+            // A PT with no protocol or no bridge is a silent no-op
+            // footgun; reject it loudly instead.
+            return Err(TransportError::Config {
+                details: "PT proxy requires at least one protocol and one bridge line".into(),
+            });
+        }
+        for protocol in &protocols {
+            protocol
+                .parse::<tor_linkspec::PtTransportName>()
+                .map_err(|e| TransportError::Config {
+                    details: format!("invalid PT protocol name {protocol:?}: {e}"),
+                })?;
+        }
+        for line in &bridges {
+            line.parse::<arti_client::config::BridgeConfigBuilder>()
+                .map_err(|e| TransportError::Config {
+                    details: format!("invalid bridge line: {e}"),
+                })?;
+        }
+        Ok(Self {
+            proxy_addr,
+            protocols,
+            bridges,
+        })
+    }
+}
+
+/// Applies a validated [`PtProxyConfig`] to a client-config builder:
+/// one unmanaged transport (loopback SOCKS5) plus the bridge lines.
+/// Parse checks already ran in [`PtProxyConfig::new`]; the re-parse here
+/// is still error-handled (Zero-Panic doctrine) even though it cannot
+/// fail for validated input.
+fn apply_pt(
+    builder: &mut arti_client::config::TorClientConfigBuilder,
+    pt: &PtProxyConfig,
+) -> Result<(), TransportError> {
+    use arti_client::config::pt::TransportConfigBuilder;
+
+    let mut transport = TransportConfigBuilder::default();
+    let mut names = Vec::with_capacity(pt.protocols.len());
+    for protocol in &pt.protocols {
+        names.push(protocol.parse().map_err(|e| TransportError::Config {
+            details: format!("invalid PT protocol name {protocol:?}: {e}"),
+        })?);
+    }
+    transport.protocols(names).proxy_addr(pt.proxy_addr);
+    builder.bridges().transports().push(transport);
+    for line in &pt.bridges {
+        let bridge: arti_client::config::BridgeConfigBuilder =
+            line.parse().map_err(|e| TransportError::Config {
+                details: format!("invalid bridge line: {e}"),
+            })?;
+        builder.bridges().bridges().push(bridge);
+    }
+    Ok(())
+}
+
 /// Builds a persistent `TorClientConfig` rooted at `base` (TODO A.2):
 /// guard state, directory cache and the Arti native keystore live under
 /// `base/state` and `base/cache` across runs, so the onion-service
@@ -110,6 +210,22 @@ const INBOUND_QUEUE: usize = 32;
 /// Returns [`TransportError::Io`] if the directories cannot be created
 /// and [`TransportError::Config`] if Arti rejects the configuration.
 pub fn persistent_config(base: &std::path::Path) -> Result<TorClientConfig, TransportError> {
+    persistent_config_with_pt(base, None)
+}
+
+/// [`persistent_config`] with an optional unmanaged pluggable-transport
+/// proxy (TODO B.1, ADR-030): when `pt` is set, bridge lines and the
+/// loopback SOCKS5 endpoint are wired into the client config, so ALL
+/// guard connections go through the PT proxy.
+///
+/// # Errors
+///
+/// See [`persistent_config`]; a malformed PT section fails closed with
+/// [`TransportError::Config`] before any bootstrap attempt.
+pub fn persistent_config_with_pt(
+    base: &std::path::Path,
+    pt: Option<&PtProxyConfig>,
+) -> Result<TorClientConfig, TransportError> {
     use std::os::unix::fs::DirBuilderExt as _;
 
     let state = base.join("state");
@@ -135,6 +251,12 @@ pub fn persistent_config(base: &std::path::Path) -> Result<TorClientConfig, Tran
     // persistent path as well; see [`pin_vanguards`] for scope.
     let mut builder = arti_client::config::TorClientConfigBuilder::from_directories(state, cache);
     pin_vanguards(&mut builder);
+    // Unmanaged PT proxy (ADR-030): bridges replace guard selection when
+    // configured; the pinned Vanguard MODE is unaffected (pool sizes and
+    // lifetimes remain consensus parameters either way).
+    if let Some(pt) = pt {
+        apply_pt(&mut builder, pt)?;
+    }
     let config = builder.build().map_err(|err| TransportError::Config {
         details: err.to_string(),
     })?;
@@ -263,11 +385,26 @@ impl TorTransport {
     ///
     /// See [`Self::bootstrap`].
     pub async fn bootstrap_persistent(base: &std::path::Path) -> Result<Self, TransportError> {
+        Self::bootstrap_persistent_with_pt(base, None).await
+    }
+
+    /// [`Self::bootstrap_persistent`] with an optional unmanaged
+    /// pluggable-transport proxy (TODO B.1, ADR-030): when `pt` is set,
+    /// guard connections are replaced by bridge connections through the
+    /// loopback SOCKS5 PT endpoint.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::bootstrap`].
+    pub async fn bootstrap_persistent_with_pt(
+        base: &std::path::Path,
+        pt: Option<&PtProxyConfig>,
+    ) -> Result<Self, TransportError> {
         let client = tokio::time::timeout(
             BOOTSTRAP_TIMEOUT,
-            TorClient::<tor_rtcompat::PreferredRuntime>::create_bootstrapped(persistent_config(
-                base,
-            )?),
+            TorClient::<tor_rtcompat::PreferredRuntime>::create_bootstrapped(
+                persistent_config_with_pt(base, pt)?,
+            ),
         )
         .await
         .map_err(|_elapsed| TransportError::Timeout {
@@ -546,5 +683,90 @@ mod tests {
     fn invalid_nickname_is_rejected() {
         let result = tor_hsservice::HsNickname::new(String::from("bad nickname!"));
         assert!(result.is_err());
+    }
+
+    /// Made-up-but-well-formed obfs4 bridge line (arti-client doc
+    /// example; NOT a real bridge — hermetic parse fixture only).
+    const FICTITIOUS_BRIDGE: &str = "Bridge obfs4 192.0.2.55:38114 \
+        316E643333645F6D79216558614D3931657A5F5F \
+        cert=YXJlIGZyZXF1ZW50bHkgZnVsbCBvZiBsaXR0bGUgbWVzc2FnZXMgeW91IGNhbiBmaW5kLg \
+        iat-mode=0";
+
+    /// ADR-030 fail-closed validation: non-loopback endpoints, empty
+    /// lists and malformed bridge lines are all rejected at construction
+    /// (hermetic; no network).
+    #[test]
+    fn pt_proxy_config_validates() {
+        use super::PtProxyConfig;
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+        let loopback = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9051);
+        let ok = PtProxyConfig::new(
+            loopback,
+            vec!["obfs4".to_string()],
+            vec![FICTITIOUS_BRIDGE.to_string()],
+        );
+        assert!(ok.is_ok());
+
+        // A remote endpoint would see plaintext Tor entry traffic.
+        let remote = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)), 9051);
+        assert!(
+            PtProxyConfig::new(
+                remote,
+                vec!["obfs4".to_string()],
+                vec![FICTITIOUS_BRIDGE.into()]
+            )
+            .is_err()
+        );
+        // Silent no-op footguns: no protocols, or no bridges.
+        assert!(PtProxyConfig::new(loopback, Vec::new(), vec![FICTITIOUS_BRIDGE.into()]).is_err());
+        assert!(PtProxyConfig::new(loopback, vec!["obfs4".into()], Vec::new()).is_err());
+        // Malformed protocol name and bridge line fail closed.
+        assert!(
+            PtProxyConfig::new(
+                loopback,
+                vec!["not a protocol!".into()],
+                vec![FICTITIOUS_BRIDGE.into()]
+            )
+            .is_err()
+        );
+        assert!(
+            PtProxyConfig::new(
+                loopback,
+                vec!["obfs4".into()],
+                vec!["definitely not a bridge".into()]
+            )
+            .is_err()
+        );
+    }
+
+    /// A persistent config WITH an unmanaged PT proxy still builds, with
+    /// the strict Vanguards-Lite pin intact (bridges replace guard
+    /// selection; the pinned MODE is unaffected) — hermetic builder test.
+    #[test]
+    fn persistent_config_builds_with_pt() -> Result<(), crate::error::TransportError> {
+        use super::{PtProxyConfig, persistent_config, persistent_config_with_pt};
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let base = std::env::temp_dir().join(format!(
+            "umbra-pt-config-test-{}-{nanos}",
+            std::process::id()
+        ));
+        let outcome = (|| {
+            let pt = PtProxyConfig::new(
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9051),
+                vec!["obfs4".to_string()],
+                vec![FICTITIOUS_BRIDGE.to_string()],
+            )?;
+            // Both the PT and the non-PT path must build cleanly.
+            persistent_config_with_pt(&base, Some(&pt))?;
+            persistent_config(&base)?;
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(&base);
+        outcome
     }
 }

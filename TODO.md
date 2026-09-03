@@ -71,7 +71,7 @@ This list contains the technical tasks planned for the step-by-step implementati
 
 ## B.1 Advanced Network, Censorship Resistance & Mesh (`umbra-net`)
 
-- [ ] Pluggable Transports (Obfs4 and Snowflake WebRTC) integration for censored networks.
+- [ ] Pluggable Transports (Obfs4 and Snowflake WebRTC) integration for censored networks. *(PARTIAL 2026-09: unmanaged-PT (loopback SOCKS5) support LANDED — `--pt-socks` + `--bridge` on serve/send/tui, ADR-030; the managed-PT (binary-spawning) model is REJECTED (Seccomp/Landlock). Standalone C proxy skeleton (`pt-proxy/`) started under the ADR-030 scoped C exception — obfs4 protocol NOT yet implemented. Snowflake: BLOCKED, no Rust/C client exists.)*
 - [ ] Offline Mesh Protocol (BLE & Wi-Fi Direct DTN) for internet-less crisis environments.
 - [ ] Nym Mixnet / Loopix delayed packet-mixing adapter.
 

@@ -55,6 +55,18 @@ To bypass censoring firewalls (e.g., the GFW) that apply state-level Deep Packet
 - **Obfs4 / Lyrebird:** Makes Tor packets appear as completely meaningless noise data with random entropy.
 - **Snowflake (WebRTC Masking):** Disguises client traffic as an ordinary video conference or browser WebRTC stream and routes it through temporary volunteer proxies.
 
+### The Umbra PT model (ADR-030, v2 line)
+
+Umbra never spawns or links PT binaries. A pluggable transport runs as
+an **OS-managed proxy process** exposing a **loopback-only SOCKS5
+endpoint**; the embedded Arti client is configured with arti's
+*unmanaged transport* support (`--pt-socks 127.0.0.1:PORT` plus
+user-supplied `--bridge` lines or a `bridges` file next to the
+keystore). This preserves the Seccomp no-`execve` allowlist, the
+Landlock zero-FS sandbox, and the process-isolation doctrine. The
+managed-PT (binary-spawning) model is rejected by design. Snowflake is
+currently blocked: no Rust or C client implementation exists.
+
 ---
 
 ## 4. Internet Outage / Crisis Mode: Off-Grid Mesh

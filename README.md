@@ -51,9 +51,10 @@
 | CPU register zeroing (`zero-call-used-regs`) | Best-effort `asm!` scrub of caller-saved registers at sensitive boundaries (`umbra-hardware::hardening`); the upstream rustc flag remains removed, vector registers are a documented residual |
 | Live-network field testing of the Tor paths | DONE (2026-09): inbound identity persistence (`just live-test`) and an outbound+inbound self-send round trip (`tui_live`) both PASSED on the real network — the latter caught the missing `onion-service-client` feature that made alpha.2 outbound connects impossible |
 | SMP in the product surface | Library-only (drivers + tests); no CLI command runs SMP yet — the pipe layer runs none |
-| PQ-MLS TreeKEM, mixnets, pluggable transports | v2 (Section B) |
+| Pluggable transports (obfs4-class) | Unmanaged-proxy support LANDED (ADR-030): `--pt-socks` + `--bridge` on serve/send/tui configure arti for a loopback SOCKS5 PT proxy; Umbra never spawns/links PT code. The PT proxy itself is external (a standalone C skeleton lives in `pt-proxy/`, obfs4 NOT yet implemented); live censorship-path testing pending. Snowflake: blocked (no Rust/C client) |
+| PQ-MLS TreeKEM, mixnets | v2 (Section B) |
 
-The authoritative status list is [TODO.md](TODO.md); claim arbitration lives in [DECISIONS.md](DECISIONS.md) (ADR-001…ADR-029).
+The authoritative status list is [TODO.md](TODO.md); claim arbitration lives in [DECISIONS.md](DECISIONS.md) (ADR-001…ADR-030).
 
 ---
 

@@ -11,6 +11,8 @@ pub mod notify;
 pub mod pairing;
 pub mod peers;
 pub mod pipeline;
+#[cfg(feature = "tor")]
+pub mod pt;
 pub mod sandbox;
 #[cfg(feature = "tor")]
 pub mod serve;

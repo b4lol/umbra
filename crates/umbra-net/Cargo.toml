@@ -32,12 +32,20 @@ arti-client = { version = "0.45.0", default-features = false, features = [
     "onion-service-client",
     "onion-service-service",
     "vanguards",
+    # Pluggable transports (TODO B.1, ADR-030): UNMANAGED proxies only
+    # (loopback SOCKS5 endpoints) — the `managed-pts` spawning feature is
+    # deliberately NOT enabled (Seccomp blocks execve; Landlock zero-FS).
+    # tor-ptmgr / bridge-client are pure Rust: no new C surface beyond
+    # the ADR-028 recorded deviations.
+    "pt-client",
 ], optional = true }
 tor-rtcompat = { version = "0.45.0", features = ["tokio", "rustls"], optional = true }
 tor-cell = { version = "0.45.0", optional = true }
 tor-hsservice = { version = "0.45.0", optional = true, features = ["hs-pow-full"] }
 tor-guardmgr = { version = "0.45.0", optional = true }
 tor-config = { version = "0.45.0", optional = true }
+# PT protocol names for unmanaged transports (ADR-030; pure Rust).
+tor-linkspec = { version = "0.45.0", optional = true }
 safelog = { version = "0.9", optional = true }
 futures-util = { version = "0.3.31", default-features = false, features = [
     "std",
@@ -60,6 +68,7 @@ tor = [
     "dep:tor-hsservice",
     "dep:tor-guardmgr",
     "dep:tor-config",
+    "dep:tor-linkspec",
     "dep:futures-util",
     "dep:rustls",
     "dep:safelog",
