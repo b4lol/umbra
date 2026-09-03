@@ -29,6 +29,11 @@ fuzz target="fuzz_packet_parser" seconds="60":
 live-test:
     cargo test -p umbra-net --features tor --test serve_live -- --ignored --nocapture
 
+# 5b. LIVE-NETWORK TUI background-path test: self-send through the
+# client's own onion service (send_over → inbound_loop round trip).
+live-test-tui:
+    cargo test -p umbra-cli --features tor --test tui_live -- --ignored --nocapture
+
 # 4. LLVM memory sanitizers (nightly toolchain required).
 asan:
     RUSTFLAGS="-Zsanitizer=address" cargo +nightly test \

@@ -6,7 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
-## [Unreleased]
+## [1.0.0-alpha.3] — 2026-09-03
+
+The interactive Ratatui TUI client ships, and live-verifying its network
+path caught a real alpha.2 defect: outbound `.onion` connects were
+impossible (missing arti `onion-service-client` feature). Both
+directions of the Tor transport are now live-verified.
 
 ### Added
 - **Interactive Tor TUI client** (`umbra tui`, `tor` feature): live
@@ -44,6 +49,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   is unchanged.
 - `peers`: new `list_names` (sorted record names; a missing directory
   is an empty list) for pre-sandbox peer loading.
+
+### Verification
+- 122 test cases across 19 integration suites; hermetic CI unchanged
+  (4 required checks). Live: `tui_live` self-send PASSED on the real
+  Tor network (2026-09); the alpha.2 `just live-test` identity-persistence
+  result stands.
 
 ---
 

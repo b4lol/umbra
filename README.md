@@ -2,13 +2,13 @@
 
 **Zero-Trust, Zero-Metadata, Post-Quantum Anonymous Communication System**
 
-`Umbra` is an end-to-end encrypted communication protocol and client designed for journalists, government officials, and intelligence professionals operating in high-threat environments. It is serverless (no central server) and built on zero-metadata principles. Under its Tor transport the goal is no IP or identity trace — burst-level cover traffic is wired, while idle-gap cover and live-network field testing are still pending (see the honest-scope table), so treat every absolute anonymity claim as a design goal, not a measured property.
+`Umbra` is an end-to-end encrypted communication protocol and client designed for journalists, government officials, and intelligence professionals operating in high-threat environments. It is serverless (no central server) and built on zero-metadata principles. Under its Tor transport the goal is no IP or identity trace — burst-level cover traffic is wired and both directions of the Tor flows are live-verified, while idle-gap cover is still pending (see the honest-scope table), so treat every absolute anonymity claim as a design goal, not a measured property.
 
-> **Release status — `v1.0.0-alpha.2`:** the Section A (MVP) scope of [TODO.md](TODO.md) is implemented and CI-verified, and the onion-identity persistence is LIVE-VERIFIED on the real Tor network (`just live-test`). This is an **alpha**: the cryptographic core is complete and continuously tested, while the interactive product surface (GUI, Android) is not yet done. Every claim in this README is scoped to what is on disk; the honest-scope notes are authoritative over any marketing language inherited from the specification documents.
+> **Release status — `v1.0.0-alpha.3`:** the Section A (MVP) scope of [TODO.md](TODO.md) is implemented and CI-verified; onion-identity persistence AND a full outbound+inbound self-send round trip are LIVE-VERIFIED on the real Tor network (`just live-test`, `tui_live`). This is an **alpha**: the cryptographic core is complete and continuously tested, while parts of the interactive product surface (GUI, Android) are not yet done. Every claim in this README is scoped to what is on disk; the honest-scope notes are authoritative over any marketing language inherited from the specification documents.
 
 ---
 
-## ✅ What is implemented (v1.0.0-alpha.1)
+## ✅ What is implemented (v1.0.0-alpha.3)
 
 ### Cryptography (`umbra-crypto`, `umbra-protocol`)
 - **PQXDH handshake** — X25519 + ML-KEM-768 (RustCrypto `ml-kem`, pure Rust, FIPS 203) with ML-DSA-65-signed pre-keys (FIPS 204); non-contributory DH rejected.
@@ -34,12 +34,12 @@
 - 60-second clipboard manager (in-process; system-backend integration is v2), D-Bus masked notifications (implemented, unwired; the D-Bus path is untested), interactive Tor TUI client (Ratatui: live inbound onion feed, compose-and-send, Tab-cycled peer selection).
 
 ### Verification infrastructure
-- **117 test cases** across 18 integration suites plus per-crate unit tests, hermetic by policy; **proptest** (invertibility, ratchet recovery), **dudect-style constant-time suite**, **cargo-fuzz** (4 targets), **ASan nightly CI**, weekly **cargo-mutants**, `cargo-deny`/`cargo-audit` on every push.
+- **122 test cases** across 19 integration suites plus per-crate unit tests, hermetic by policy; **proptest** (invertibility, ratchet recovery), **dudect-style constant-time suite**, **cargo-fuzz** (4 targets), **ASan nightly CI**, weekly **cargo-mutants**, `cargo-deny`/`cargo-audit` on every push.
 - CI (4 required checks): fmt+clippy+tests (workspace `-D warnings`), deny+audit, fuzz smoke, ASan (nightly).
 
 ---
 
-## ⚠️ Honest scope — what v1.0.0-alpha.1 does NOT have
+## ⚠️ Honest scope — what v1.0.0-alpha.3 does NOT have
 
 | Feature | Status |
 |---|---|
@@ -49,7 +49,7 @@
 | `hardened_malloc` integration | Deferred (Section B) |
 | Persistent onion identity in production flows | LIVE-VERIFIED (`just live-test`, 2026-09: two consecutive bootstraps over one storage root published the same `.onion` address). Tor transport state persists under the Tor tree — messages stay RAM-only, transport state does not |
 | CPU register zeroing (`zero-call-used-regs`) | Best-effort `asm!` scrub of caller-saved registers at sensitive boundaries (`umbra-hardware::hardening`); the upstream rustc flag remains removed, vector registers are a documented residual |
-| Live-network field testing of the Tor paths | Not performed; config surfaces are hermetically tested |
+| Live-network field testing of the Tor paths | DONE (2026-09): inbound identity persistence (`just live-test`) and an outbound+inbound self-send round trip (`tui_live`) both PASSED on the real network — the latter caught the missing `onion-service-client` feature that made alpha.2 outbound connects impossible |
 | SMP in the product surface | Library-only (drivers + tests); no CLI command runs SMP yet — the pipe layer runs none |
 | PQ-MLS TreeKEM, mixnets, pluggable transports | v2 (Section B) |
 

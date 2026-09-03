@@ -22,7 +22,7 @@ members = [
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "1.0.0-alpha.2"
+version = "1.0.0-alpha.3"
 edition = "2024"
 rust-version = "1.97"
 license = "GPL-3.0-or-later"
@@ -48,9 +48,9 @@ undocumented_unsafe_blocks = "deny"
 
 [workspace.dependencies]
 # Internal crates
-umbra-crypto = { path = "crates/umbra-crypto", version = "1.0.0-alpha.2" }
-umbra-protocol = { path = "crates/umbra-protocol", version = "1.0.0-alpha.2" }
-umbra-net = { path = "crates/umbra-net", version = "1.0.0-alpha.2" }
+umbra-crypto = { path = "crates/umbra-crypto", version = "1.0.0-alpha.3" }
+umbra-protocol = { path = "crates/umbra-protocol", version = "1.0.0-alpha.3" }
+umbra-net = { path = "crates/umbra-net", version = "1.0.0-alpha.3" }
 
 # Post-quantum cryptography (RustCrypto, pure Rust — ADR-026)
 ml-kem = { version = "0.3.2", features = ["zeroize"] }
