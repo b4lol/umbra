@@ -67,10 +67,15 @@ pub fn run(
     peer: &PeerIdentity,
     onion_address: &str,
     input: &mut impl Read,
+    pt_args: &crate::pt::PtArgs,
 ) -> Result<(), CliError> {
     // Memory hardening FIRST: the bounded stdin read below lands in
     // locked, non-dumpable RAM (mlockall/MCL_FUTURE).
     umbra_hardware::process::harden_process()?;
+
+    // PT configuration (ADR-030): bridge lines are operational secrets
+    // read pre-sandbox alongside the other identity-directory reads.
+    let pt = crate::pt::load_config(keystore, pt_args)?;
 
     // Bounded stdin: mlockall makes every byte locked RAM. The capacity
     // is reserved UP FRONT so read_to_end never reallocates — a grown
@@ -118,7 +123,7 @@ pub fn run(
         .build()
         .map_err(|e| CliError::Io(std::io::Error::other(format!("tokio runtime: {e}"))))?;
     runtime.block_on(async move {
-        let transport = TorTransport::bootstrap_persistent(&tor_base)
+        let transport = TorTransport::bootstrap_persistent_with_pt(&tor_base, pt.as_ref())
             .await
             .map_err(|error| {
                 CliError::Io(std::io::Error::other(format!("tor transport: {error}")))

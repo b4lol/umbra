@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Unmanaged pluggable-transport support** (TODO B.1, ADR-030):
+  `umbra serve` / `send --onion` / `tui` accept `--pt-socks
+  127.0.0.1:PORT` + repeatable `--bridge "…"` (or a `bridges` file next
+  to the keystore, read pre-sandbox) and configure arti's unmanaged
+  (loopback SOCKS5) transports — Umbra never spawns or links PT
+  binaries; non-loopback endpoints and half-configured setups fail
+  closed. PT protocol names are derived from the bridge lines.
+- **`pt-proxy/` skeleton**: a standalone, loopback-only SOCKS5 proxy
+  component in C under ADR-030's scoped, owner-granted language
+  exception (process-isolated, hardening-flag build, ASan/UBSan gate
+  target). NOT functional: the obfs4 protocol is not implemented.
+- Hermetic tests: PT config validation + builder tests (umbra-net),
+  CLI/bridges-file plumbing tests (umbra-cli).
+
+---
+
 ## [1.0.0-alpha.3] — 2026-09-03
 
 The interactive Ratatui TUI client ships, and live-verifying its network

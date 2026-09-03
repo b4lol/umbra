@@ -77,9 +77,18 @@ fn emit_event(event: &str, data: Option<&[u8]>) -> Result<(), CliError> {
 /// Returns [`CliError`] on keystore, sandbox, bootstrap, or onion
 /// publication failure. Per-connection failures are logged to stderr and
 /// the accept loop continues.
-pub fn run(keystore: &std::path::Path, passphrase: &[u8], nickname: &str) -> Result<(), CliError> {
+pub fn run(
+    keystore: &std::path::Path,
+    passphrase: &[u8],
+    nickname: &str,
+    pt_args: &crate::pt::PtArgs,
+) -> Result<(), CliError> {
     // 1. Memory hardening BEFORE secrets exist (ADR-025 ordering).
     umbra_hardware::process::harden_process()?;
+
+    // 1b. PT configuration (ADR-030): bridge lines are operational
+    //     secrets read pre-sandbox alongside the keystore material.
+    let pt = crate::pt::load_config(keystore, pt_args)?;
 
     // 2. Identity seeds load ONCE; the keystore file is never opened
     //    again (it would be denied by the sandbox below). Arc-shared so
@@ -108,9 +117,10 @@ pub fn run(keystore: &std::path::Path, passphrase: &[u8], nickname: &str) -> Res
     )?;
     crate::sandbox::restrict_syscalls()?;
 
-    // 5. Runtime + transport. `bootstrap_persistent` roots the Arti
-    //    state/cache/keystore under `tor_base` — the `.onion` identity
-    //    persists across runs for this nickname.
+    // 5. Runtime + transport. `bootstrap_persistent_with_pt` roots the
+    //    Arti state/cache/keystore under `tor_base` — the `.onion`
+    //    identity persists across runs for this nickname — and wires the
+    //    unmanaged PT proxy when configured (ADR-030).
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -119,7 +129,7 @@ pub fn run(keystore: &std::path::Path, passphrase: &[u8], nickname: &str) -> Res
         let transport_error = |error: umbra_net::TransportError| {
             CliError::Io(std::io::Error::other(format!("tor transport: {error}")))
         };
-        let mut transport = TorTransport::bootstrap_persistent(&tor_base)
+        let mut transport = TorTransport::bootstrap_persistent_with_pt(&tor_base, pt.as_ref())
             .await
             .map_err(transport_error)?;
         transport

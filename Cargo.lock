@@ -234,6 +234,7 @@ dependencies = [
  "tor-persist",
  "tor-proto",
  "tor-protover",
+ "tor-ptmgr",
  "tor-rtcompat",
  "tracing",
  "void",
@@ -5776,6 +5777,7 @@ dependencies = [
  "tor-netdoc",
  "tor-persist",
  "tor-proto",
+ "tor-protover",
  "tor-relay-selection",
  "tor-rtcompat",
  "tor-units",
@@ -6319,6 +6321,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "tor-ptmgr"
+version = "0.45.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d052da1eadd9f65cc46aa367adb8b573d397acf3d0635d39351670bbe40a82f7"
+dependencies = [
+ "async-trait",
+ "cfg-if",
+ "derive-deftly",
+ "derive_builder_fork_arti",
+ "fs-mistrust",
+ "futures",
+ "itertools 0.15.0",
+ "oneshot-fused-workaround",
+ "serde",
+ "thiserror 2.0.20",
+ "tor-async-utils",
+ "tor-basic-utils",
+ "tor-chanmgr",
+ "tor-config",
+ "tor-config-path",
+ "tor-error",
+ "tor-linkspec",
+ "tor-proto",
+ "tor-rtcompat",
+ "tor-socksproto",
+ "tracing",
+ "web-time-compat",
+]
+
+[[package]]
 name = "tor-relay-selection"
 version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6627,6 +6659,7 @@ dependencies = [
  "tor-config",
  "tor-guardmgr",
  "tor-hsservice",
+ "tor-linkspec",
  "tor-rtcompat",
  "umbra-crypto",
  "umbra-protocol",
