@@ -1,12 +1,11 @@
 /*
  * umbra-pt-proxy — standalone pluggable-transport client proxy.
  *
- * STATUS: SKELETON — NOT FUNCTIONAL (see README.md roadmap). The
- * loopback-only SOCKS5 listener and process hygiene are in place; the
- * obfs4 protocol is NOT implemented, so every accepted connection is
- * closed immediately. Umbra talks to this proxy exclusively through a
- * loopback SOCKS5 endpoint (ADR-030 unmanaged model); this binary is
- * never spawned or linked by an Umbra process.
+ * Umbra talks to this proxy exclusively through a loopback SOCKS5
+ * endpoint (ADR-030 unmanaged model); this binary is never spawned or
+ * linked by an Umbra process. The upstream bridge connection is
+ * obfs4-wrapped (handshake + framing + packet layer) before any Tor
+ * byte flows.
  *
  * Security invariants (must survive every future change):
  *  1. The listener binds LOOPBACK ONLY — enforced by parsing the bind
@@ -14,8 +13,10 @@
  *     and ::1 BEFORE any socket syscall.
  *  2. No files are opened, ever (the proxy needs no state); a future
  *     Seccomp profile will enforce this.
- *  3. All secrets (once the obfs4 key schedule exists) are wiped with
- *     explicit_bzero() on every teardown path.
+ *  3. All secrets are wiped with sodium_memzero() on every teardown
+ *     path (handshake state, session keys, framing state).
+ *  4. No bridge certificate, no service: a malformed or missing
+ *     --obfs4-cert fails the process at startup, before any accept.
  */
 
 /* Linux-only component (Umbra targets Linux/Android): _GNU_SOURCE for
@@ -35,6 +36,10 @@
 #include <unistd.h>
 
 #include "socks5.h"
+
+#include "obfs4.h"
+
+#include <sodium.h>
 
 /* Default endpoint; override with --socks HOST:PORT. */
 #define DEFAULT_HOST "127.0.0.1"
@@ -187,13 +192,32 @@ int main(int argc, char **argv)
     char host[INET6_ADDRSTRLEN];
     uint16_t port = 0;
     const char *spec = DEFAULT_HOST ":" DEFAULT_PORT;
+    const char *cert_b64 = NULL;
+    Obfs4BridgeCert cert;
     int listener;
     struct sigaction sa;
+    int i;
 
-    if (argc == 3 && strcmp(argv[1], "--socks") == 0) {
-        spec = argv[2];
-    } else if (argc != 1) {
-        fprintf(stderr, "usage: %s [--socks HOST:PORT]  (loopback only)\n", argv[0]);
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--socks") == 0 && i + 1 < argc) {
+            spec = argv[i + 1];
+            i++;
+        } else if (strcmp(argv[i], "--obfs4-cert") == 0 && i + 1 < argc) {
+            cert_b64 = argv[i + 1];
+            i++;
+        } else {
+            fprintf(stderr,
+                    "usage: %s [--socks HOST:PORT] --obfs4-cert CERT  "
+                    "(loopback only)\n",
+                    argv[0]);
+            return 2;
+        }
+    }
+    if (cert_b64 == NULL || sodium_init() < 0 ||
+        obfs4_cert_parse(&cert, cert_b64) != OBFS4_OK) {
+        fprintf(stderr,
+                "umbra-pt-proxy: missing or invalid --obfs4-cert "
+                "(bridge line cert= value)\n");
         return 2;
     }
     if (parse_endpoint(spec, host, sizeof(host), &port) != 0) {
@@ -213,7 +237,7 @@ int main(int argc, char **argv)
     if (listener < 0) {
         return 1;
     }
-    fprintf(stderr, "umbra-pt-proxy: listening on %s:%u (SCAFFOLD — relay disabled until obfs4)\n",
+    fprintf(stderr, "umbra-pt-proxy: listening on %s:%u (obfs4 client)\n",
             host, (unsigned int)port);
 
     while (!g_stop) {
@@ -225,11 +249,11 @@ int main(int argc, char **argv)
             perror("umbra-pt-proxy: accept");
             break;
         }
-        /* Sequential handling is deliberate for the scaffold: the
-         * listener is loopback-only and per-connection work is bounded
-         * by the I/O deadlines in socks5_handle. Threading arrives with
-         * the real relay (and its own review). */
-        socks5_handle(conn);
+        /* Sequential handling is deliberate: the listener is
+         * loopback-only, Umbra serializes its per-peer sessions, and
+         * per-connection work is bounded by the I/O deadlines. A
+         * threaded model would need its own review. */
+        socks5_handle(conn, &cert);
         close(conn);
     }
 

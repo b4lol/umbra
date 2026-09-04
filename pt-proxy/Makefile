@@ -11,7 +11,7 @@ HARDEN  := -std=c11 -Wall -Wextra -Werror -Wpedantic -Wconversion \
 LDFLAGS += -pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack
 
 # libsodium (system package) provides X25519, HMAC-SHA256, HKDF-SHA256,
-# SHA-512, CSPRNG and constant-time helpers for src/obfs4.c.
+# SHA-512, XSalsa20-Poly1305, CSPRNG and constant-time helpers.
 SODIUM_CFLAGS := $(shell pkg-config --cflags libsodium)
 SODIUM_LIBS   := $(shell pkg-config --libs libsodium)
 
@@ -24,24 +24,24 @@ SODIUM_LIBS   := $(shell pkg-config --libs libsodium)
 VENDOR_WARN := -std=c11
 
 BUILD   := build
-SRC     := src/main.c src/socks5.c
-OBFS4   := src/obfs4.c
+# The obfs4 modules are linked into the proxy: the relay is live.
+SRC     := src/main.c src/socks5.c src/relay.c src/obfs4.c \
+           src/obfs4_frame.c src/obfs4_packet.c src/siphash24.c
+HEADERS := src/obfs4.h src/obfs4_frame.h src/obfs4_packet.h \
+           src/siphash24.h src/relay.h src/socks5.h
+# Protocol modules reused by the test binaries (no main/socks5/relay).
+PROTO   := src/obfs4.c src/obfs4_frame.c src/obfs4_packet.c \
+           src/siphash24.c
 VENDOR  := vendor/monocypher/monocypher.c
 
-.PHONY: all sanitize test vectors clean
+.PHONY: all sanitize test vectors relay-test clean
 
-all: $(BUILD)/umbra-pt-proxy $(BUILD)/obfs4.o
+all: $(BUILD)/umbra-pt-proxy
 
-$(BUILD)/umbra-pt-proxy: $(SRC)
+$(BUILD)/umbra-pt-proxy: $(SRC) $(HEADERS) $(BUILD)/monocypher.o
 	mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(HARDEN) $(SRC) -o $@ $(LDFLAGS)
-
-# Compile gate for the obfs4 handshake module (full hardening set). It
-# is deliberately NOT linked into the proxy binary yet: the relay stays
-# disabled until the framing layer lands (roadmap step 4).
-$(BUILD)/obfs4.o: $(OBFS4) src/obfs4.h
-	mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(HARDEN) $(SODIUM_CFLAGS) -c $(OBFS4) -o $@
+	$(CC) $(CFLAGS) $(HARDEN) $(SODIUM_CFLAGS) $(SRC) \
+	    $(BUILD)/monocypher.o -o $@ $(LDFLAGS) $(SODIUM_LIBS)
 
 $(BUILD)/monocypher.o: $(VENDOR)
 	mkdir -p $(BUILD)
@@ -53,34 +53,56 @@ $(BUILD)/monocypher-asan.o: $(VENDOR)
 	    -fno-omit-frame-pointer -c $(VENDOR) -o $@
 
 # Byte-exact vector tests against the Go reference (tests/govectors/).
-$(BUILD)/vectors: tests/vectors.c tests/vectors_fixtures.h $(OBFS4) $(BUILD)/monocypher.o
+$(BUILD)/vectors: tests/vectors.c tests/vectors_fixtures.h $(PROTO) $(HEADERS) $(BUILD)/monocypher.o
 	mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(HARDEN) $(SODIUM_CFLAGS) tests/vectors.c $(OBFS4) \
+	$(CC) $(CFLAGS) $(HARDEN) $(SODIUM_CFLAGS) tests/vectors.c $(PROTO) \
+	    $(BUILD)/monocypher.o -o $@ $(LDFLAGS) $(SODIUM_LIBS)
+
+# Test-only mock obfs4 bridge (server side) for the relay test. NEVER
+# installed; CI/dev tooling only.
+$(BUILD)/mockbridge: tests/mockbridge.c $(PROTO) $(HEADERS) $(BUILD)/monocypher.o
+	mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(HARDEN) $(SODIUM_CFLAGS) tests/mockbridge.c $(PROTO) \
 	    $(BUILD)/monocypher.o -o $@ $(LDFLAGS) $(SODIUM_LIBS)
 
 # ASan+UBSan gate build: every protocol-parser change MUST pass this
 # before merge (ADR-030 audit gate). NOTE: LeakSanitizer needs
 # ptrace_scope=0; on hardened kernels run tests with
 # LSAN_OPTIONS=detect_leaks=0 (the ASan/UBSan checks still run).
-sanitize: $(SRC) $(OBFS4) $(VENDOR) $(BUILD)/monocypher-asan.o
+sanitize: $(SRC) $(HEADERS) $(VENDOR) $(BUILD)/monocypher-asan.o
 	mkdir -p $(BUILD)
 	$(CC) -std=c11 -Wall -Wextra -Werror -Wpedantic -g -O1 \
 	    -fsanitize=address,undefined -fno-omit-frame-pointer \
-	    $(SRC) -o $(BUILD)/umbra-pt-proxy-asan
+	    $(SODIUM_CFLAGS) $(SRC) $(BUILD)/monocypher-asan.o \
+	    -o $(BUILD)/umbra-pt-proxy-asan $(SODIUM_LIBS)
 	$(CC) -std=c11 -Wall -Wextra -Werror -Wpedantic -g -O1 \
 	    -fsanitize=address,undefined -fno-omit-frame-pointer \
-	    $(SODIUM_CFLAGS) tests/vectors.c $(OBFS4) \
+	    $(SODIUM_CFLAGS) tests/vectors.c $(PROTO) \
 	    $(BUILD)/monocypher-asan.o -o $(BUILD)/vectors-asan \
+	    $(SODIUM_LIBS)
+	$(CC) -std=c11 -Wall -Wextra -Werror -Wpedantic -g -O1 \
+	    -fsanitize=address,undefined -fno-omit-frame-pointer \
+	    $(SODIUM_CFLAGS) tests/mockbridge.c $(PROTO) \
+	    $(BUILD)/monocypher-asan.o -o $(BUILD)/mockbridge-asan \
 	    $(SODIUM_LIBS)
 
 # Protocol integration tests (bash + /dev/tcp; no external tools).
 test: $(BUILD)/umbra-pt-proxy
 	LSAN_OPTIONS=detect_leaks=0 bash tests/socks5.sh
 
-# Handshake vector tests, normal and ASan/UBSan builds.
+# Handshake/framing vector tests, normal and ASan/UBSan builds.
 vectors: $(BUILD)/vectors sanitize
 	LSAN_OPTIONS=detect_leaks=0 $(BUILD)/vectors
 	LSAN_OPTIONS=detect_leaks=0 $(BUILD)/vectors-asan
+
+# End-to-end relay test: proxy <-> mock obfs4 bridge (test-only server),
+# SOCKS5-driven, echo round-trips. Runs against the normal AND the
+# ASan/UBSan builds of both binaries.
+relay-test: $(BUILD)/umbra-pt-proxy $(BUILD)/mockbridge sanitize
+	LSAN_OPTIONS=detect_leaks=0 bash tests/relay.sh \
+	    $(BUILD)/umbra-pt-proxy $(BUILD)/mockbridge
+	LSAN_OPTIONS=detect_leaks=0 bash tests/relay.sh \
+	    $(BUILD)/umbra-pt-proxy-asan $(BUILD)/mockbridge-asan
 
 clean:
 	rm -rf $(BUILD)

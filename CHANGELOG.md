@@ -22,17 +22,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   target). The SOCKS5 front-end (RFC 1928, no-auth CONNECT, bounded
   parsing, exact reply codes, deadline-guarded upstream dial) is
   implemented and integration-tested (`pt-proxy/tests/socks5.sh`, also
-  clean under ASan/UBSan); the DATA RELAY stays disabled until the
-  obfs4 protocol lands.
+  clean under ASan/UBSan).
 - **`pt-proxy` obfs4 client handshake** (roadmap step 3): ntor variant
   + Elligator 2 representatives, implemented in C against the Go
   reference (lyrebird) as the wire authority — libsodium (system) for
   X25519/HMAC-SHA256/HKDF-SHA256/SHA-512/CSPRNG, vendored Monocypher
   4.0.3 for Elligator 2 only. Verified BYTE-EXACT against fixtures
   dumped from the Go reference (`make vectors`, normal + ASan/UBSan
-  builds; regeneration recipe in `pt-proxy/tests/govectors/`). Not yet
-  wired into the connection path — the relay stays disabled until the
-  framing layer (step 4) lands.
+  builds; regeneration recipe in `pt-proxy/tests/govectors/`).
+- **`pt-proxy` obfs4 framing + packet layer + relay** (roadmap step 4):
+  XSalsa20-Poly1305 frames with SipHash-2-4-DRBG length obfuscation
+  (in-house streaming SipHash, cross-checked against libsodium's
+  one-shot variant and the Go DRBG block sequence), nonce
+  `prefix|counter-BE` from 1 with fatal wrap, the Bider
+  length-countermeasure, the packet layer (payload / PRNG-seed /
+  unknown types), and the poll-driven bidirectional relay wired into
+  the SOCKS5 path — the proxy now carries real traffic (iat-mode 0).
+  Verified byte-exact against Go framing fixtures (`make vectors`) and
+  end-to-end against `tests/mockbridge.c`, a reference-faithful
+  test-only obfs4 server (`make relay-test`: 1 KB / 5 KB / 100 KB echo
+  round-trips + fail-closed mid-handshake cut, normal and ASan/UBSan
+  builds). Runtime: `umbra-pt-proxy --socks HOST:PORT --obfs4-cert
+  CERT` (cert validated at startup, fail-closed).
 - Hermetic tests: PT config validation + builder tests (umbra-net),
   CLI/bridges-file plumbing tests (umbra-cli).
 

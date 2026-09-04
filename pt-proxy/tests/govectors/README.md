@@ -40,3 +40,9 @@ working as intended.
 - `vec_response`: the matching server response `Y' | AUTH | P_S | M_S |
   MAC_S`, plus `vec_key_seed` and the 144-byte HKDF key block
   (`vec_okm`) the C parser must derive.
+- `vec_drbg_seed` / `vec_drbg_blocks`: 16 consecutive SipHash-2-4-DRBG
+  length-mask blocks — pins down the streaming SipHash state machine.
+- Frame vectors: fixed per-direction key block, two encoded frames
+  (short + maximum-size payload) from the Go `framing.Encoder`, and the
+  corresponding decode expectations — byte-exact against the C framing
+  layer.
