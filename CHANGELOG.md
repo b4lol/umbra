@@ -36,6 +36,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Hermetic tests: PT config validation + builder tests (umbra-net),
   CLI/bridges-file plumbing tests (umbra-cli).
 
+### Fixed
+- `pair --peer-payload` / `pairing-sas --own-payload` / `--peer-payload`
+  no longer reject base64url payloads that legitimately START with '-'
+  (clap took them for flags: "unexpected argument '-W'…"; ~1/64 of
+  random payloads). `allow_hyphen_values` set + a parser regression
+  test.
+- Flaky CI hang in the `receive_reassembly_bounded` messenger test:
+  the test awaited the sender task while the undrained duplex read half
+  was still alive, deadlocking whenever scheduling left the sender
+  parked on the full buffer. The test now closes the pipe before
+  awaiting (150/150 full-parallel stress runs clean).
+
 ---
 
 ## [1.0.0-alpha.3] — 2026-09-03

@@ -133,11 +133,13 @@ pub enum Command {
     ExportPairing,
     /// Prints the shared 6-digit SAS code for two pairing payloads.
     PairingSas {
-        /// Own base64url pairing payload.
-        #[arg(long)]
+        /// Own base64url pairing payload (may legitimately start with
+        /// '-': the base64url alphabet contains '-').
+        #[arg(long, allow_hyphen_values = true)]
         own_payload: String,
-        /// Peer base64url pairing payload.
-        #[arg(long)]
+        /// Peer base64url pairing payload (may legitimately start with
+        /// '-': the base64url alphabet contains '-').
+        #[arg(long, allow_hyphen_values = true)]
         peer_payload: String,
     },
     /// Stores a peer's pairing payload under a name and prints the shared
@@ -146,8 +148,9 @@ pub enum Command {
         /// Friendly name for the peer ([A-Za-z0-9_-]+).
         #[arg(long)]
         peer_name: String,
-        /// Peer base64url pairing payload.
-        #[arg(long)]
+        /// Peer base64url pairing payload (may legitimately start with
+        /// '-': the base64url alphabet contains '-').
+        #[arg(long, allow_hyphen_values = true)]
         peer_payload: String,
         /// Peer's `.onion` service address (published by `umbra serve`);
         /// stored with the record for `send --peer`.
@@ -555,4 +558,41 @@ fn keygen(json: bool) -> Result<(), CliError> {
         output::line(&format!("ml-dsa-65-public={}", output::hex(&dsa)));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::Parser;
+
+    /// Regression: base64url pairing payloads may legitimately START
+    /// with '-' (the base64url alphabet contains it); clap must not
+    /// mistake them for flags. Observed in CI as `unexpected argument
+    /// '-W' found` in ~1/64 of runs.
+    #[test]
+    fn hyphen_leading_pairing_payloads_parse() {
+        let payload = "-W9wbGFjazEyMw";
+        let cli = Cli::try_parse_from([
+            "umbra",
+            "pair",
+            "--peer-name",
+            "mirror",
+            "--peer-payload",
+            payload,
+        ]);
+        assert!(cli.is_ok(), "pair with hyphen-leading payload must parse");
+
+        let cli = Cli::try_parse_from([
+            "umbra",
+            "pairing-sas",
+            "--own-payload",
+            payload,
+            "--peer-payload",
+            payload,
+        ]);
+        assert!(
+            cli.is_ok(),
+            "pairing-sas with hyphen-leading payloads must parse"
+        );
+    }
 }
