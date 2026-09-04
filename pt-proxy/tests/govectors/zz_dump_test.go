@@ -15,12 +15,15 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"strings"
 	"testing"
 
+	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/common/drbg"
 	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/internal/x25519ell2"
+	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/transports/obfs4/framing"
 )
 
 func dumpEmit(name string, b []byte) {
@@ -197,6 +200,90 @@ func TestDumpVectors(t *testing.T) {
 
 	// Derived link keys.
 	okm := Kdf(seed.Bytes()[:], 144)
+
+	// --- 3. Framing vectors ---------------------------------------------
+	// Fixed per-direction key block: 32 secretbox key | 16 nonce prefix |
+	// 16 SipHash key | 8 SipHash IV.
+	dirKeys := make([]byte, 72)
+	for i := range dirKeys {
+		dirKeys[i] = uint8(i*3 + 1)
+	}
+
+	// (a) DRBG mask sequence: 16 consecutive blocks from the DRBG seeded
+	// with dirKeys' SipHash key + IV.
+	{
+		drbgSeed, err := drbg.SeedFromBytes(dirKeys[48:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, err := drbg.NewHashDrbg(drbgSeed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		masks := make([]byte, 0, 16*8)
+		for i := 0; i < 16; i++ {
+			masks = append(masks, d.NextBlock()...)
+		}
+		dumpEmit("vec_drbg_seed", drbgSeed.Bytes()[:])
+		dumpEmit("vec_drbg_blocks", masks)
+	}
+
+	// (b) Encoded frame sequence: two payloads through a framing.Encoder.
+	payload1 := []byte("hello obfs4")
+	payload2 := make([]byte, 1427)
+	for i := range payload2 {
+		payload2[i] = uint8(i % 251)
+	}
+	var framesWire []byte
+	{
+		enc := framing.NewEncoder(dirKeys)
+		frame := make([]byte, framing.MaximumSegmentLength)
+		n, err := enc.Encode(frame, payload1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		framesWire = append(framesWire, frame[:n]...)
+		n, err = enc.Encode(frame, payload2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		framesWire = append(framesWire, frame[:n]...)
+	}
+	dumpEmit("vec_dir_keys", dirKeys)
+	dumpEmit("vec_payload1", payload1)
+	dumpEmit("vec_payload2", payload2)
+	dumpEmit("vec_frames_wire", framesWire)
+
+	// (c) Decode-side self-check: the reference decoder must recover both
+	// payloads from the wire bytes (guards the fixture itself).
+	{
+		dec := framing.NewDecoder(dirKeys)
+		buf := bytes.NewBuffer(append([]byte{}, framesWire...))
+		out := make([]byte, framing.MaximumFramePayloadLength)
+		n, err := dec.Decode(out, buf)
+		if err != nil || !hmac.Equal(out[:n], payload1) {
+			t.Fatalf("decode frame 1: %v", err)
+		}
+		n, err = dec.Decode(out, buf)
+		if err != nil || !hmac.Equal(out[:n], payload2) {
+			t.Fatalf("decode frame 2: %v", err)
+		}
+	}
+
+	// (d) Packet-layer vector: a payload packet WITH padding, framed.
+	packetWire := []byte(nil)
+	{
+		enc := framing.NewEncoder(dirKeys)
+		pkt := []byte{0x00, 0x00, 0x05, 'h', 'e', 'l', 'l', 'o'}
+		pkt = append(pkt, make([]byte, 11)...) // 11 zero padding bytes
+		frame := make([]byte, framing.MaximumSegmentLength)
+		n, err := enc.Encode(frame, pkt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		packetWire = frame[:n]
+	}
+	dumpEmit("vec_packet_wire", packetWire)
 
 	dumpEmit("vec_node_id", nodeID.Bytes()[:])
 	certRaw := append(nodeID.Bytes()[:], idKp.Public().Bytes()[:]...)

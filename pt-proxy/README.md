@@ -1,9 +1,12 @@
 # umbra-pt-proxy — Standalone Pluggable Transport Proxy
 
-> **Status: PARTIAL — NOT FUNCTIONAL.** The listener, SOCKS5 front-end
-> and the obfs4 ntor/Elligator handshake are in place and verified
-> byte-exact against the Go reference; the framing layer (roadmap step
-> 4) is NOT implemented, so no real traffic can flow yet. Do not deploy.
+> **Status: FUNCTIONAL CORE (iat-mode 0).** SOCKS5 front-end, obfs4
+> ntor/Elligator handshake, framing and packet layers are implemented
+> and verified byte-exact against the Go reference (lyrebird); the
+> end-to-end relay is integration-tested against a reference-faithful
+> mock bridge (`make relay-test`, also under ASan/UBSan). NOT yet done:
+> iat-mode timing obfuscation (step 5) and live interop against a real
+> bridge (step 6).
 
 A standalone, OS-managed pluggable-transport client proxy for Umbra's
 censorship-circumvention path (TODO B.1, **ADR-030**). It runs as a
@@ -42,11 +45,16 @@ mitigations still apply.
 
 ```sh
 make            # hardened release build into build/umbra-pt-proxy
-make sanitize   # ASan+UBSan builds (proxy + vector tests)
+make sanitize   # ASan+UBSan builds (proxy + all test binaries)
 make test       # SOCKS5 integration tests
-make vectors    # obfs4 handshake vector tests (normal + ASan builds)
+make vectors    # obfs4 handshake/framing vector tests (normal + ASan)
+make relay-test # end-to-end tunnel tests via the test-only mock bridge
 make clean
 ```
+
+Runtime: `umbra-pt-proxy --socks 127.0.0.1:PORT --obfs4-cert CERT`
+where CERT is the `cert=` value of the bridge line. A missing or
+malformed cert fails the process at startup, before any accept.
 
 ## Roadmap (each step gated on the previous one)
 
@@ -55,21 +63,30 @@ make clean
 2. [x] SOCKS5 CONNECT handshake (RFC 1928, no-auth only, loopback
        peers) with exact reply codes, bounded parsing, I/O deadlines,
        and a deadline-guarded non-blocking upstream dial — integration
-       tested (`make test`, also under ASan/UBSan). The data relay is
-       deliberately DISABLED until obfs4 lands: a successful dial is
-       answered and immediately torn down with a stderr diagnostic.
+       tested (`make test`, also under ASan/UBSan). (The data relay was
+       kept disabled here until step 4 enabled it.)
 3. [x] obfs4 handshake: X25519 + Elligator 2 representative, ntor
        variant — implemented per the Go reference (lyrebird), which is
        the deployed wire definition, and verified BYTE-EXACT against
        fixtures dumped from it (`make vectors`, also under ASan/UBSan;
-       see `tests/govectors/`). Scope note: the module is compiled and
-       tested but NOT yet wired into the connection path — the relay
-       stays disabled until step 4 lands. Constant-time properties come
-       from libsodium + Monocypher (audited upstreams); the glue code
-       here performs no secret-dependent branching beyond the reference
+       see `tests/govectors/`). Constant-time properties come from
+       libsodium + Monocypher (audited upstreams); the glue code here
+       performs no secret-dependent branching beyond the reference
        implementation's own mark scan.
-4. [ ] obfs4 framing (length-obfuscated frames, NaCl-secretbox
-       equivalent — primitive choice must be re-reviewed then).
+4. [x] obfs4 framing + packet layer + relay: XSalsa20-Poly1305 frames
+       (libsodium secretbox) with SipHash-2-4-DRBG-obfuscated lengths
+       (in-house streaming SipHash, cross-checked against libsodium's
+       one-shot SipHash AND the Go DRBG block sequence), nonce
+       prefix|counter-BE from 1, the Bider length-countermeasure, the
+       packet layer (payload/PRNG-seed/unknown-types), and the
+       poll-driven bidirectional relay wired into the SOCKS5 path.
+       Verified byte-exact against Go framing vectors AND end-to-end
+       against `tests/mockbridge.c` (a reference-faithful test-only
+       server) with 1 KB / 5 KB / 100 KB echo round-trips and a
+       fail-closed mid-handshake cut (`make relay-test`, normal +
+       ASan/UBSan builds). Client traffic shape note: one uniform
+       padding burst per write burst — a documented deviation from Go's
+       probdist shaping, wire-compatible (iat-mode 0).
 5. [ ] iat-mode timing obfuscation.
 6. [ ] Interop tests against the reference (Go) lyrebird, ASan/UBSan
        clean, fuzz harness for the handshake parser.

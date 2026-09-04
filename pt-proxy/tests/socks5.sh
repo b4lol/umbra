@@ -4,7 +4,8 @@
 # Hermetic: drives the loopback listener with raw bytes over bash
 # /dev/tcp — no external tools, no network. Covers: method negotiation,
 # CONNECT reply codes (refused / unsupported command / success-then-
-# loud-teardown), the domain address form, and protocol garbage.
+# fail-closed tunnel teardown), the domain address form, and protocol
+# garbage.
 #
 # Usage: tests/socks5.sh [path-to-binary]   (default build/umbra-pt-proxy)
 
@@ -15,17 +16,21 @@ PORT=19470
 TARGET=19471
 FAIL=0
 
+# The SOCKS5 layer never inspects the cert; any well-formed one does
+# (this is the fixtures' cert from tests/vectors_fixtures.h).
+DUMMY_CERT="oKGio6SlpqeoqaqrrK2ur7CxsrOIt9D+sdvcnN76KoFFA+4rvlRo4Xo9AGjk+CO/L5TRQg"
+
 cleanup() {
     [ -n "${PROXY_PID:-}" ] && kill "$PROXY_PID" 2>/dev/null
     [ -n "${TARGET_PID:-}" ] && kill "$TARGET_PID" 2>/dev/null
 }
 trap cleanup EXIT
 
-"$BIN" --socks "127.0.0.1:$PORT" 2>/dev/null &
+"$BIN" --socks "127.0.0.1:$PORT" --obfs4-cert "$DUMMY_CERT" 2>/dev/null &
 PROXY_PID=$!
 # A second instance acts as the "upstream bridge" listener for the
 # success-path dial test.
-"$BIN" --socks "127.0.0.1:$TARGET" 2>/dev/null &
+"$BIN" --socks "127.0.0.1:$TARGET" --obfs4-cert "$DUMMY_CERT" 2>/dev/null &
 TARGET_PID=$!
 sleep 0.4
 
@@ -76,8 +81,9 @@ OUT=$(hex_dump 2; hex_dump 10)
 exec 3<&- 3>&-
 check "bind -> 0x07" "050005070001000000000000" "$OUT"
 
-# --- 5. CONNECT to a live listener succeeds (0x00), then the scaffold
-#        tears the tunnel down (relay disabled until obfs4) ---
+# --- 5. CONNECT to a live listener succeeds (0x00); the tunnel then
+#        dies fail-closed: the "upstream" is another proxy instance that
+#        never speaks obfs4, so the handshake aborts. ---
 exec 3<>"/dev/tcp/127.0.0.1/$PORT"
 printf '\x05\x01\x00\x05\x01\x00\x01\x7f\x00\x00\x01\x4c\x0f' >&3
 OUT=$(hex_dump 2; hex_dump 10)
