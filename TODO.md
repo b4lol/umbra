@@ -71,7 +71,7 @@ This list contains the technical tasks planned for the step-by-step implementati
 
 ## B.1 Advanced Network, Censorship Resistance & Mesh (`umbra-net`)
 
-- [ ] Pluggable Transports (Obfs4 and Snowflake WebRTC) integration for censored networks. *(PARTIAL 2026-09: unmanaged-PT (loopback SOCKS5) support LANDED — `--pt-socks` + `--bridge` on serve/send/tui, ADR-030; the managed-PT (binary-spawning) model is REJECTED (Seccomp/Landlock). Standalone C proxy skeleton (`pt-proxy/`) started under the ADR-030 scoped C exception — obfs4 protocol NOT yet implemented. Snowflake: BLOCKED, no Rust/C client exists.)*
+- [ ] Pluggable Transports (Obfs4 and Snowflake WebRTC) integration for censored networks. *(PARTIAL 2026-09: unmanaged-PT (loopback SOCKS5) support LANDED — `--pt-socks` + `--bridge` on serve/send/tui, ADR-030; the managed-PT (binary-spawning) model is REJECTED (Seccomp/Landlock). Standalone C proxy (`pt-proxy/`) under the ADR-030 scoped C exception: SOCKS5 front-end, obfs4 ntor/Elligator handshake, framing/packet layers and the relay LANDED — byte-exact against Go-reference vectors and end-to-end tested against a reference-faithful mock bridge (`make vectors` / `make relay-test`, ASan/UBSan clean). OPEN: iat-mode timing obfuscation, live interop against a real bridge. Snowflake: BLOCKED, no Rust/C client exists.)*
 - [ ] Offline Mesh Protocol (BLE & Wi-Fi Direct DTN) for internet-less crisis environments.
 - [ ] Nym Mixnet / Loopix delayed packet-mixing adapter.
 
