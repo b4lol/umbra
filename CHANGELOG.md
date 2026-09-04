@@ -24,6 +24,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   implemented and integration-tested (`pt-proxy/tests/socks5.sh`, also
   clean under ASan/UBSan); the DATA RELAY stays disabled until the
   obfs4 protocol lands.
+- **`pt-proxy` obfs4 client handshake** (roadmap step 3): ntor variant
+  + Elligator 2 representatives, implemented in C against the Go
+  reference (lyrebird) as the wire authority — libsodium (system) for
+  X25519/HMAC-SHA256/HKDF-SHA256/SHA-512/CSPRNG, vendored Monocypher
+  4.0.3 for Elligator 2 only. Verified BYTE-EXACT against fixtures
+  dumped from the Go reference (`make vectors`, normal + ASan/UBSan
+  builds; regeneration recipe in `pt-proxy/tests/govectors/`). Not yet
+  wired into the connection path — the relay stays disabled until the
+  framing layer (step 4) lands.
 - Hermetic tests: PT config validation + builder tests (umbra-net),
   CLI/bridges-file plumbing tests (umbra-cli).
 

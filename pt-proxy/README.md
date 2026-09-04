@@ -1,8 +1,9 @@
-# umbra-pt-proxy — Standalone Pluggable Transport Proxy (Skeleton)
+# umbra-pt-proxy — Standalone Pluggable Transport Proxy
 
-> **Status: SKELETON — NOT FUNCTIONAL.** The listener, argument handling
-> and hardening scaffolding are in place; the obfs4 protocol itself is
-> NOT implemented. Do not deploy.
+> **Status: PARTIAL — NOT FUNCTIONAL.** The listener, SOCKS5 front-end
+> and the obfs4 ntor/Elligator handshake are in place and verified
+> byte-exact against the Go reference; the framing layer (roadmap step
+> 4) is NOT implemented, so no real traffic can flow yet. Do not deploy.
 
 A standalone, OS-managed pluggable-transport client proxy for Umbra's
 censorship-circumvention path (TODO B.1, **ADR-030**). It runs as a
@@ -30,9 +31,20 @@ the risk into a component that is:
 
 ## Build
 
+Dependencies: a C11 compiler, `make`, and the system **libsodium**
+development package (`libsodium-devel` / `libsodium-dev`; X25519,
+HMAC-SHA256, HKDF-SHA256, CSPRNG). **Monocypher 4.0.3** (Elligator 2
+only) is vendored under `vendor/monocypher/` — tarball SHA-256
+`8cc9bc341a66249016db9bd70e9142d8d0aef9945973744b1ac05dbc55d8ee66`,
+upstream SHA-512 verified at import time. Vendored files are built
+with a relaxed warning set (documented in the Makefile); the hardening
+mitigations still apply.
+
 ```sh
 make            # hardened release build into build/umbra-pt-proxy
-make sanitize   # ASan+UBSan build into build/umbra-pt-proxy-asan
+make sanitize   # ASan+UBSan builds (proxy + vector tests)
+make test       # SOCKS5 integration tests
+make vectors    # obfs4 handshake vector tests (normal + ASan builds)
 make clean
 ```
 
@@ -46,9 +58,16 @@ make clean
        tested (`make test`, also under ASan/UBSan). The data relay is
        deliberately DISABLED until obfs4 lands: a successful dial is
        answered and immediately torn down with a stderr diagnostic.
-3. [ ] obfs4 handshake: X25519 + Elligator 2 representative, ntor
-       variant per the obfs4 spec — requires a constant-time field
-       arithmetic audit BEFORE first use.
+3. [x] obfs4 handshake: X25519 + Elligator 2 representative, ntor
+       variant — implemented per the Go reference (lyrebird), which is
+       the deployed wire definition, and verified BYTE-EXACT against
+       fixtures dumped from it (`make vectors`, also under ASan/UBSan;
+       see `tests/govectors/`). Scope note: the module is compiled and
+       tested but NOT yet wired into the connection path — the relay
+       stays disabled until step 4 lands. Constant-time properties come
+       from libsodium + Monocypher (audited upstreams); the glue code
+       here performs no secret-dependent branching beyond the reference
+       implementation's own mark scan.
 4. [ ] obfs4 framing (length-obfuscated frames, NaCl-secretbox
        equivalent — primitive choice must be re-reviewed then).
 5. [ ] iat-mode timing obfuscation.
