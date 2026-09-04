@@ -542,6 +542,12 @@ async fn receive_reassembly_bounded() -> Result<(), Box<dyn std::error::Error + 
         result.is_err(),
         "an oversized message must fail the responder"
     );
+    // Close the pipe BEFORE awaiting the sender: the responder returned
+    // without draining the stream, so a sender parked on the full duplex
+    // buffer would otherwise wait forever for a reader that never comes.
+    // Dropping the read side fails its pending write with BrokenPipe.
+    // (Observed as a CI deadlock under parallel test load.)
+    drop(b_side);
     let _ = sender.await;
     Ok(())
 }
