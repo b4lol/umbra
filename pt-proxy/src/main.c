@@ -193,7 +193,9 @@ int main(int argc, char **argv)
     uint16_t port = 0;
     const char *spec = DEFAULT_HOST ":" DEFAULT_PORT;
     const char *cert_b64 = NULL;
+    const char *iat_str = NULL;
     Obfs4BridgeCert cert;
+    long iat_mode = -1;
     int listener;
     struct sigaction sa;
     int i;
@@ -205,14 +207,19 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[i], "--obfs4-cert") == 0 && i + 1 < argc) {
             cert_b64 = argv[i + 1];
             i++;
+        } else if (strcmp(argv[i], "--iat-mode") == 0 && i + 1 < argc) {
+            iat_str = argv[i + 1];
+            i++;
         } else {
             fprintf(stderr,
-                    "usage: %s [--socks HOST:PORT] --obfs4-cert CERT  "
-                    "(loopback only)\n",
+                    "usage: %s [--socks HOST:PORT] --obfs4-cert CERT "
+                    "--iat-mode 0|1|2  (loopback only)\n",
                     argv[0]);
             return 2;
         }
     }
+    /* Both bridge-line parameters are REQUIRED (Go parity: the client
+     * errors out on a missing iat-mode; fail-closed before accept). */
     if (cert_b64 == NULL || sodium_init() < 0 ||
         obfs4_cert_parse(&cert, cert_b64) != OBFS4_OK) {
         fprintf(stderr,
@@ -220,6 +227,14 @@ int main(int argc, char **argv)
                 "(bridge line cert= value)\n");
         return 2;
     }
+    if (iat_str == NULL || iat_str[0] == '\0' || iat_str[1] != '\0' ||
+        iat_str[0] < '0' || iat_str[0] > '2') {
+        fprintf(stderr,
+                "umbra-pt-proxy: missing or invalid --iat-mode "
+                "(bridge line iat-mode value, 0/1/2)\n");
+        return 2;
+    }
+    iat_mode = (long)(iat_str[0] - '0');
     if (parse_endpoint(spec, host, sizeof(host), &port) != 0) {
         fprintf(stderr, "umbra-pt-proxy: invalid endpoint '%s'\n", spec);
         return 2;
@@ -237,8 +252,9 @@ int main(int argc, char **argv)
     if (listener < 0) {
         return 1;
     }
-    fprintf(stderr, "umbra-pt-proxy: listening on %s:%u (obfs4 client)\n",
-            host, (unsigned int)port);
+    fprintf(stderr,
+            "umbra-pt-proxy: listening on %s:%u (obfs4 client, iat-mode %ld)\n",
+            host, (unsigned int)port, iat_mode);
 
     while (!g_stop) {
         int conn = accept4(listener, NULL, NULL, SOCK_CLOEXEC);
@@ -253,7 +269,7 @@ int main(int argc, char **argv)
          * loopback-only, Umbra serializes its per-peer sessions, and
          * per-connection work is bounded by the I/O deadlines. A
          * threaded model would need its own review. */
-        socks5_handle(conn, &cert);
+        socks5_handle(conn, &cert, (int)iat_mode);
         close(conn);
     }
 

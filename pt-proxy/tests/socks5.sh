@@ -26,11 +26,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-"$BIN" --socks "127.0.0.1:$PORT" --obfs4-cert "$DUMMY_CERT" 2>/dev/null &
+"$BIN" --socks "127.0.0.1:$PORT" --obfs4-cert "$DUMMY_CERT" --iat-mode 0 2>/dev/null &
 PROXY_PID=$!
 # A second instance acts as the "upstream bridge" listener for the
 # success-path dial test.
-"$BIN" --socks "127.0.0.1:$TARGET" --obfs4-cert "$DUMMY_CERT" 2>/dev/null &
+"$BIN" --socks "127.0.0.1:$TARGET" --obfs4-cert "$DUMMY_CERT" --iat-mode 0 2>/dev/null &
 TARGET_PID=$!
 sleep 0.4
 

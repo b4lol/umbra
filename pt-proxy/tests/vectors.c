@@ -12,6 +12,7 @@
 
 #include "../src/obfs4_frame.h"
 #include "../src/obfs4_packet.h"
+#include "../src/probdist.h"
 #include "../src/siphash24.h"
 
 #include <sodium.h>
@@ -537,6 +538,80 @@ static void test_packet(void)
     sodium_memzero(&dk, sizeof(dk));
 }
 
+/* Bit-exact comparison of one distribution table against a Go fixture
+ * (float64 compared by bit pattern — the Go table is the definition). */
+static void check_dist(const char *name, int32_t max,
+                       const uint8_t *seed, int32_t want_n,
+                       const int32_t *want_values, const uint64_t *want_weights,
+                       const int32_t *want_alias, const uint64_t *want_prob)
+{
+    Obfs4Dist d;
+    char label[96];
+    int ok = 1;
+    int32_t i;
+
+    probdist_reset(&d, max, seed);
+    CHECK(d.n == want_n, name);
+    if (d.n != want_n) {
+        probdist_wipe(&d);
+        return;
+    }
+    for (i = 0; i < want_n; i++) {
+        if (d.values[i] != want_values[i] || d.alias[i] != want_alias[i] ||
+            memcmp(&d.weights[i], &want_weights[i], sizeof(double)) != 0 ||
+            memcmp(&d.prob[i], &want_prob[i], sizeof(double)) != 0) {
+            ok = 0;
+            break;
+        }
+    }
+    snprintf(label, sizeof(label), "%s table bit-exact", name);
+    CHECK(ok, label);
+
+    /* Sampling is CSPRNG-driven in BOTH implementations (Go csrand), so
+     * only structure is testable: 100k samples stay inside [0, max]. */
+    ok = 1;
+    for (i = 0; i < 100000; i++) {
+        int32_t s = probdist_sample(&d);
+        if (s < 0 || s > max) {
+            ok = 0;
+            break;
+        }
+    }
+    snprintf(label, sizeof(label), "%s 100k samples in range", name);
+    CHECK(ok, label);
+    probdist_wipe(&d);
+}
+
+static void test_probdist(void)
+{
+    uint8_t seed0[GORAND_SEED_LEN];
+    uint8_t seed1[GORAND_SEED_LEN];
+    uint8_t iat_seed_src[crypto_hash_sha256_BYTES];
+    size_t i;
+
+    for (i = 0u; i < GORAND_SEED_LEN; i++) {
+        seed0[i] = (uint8_t)(i * 5u);
+        seed1[i] = (uint8_t)(0xa5u ^ i);
+    }
+
+    check_dist("len_dist", 1448, seed0, vec_len_dist_N,
+               vec_len_dist_values, vec_len_dist_weights,
+               vec_len_dist_alias, vec_len_dist_prob);
+    check_dist("len_dist2", 1448, seed1, vec_len_dist2_N,
+               vec_len_dist2_values, vec_len_dist2_weights,
+               vec_len_dist2_alias, vec_len_dist2_prob);
+
+    /* The iat chain: iatSeed = SHA-256(lenSeed), table over [0, 100]. */
+    crypto_hash_sha256(iat_seed_src, seed0, sizeof(seed0));
+    check_dist("iat_dist", 100, iat_seed_src, vec_iat_dist_N,
+               vec_iat_dist_values, vec_iat_dist_weights,
+               vec_iat_dist_alias, vec_iat_dist_prob);
+
+    sodium_memzero(seed0, sizeof(seed0));
+    sodium_memzero(seed1, sizeof(seed1));
+    sodium_memzero(iat_seed_src, sizeof(iat_seed_src));
+}
+
 int main(void)
 {
     if (sodium_init() < 0) {
@@ -550,6 +625,7 @@ int main(void)
     test_siphash();
     test_framing();
     test_packet();
+    test_probdist();
 
     if (failures != 0u) {
         printf("%u check(s) FAILED\n", failures);

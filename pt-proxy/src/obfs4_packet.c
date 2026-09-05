@@ -117,12 +117,19 @@ Obfs4Status obfs4_packet_parse(const uint8_t *frame_payload,
         *payload_len = plen;
         return OBFS4_OK;
     case OBFS4_PACKET_TYPE_PRNG_SEED:
-        /* iat-mode 0: we do no length shaping, so the seed carries no
-         * meaning for us; it is accepted and ignored either way. */
-        *kind = plen == OBFS4_SEED_PAYLOAD_LEN ? OBFS4_PKT_SEED
-                                               : OBFS4_PKT_IGNORED;
-        *payload = NULL;
-        *payload_len = 0u;
+        /* A well-formed seed packet (24-byte payload) carries the
+         * server's length-distribution seed; iat-mode uses it to reset
+         * the shaping tables. Malformed sizes are ignored per the
+         * reference. */
+        if (plen == OBFS4_SEED_PAYLOAD_LEN) {
+            *kind = OBFS4_PKT_SEED;
+            *payload = frame_payload + OBFS4_PACKET_OVERHEAD;
+            *payload_len = plen;
+        } else {
+            *kind = OBFS4_PKT_IGNORED;
+            *payload = NULL;
+            *payload_len = 0u;
+        }
         return OBFS4_OK;
     default:
         *kind = OBFS4_PKT_IGNORED;

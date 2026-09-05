@@ -42,8 +42,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   end-to-end against `tests/mockbridge.c`, a reference-faithful
   test-only obfs4 server (`make relay-test`: 1 KB / 5 KB / 100 KB echo
   round-trips + fail-closed mid-handshake cut, normal and ASan/UBSan
-  builds). Runtime: `umbra-pt-proxy --socks HOST:PORT --obfs4-cert
-  CERT` (cert validated at startup, fail-closed).
+  builds).
+- **`pt-proxy` iat-mode traffic shaping** (roadmap step 5): the length
+  and inter-arrival-time distributions behind obfs4's iat-mode 0/1/2.
+  Go `math/rand.Rand` helper semantics (Int63/Int31n/Float64/Perm)
+  replicated over the obfs4 SipHash-2-4-OFB DRBG (`src/gorand.c`) and
+  the uniform weighted-distribution tables via Vose's alias method
+  (`src/probdist.c`), both pinned BIT-EXACT against fixtures dumped
+  from lyrebird's `common/probdist` (`make vectors`). Per connection:
+  distributions seed locally and RESET on the bridge's PRNG-seed packet
+  (iat seed = SHA-256 of the length seed, Go parity); inter-chunk
+  delays are scheduled via poll deadlines — never slept inline — with a
+  bounded 4-slot pending queue that backpressures the SOCKS5 client;
+  paranoid mode (2) chops every burst at sampled lengths and pads the
+  tail up with Go padBurst semantics (resample on wrap; a sampled 0 is
+  redrawn where Go panics). Mode-2 bursts are queued raw and encoded
+  only at the head of the queue so payload frames and flush-time
+  pad-ups advance the framing DRBG in wire order. Verified end-to-end
+  in all three iat modes plus the fail-closed cut (`make relay-test`,
+  normal and ASan/UBSan). Runtime gains a REQUIRED `--iat-mode 0|1|2`
+  argument (missing/invalid fails at startup, before any accept).
+  Honest shaping notes: distribution tables are byte-exact, individual
+  samples are CSPRNG-drawn (as Go's csrand does), and delays quantize
+  up to whole milliseconds.
 - Hermetic tests: PT config validation + builder tests (umbra-net),
   CLI/bridges-file plumbing tests (umbra-cli).
 

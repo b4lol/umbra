@@ -18,10 +18,15 @@ git clone https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports
 cd lyrebird
 git checkout fc105a03c0e0acc2479301c361c012ffed359c43
 cp /path/to/umbra/pt-proxy/tests/govectors/zz_dump_test.go common/ntor/
-go test ./common/ntor/ -run TestDumpVectors -v \
-  | grep -v '^=== RUN\|^--- PASS\|^PASS\|^ok  \|^=== CONT' \
-  | grep -v 'zz_dump_test.go' \
-  > /path/to/umbra/pt-proxy/tests/vectors_fixtures.h
+cp /path/to/umbra/pt-proxy/tests/govectors/zz_dump_probdist_test.go common/probdist/
+{
+  go test ./common/ntor/ -run TestDumpVectors -v \
+    | grep -v '^=== RUN\|^--- PASS\|^PASS\|^ok  \|^=== CONT' \
+    | grep -v 'zz_dump_test.go'
+  go test ./common/probdist/ -run TestDumpProbdist -v \
+    | grep -v '^=== RUN\|^--- PASS\|^PASS\|^ok  \|^=== CONT' \
+    | grep -v 'zz_dump_probdist_test.go'
+} > /path/to/umbra/pt-proxy/tests/vectors_fixtures.h
 ```
 
 The test self-verifies before printing: client and server ntor halves
@@ -46,3 +51,10 @@ working as intended.
   (short + maximum-size payload) from the Go `framing.Encoder`, and the
   corresponding decode expectations — byte-exact against the C framing
   layer.
+- `vec_probdist_*`: the length-distribution shaping primitives from
+  `zz_dump_probdist_test.go` (separate `common/probdist` package):
+  Go `math/rand.Rand` helper semantics (Int63/Int31n/Float64/Perm) over
+  the obfs4 SipHash-2-4-OFB DRBG, the uniform weighted-distribution
+  tables (values/weights/alias/prob from Vose's method), and a
+  100k-sample stream whose full range must be reproducible. Byte-exact
+  against `src/gorand.c` + `src/probdist.c`.

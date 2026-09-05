@@ -26,7 +26,8 @@
  * CONNECT, bounded upstream dial, reply, obfs4 relay, teardown). Never
  * returns a status: all failures are logged and the connection is
  * closed — the caller owns no error path. `cert` is the bridge's obfs4
- * certificate (validated once at startup). */
-void socks5_handle(int conn_fd, const Obfs4BridgeCert *cert);
+ * certificate and `iat_mode` the bridge's iat-mode (both validated
+ * once at startup). */
+void socks5_handle(int conn_fd, const Obfs4BridgeCert *cert, int iat_mode);
 
 #endif /* UMBRA_PT_SOCKS5_H */
