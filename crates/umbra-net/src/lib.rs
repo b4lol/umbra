@@ -9,8 +9,9 @@
 //! - [`cover`]: Poisson cover-traffic pump (TODO A.3, ADR-005).
 //! - `feature = "tor"`: embedded Arti Tor v3 transport (TODO A.2).
 //!
-//! Pluggable Transports (Obfs4/Snowflake), the Nym mixnet adapter, and the
-//! BLE/Wi-Fi Direct Off-Grid Mesh are v2+ scope (ADR-027).
+//! Pluggable Transports (Obfs4/Snowflake) and the Nym mixnet adapter are
+//! v2+ scope (ADR-027). `feature = "mesh"`: Wi-Fi Direct off-grid mesh
+//! transport (TODO B.1); BLE is a documented future increment.
 
 #![forbid(unsafe_code)]
 
@@ -22,6 +23,9 @@ pub mod transport;
 
 #[cfg(feature = "tor")]
 pub mod tor;
+
+#[cfg(feature = "mesh")]
+pub mod mesh;
 
 pub use addr::OnionAddr;
 pub use cover::CoverPump;
