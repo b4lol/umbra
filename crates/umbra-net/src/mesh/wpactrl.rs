@@ -45,7 +45,8 @@ pub enum WpaEvent {
 /// Strips a leading `<N>` `wpa_supplicant` priority marker, if present.
 fn strip_priority(line: &str) -> &str {
     if let Some(rest) = line.strip_prefix('<')
-        && let Some(close) = rest.find('>') {
+        && let Some(close) = rest.find('>')
+    {
         return &rest[close.saturating_add(1)..];
     }
     line
@@ -73,10 +74,12 @@ pub fn parse_event_line(line: &str) -> WpaEvent {
             },
             _ => WpaEvent::Other(body.to_string()),
         },
-        Some("P2P-GO-NEG-REQUEST") => match parts.next().and_then(|s| MeshPeerAddr::parse(s).ok()) {
-            Some(peer) => WpaEvent::GoNegRequest { peer },
-            None => WpaEvent::Other(body.to_string()),
-        },
+        Some("P2P-GO-NEG-REQUEST") => {
+            match parts.next().and_then(|s| MeshPeerAddr::parse(s).ok()) {
+                Some(peer) => WpaEvent::GoNegRequest { peer },
+                None => WpaEvent::Other(body.to_string()),
+            }
+        }
         Some("P2P-GROUP-FORMATION-FAILURE") => WpaEvent::GroupFormationFailure,
         _ => WpaEvent::Other(body.to_string()),
     }
@@ -233,14 +236,15 @@ mod event_parsing_tests {
     }
 
     #[test]
-    fn parses_go_neg_request() {
+    fn parses_go_neg_request() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let event = parse_event_line("<3>P2P-GO-NEG-REQUEST aa:bb:cc:dd:ee:ff dev_passwd_id=4");
         assert_eq!(
             event,
             WpaEvent::GoNegRequest {
-                peer: MeshPeerAddr::parse("aa:bb:cc:dd:ee:ff").expect("valid fixture")
+                peer: MeshPeerAddr::parse("aa:bb:cc:dd:ee:ff")?
             }
         );
+        Ok(())
     }
 
     #[test]
@@ -252,7 +256,10 @@ mod event_parsing_tests {
     #[test]
     fn unrecognized_line_falls_back_to_other() {
         let event = parse_event_line("<3>CTRL-EVENT-SCAN-STARTED");
-        assert_eq!(event, WpaEvent::Other("CTRL-EVENT-SCAN-STARTED".to_string()));
+        assert_eq!(
+            event,
+            WpaEvent::Other("CTRL-EVENT-SCAN-STARTED".to_string())
+        );
     }
 
     #[test]
@@ -291,64 +298,72 @@ mod wpa_ctrl_tests {
         (base.with_extension("client"), base.with_extension("daemon"))
     }
 
+    /// Shorthand for the boxed error type every test in this module
+    /// returns (the workspace denies `clippy::expect_used`, so tests
+    /// propagate failures with `?` instead of panicking).
+    type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
+    /// Joins a fake-daemon responder's `JoinHandle`, propagating either
+    /// a task panic or the responder's own `Err` as a single `TestResult`.
+    async fn join_responder(responder: tokio::task::JoinHandle<TestResult>) -> TestResult {
+        responder.await??;
+        Ok(())
+    }
+
     #[tokio::test]
-    async fn request_round_trips_through_a_fake_daemon() {
+    async fn request_round_trips_through_a_fake_daemon() -> TestResult {
         let (client_path, daemon_path) = socket_paths("request");
-        let daemon = UnixDatagram::bind(&daemon_path).expect("bind fake daemon");
-        let ctrl = WpaCtrl::connect(&client_path, &daemon_path)
-            .await
-            .expect("client connect");
+        let daemon = UnixDatagram::bind(&daemon_path)?;
+        let ctrl = WpaCtrl::connect(&client_path, &daemon_path).await?;
 
-        let responder = tokio::spawn(async move {
+        let responder: tokio::task::JoinHandle<TestResult> = tokio::spawn(async move {
             let mut buf = [0u8; 256];
-            let (len, from) = daemon.recv_from(&mut buf).await.expect("recv");
-            assert_eq!(&buf[..len], b"PING");
-            daemon
-                .send_to(b"PONG", from.as_pathname().expect("named socket"))
-                .await
-                .expect("reply");
+            let (len, from) = daemon.recv_from(&mut buf).await?;
+            let received = buf.get(..len).ok_or("recv buffer slice out of bounds")?;
+            assert_eq!(received, b"PING");
+            let from = from.as_pathname().ok_or("expected a named socket")?;
+            daemon.send_to(b"PONG", from).await?;
+            Ok(())
         });
 
-        let reply = ctrl.request("PING").await.expect("request");
+        let reply = ctrl.request("PING").await?;
         assert_eq!(reply, "PONG");
-        responder.await.expect("responder task");
+        join_responder(responder).await?;
 
         let _ = std::fs::remove_file(&client_path);
         let _ = std::fs::remove_file(&daemon_path);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn attach_succeeds_when_daemon_answers_ok() {
+    async fn attach_succeeds_when_daemon_answers_ok() -> TestResult {
         let (client_path, daemon_path) = socket_paths("attach");
-        let daemon = UnixDatagram::bind(&daemon_path).expect("bind fake daemon");
-        let ctrl = WpaCtrl::connect(&client_path, &daemon_path)
-            .await
-            .expect("client connect");
+        let daemon = UnixDatagram::bind(&daemon_path)?;
+        let ctrl = WpaCtrl::connect(&client_path, &daemon_path).await?;
 
-        let responder = tokio::spawn(async move {
+        let responder: tokio::task::JoinHandle<TestResult> = tokio::spawn(async move {
             let mut buf = [0u8; 256];
-            let (len, from) = daemon.recv_from(&mut buf).await.expect("recv");
-            assert_eq!(&buf[..len], b"ATTACH");
-            daemon
-                .send_to(b"OK", from.as_pathname().expect("named socket"))
-                .await
-                .expect("reply");
+            let (len, from) = daemon.recv_from(&mut buf).await?;
+            let received = buf.get(..len).ok_or("recv buffer slice out of bounds")?;
+            assert_eq!(received, b"ATTACH");
+            let from = from.as_pathname().ok_or("expected a named socket")?;
+            daemon.send_to(b"OK", from).await?;
+            Ok(())
         });
 
-        ctrl.attach().await.expect("attach");
-        responder.await.expect("responder task");
+        ctrl.attach().await?;
+        join_responder(responder).await?;
 
         let _ = std::fs::remove_file(&client_path);
         let _ = std::fs::remove_file(&daemon_path);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn next_event_parses_an_unsolicited_line() {
+    async fn next_event_parses_an_unsolicited_line() -> TestResult {
         let (client_path, daemon_path) = socket_paths("event");
-        let daemon = UnixDatagram::bind(&daemon_path).expect("bind fake daemon");
-        let ctrl = WpaCtrl::connect(&client_path, &daemon_path)
-            .await
-            .expect("client connect");
+        let daemon = UnixDatagram::bind(&daemon_path)?;
+        let ctrl = WpaCtrl::connect(&client_path, &daemon_path).await?;
 
         // The daemon needs the client's bound address to push an
         // unsolicited datagram; it learns that address from the ATTACH
@@ -359,27 +374,24 @@ mod wpa_ctrl_tests {
         // `attach()`'s own recv consumes exactly that reply), then
         // separately pushes the event line as a second datagram, which
         // is what `next_event` below reads.
-        let responder = tokio::spawn(async move {
+        let responder: tokio::task::JoinHandle<TestResult> = tokio::spawn(async move {
             let mut buf = [0u8; 256];
-            let (_len, from) = daemon.recv_from(&mut buf).await.expect("recv ATTACH");
-            let from = from.as_pathname().expect("named socket");
-            daemon.send_to(b"OK", from).await.expect("ack attach");
+            let (_len, from) = daemon.recv_from(&mut buf).await?;
+            let from = from.as_pathname().ok_or("expected a named socket")?;
+            daemon.send_to(b"OK", from).await?;
             daemon
                 .send_to(
                     b"<3>P2P-GROUP-STARTED wlan0-p2p-0 client ssid=\"x\" go_dev_addr=aa:bb:cc:dd:ee:ff",
                     from,
                 )
-                .await
-                .expect("push event");
+                .await?;
+            Ok(())
         });
 
-        ctrl.attach().await.expect("attach");
-        responder.await.expect("responder task");
+        ctrl.attach().await?;
+        join_responder(responder).await?;
 
-        let event = ctrl
-            .next_event(Duration::from_secs(2))
-            .await
-            .expect("next_event");
+        let event = ctrl.next_event(Duration::from_secs(2)).await?;
         assert_eq!(
             event,
             WpaEvent::GroupStarted {
@@ -390,15 +402,14 @@ mod wpa_ctrl_tests {
 
         let _ = std::fs::remove_file(&client_path);
         let _ = std::fs::remove_file(&daemon_path);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn request_times_out_when_daemon_never_answers() {
+    async fn request_times_out_when_daemon_never_answers() -> TestResult {
         let (client_path, daemon_path) = socket_paths("timeout");
-        let _daemon = UnixDatagram::bind(&daemon_path).expect("bind fake daemon (never replies)");
-        let ctrl = WpaCtrl::connect(&client_path, &daemon_path)
-            .await
-            .expect("client connect");
+        let _daemon = UnixDatagram::bind(&daemon_path)?;
+        let ctrl = WpaCtrl::connect(&client_path, &daemon_path).await?;
 
         // CTRL_TIMEOUT is 5s in production; the test does not wait that
         // long for a pass/fail signal on a broken implementation, so
@@ -409,5 +420,6 @@ mod wpa_ctrl_tests {
 
         let _ = std::fs::remove_file(&client_path);
         let _ = std::fs::remove_file(&daemon_path);
+        Ok(())
     }
 }

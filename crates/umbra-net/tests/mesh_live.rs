@@ -40,28 +40,27 @@ use umbra_net::mesh::{MeshPeerAddr, WpaCtrl, connect};
 
 #[tokio::test]
 #[ignore = "needs a real wpa_supplicant instance and a real second Wi-Fi Direct device"]
-async fn connects_to_a_real_peer_and_echoes() {
-    let ctrl_path = std::path::PathBuf::from(
-        std::env::var("WPA_CTRL_PATH").expect("set WPA_CTRL_PATH to the daemon's ctrl socket"),
-    );
-    let peer_addr_str = std::env::var("MESH_PEER_ADDR").expect("set MESH_PEER_ADDR");
-    let peer =
-        MeshPeerAddr::parse(&peer_addr_str).expect("MESH_PEER_ADDR must be aa:bb:cc:dd:ee:ff form");
+async fn connects_to_a_real_peer_and_echoes() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+{
+    let ctrl_path = std::path::PathBuf::from(std::env::var("WPA_CTRL_PATH")?);
+    let peer_addr_str = std::env::var("MESH_PEER_ADDR")?;
+    let peer = MeshPeerAddr::parse(&peer_addr_str)?;
 
-    let own_path =
-        std::env::temp_dir().join(format!("umbra-mesh-ctrl-{}", std::process::id()));
-    let ctrl = WpaCtrl::connect(&own_path, &ctrl_path)
-        .await
-        .expect("connect to wpa_supplicant control socket");
+    let own_path = std::env::temp_dir().join(format!("umbra-mesh-ctrl-{}", std::process::id()));
+    let ctrl = WpaCtrl::connect(&own_path, &ctrl_path).await?;
 
-    let mut stream = connect(&ctrl, peer).await.expect("P2P group negotiation + connect");
+    let mut stream = connect(&ctrl, peer).await?;
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let probe = b"umbra mesh live test\n";
-    stream.write_all(probe).await.expect("write probe");
+    stream.write_all(probe).await?;
     let mut echoed = vec![0u8; probe.len()];
-    stream.read_exact(&mut echoed).await.expect("read echo");
-    assert_eq!(&echoed, probe, "peer must echo the probe back byte-for-byte");
+    stream.read_exact(&mut echoed).await?;
+    assert_eq!(
+        &echoed, probe,
+        "peer must echo the probe back byte-for-byte"
+    );
 
     let _ = std::fs::remove_file(&own_path);
+    Ok(())
 }

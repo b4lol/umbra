@@ -105,17 +105,20 @@ mod mesh_addr_tests {
     use super::MeshPeerAddr;
 
     #[test]
-    fn parses_valid_address() {
-        let addr = MeshPeerAddr::parse("aa:bb:cc:dd:ee:ff").expect("valid");
+    fn parses_valid_address() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let addr = MeshPeerAddr::parse("aa:bb:cc:dd:ee:ff")?;
         assert_eq!(addr.octets(), [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);
         assert_eq!(addr.to_string(), "aa:bb:cc:dd:ee:ff");
+        Ok(())
     }
 
     #[test]
-    fn uppercase_hex_is_normalized_on_display() {
-        let addr = MeshPeerAddr::parse("AA:BB:CC:DD:EE:FF").expect("valid");
+    fn uppercase_hex_is_normalized_on_display()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let addr = MeshPeerAddr::parse("AA:BB:CC:DD:EE:FF")?;
         assert_eq!(addr.octets(), [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);
         assert_eq!(addr.to_string(), "aa:bb:cc:dd:ee:ff");
+        Ok(())
     }
 
     #[test]

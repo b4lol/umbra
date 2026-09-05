@@ -56,8 +56,9 @@ fn parse_hex_addr(hex_addr: &str, iface: &str) -> Result<Ipv6Addr, TransportErro
             let start = i * 2;
             let end = start + 2;
             let byte_str = &hex_addr[start..end];
-            *octet = u8::from_str_radix(byte_str, 16)
-                .map_err(|_e| TransportError::Mesh(format!("malformed if_inet6 address for {iface}")))?;
+            *octet = u8::from_str_radix(byte_str, 16).map_err(|_e| {
+                TransportError::Mesh(format!("malformed if_inet6 address for {iface}"))
+            })?;
         }
     }
     Ok(Ipv6Addr::from(octets))
@@ -91,18 +92,22 @@ fe800000000000000000000000000001 02 40 20 80       wlan0
 ";
 
     #[test]
-    fn finds_the_named_interfaces_link_local_address() {
-        let addr = parse_if_inet6(FIXTURE, "wlan0-p2p-0").expect("must find wlan0-p2p-0");
+    fn finds_the_named_interfaces_link_local_address()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let addr = parse_if_inet6(FIXTURE, "wlan0-p2p-0")?;
         assert_eq!(
             addr,
             std::net::Ipv6Addr::new(0xfe80, 0, 0, 0, 0xaabb, 0xccff, 0xfedd, 0xeeff)
         );
+        Ok(())
     }
 
     #[test]
-    fn does_not_match_a_different_interface() {
-        let addr = parse_if_inet6(FIXTURE, "wlan0").expect("must find wlan0");
+    fn does_not_match_a_different_interface() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+    {
+        let addr = parse_if_inet6(FIXTURE, "wlan0")?;
         assert_eq!(addr, std::net::Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1));
+        Ok(())
     }
 
     #[test]
@@ -118,10 +123,12 @@ fe800000000000000000000000000001 02 40 20 80       wlan0
     }
 
     #[test]
-    fn malformed_lines_are_skipped_not_fatal() {
+    fn malformed_lines_are_skipped_not_fatal()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let fixture_with_garbage = format!("{FIXTURE}not a valid line at all\n");
-        let addr = parse_if_inet6(&fixture_with_garbage, "wlan0-p2p-0").expect("still finds it");
+        let addr = parse_if_inet6(&fixture_with_garbage, "wlan0-p2p-0")?;
         assert_eq!(addr.segments()[0], 0xfe80);
+        Ok(())
     }
 
     #[test]
