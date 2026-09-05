@@ -25,16 +25,18 @@ default = []
 tor = ["umbra-net/tor", "dep:tokio"]
 # Wi-Fi Direct off-grid mesh transport (TODO B.1): the Landlock/Seccomp
 # sandbox exceptions for the mesh control sockets used by the mesh
-# `send`/`serve` flows. No new CLI-crate dependencies (landlock is
-# already a hard dependency of this crate).
+# `send`/`serve` flows, plus `dep:tokio` for their own Tokio runtime
+# (mirroring the `tor` feature above). No new CLI-crate dependencies
+# beyond that (landlock is already a hard dependency of this crate).
 mesh = ["umbra-net/mesh", "dep:tokio"]
 
 [dependencies]
 umbra-crypto.workspace = true
 umbra-protocol.workspace = true
 umbra-net.workspace = true
-# Optional under the `tor` feature (`serve`); a non-optional tokio would
-# defeat the feature gate.
+# Optional under the `tor` feature (`serve`) and the `mesh` feature
+# (`send --mesh`/`serve-mesh`); a non-optional tokio would defeat the
+# feature gate.
 tokio = { workspace = true, optional = true }
 umbra-hardware = { path = "../umbra-hardware" }
 zeroize.workspace = true

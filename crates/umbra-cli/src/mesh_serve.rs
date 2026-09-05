@@ -43,7 +43,14 @@ pub fn run(wpa_ctrl_path: &std::path::Path, identity: IdentityBundle) -> Result<
         .parent()
         .map_or_else(|| std::path::PathBuf::from("."), std::path::Path::to_path_buf)
         .join("umbra-mesh-ctrl");
-    std::fs::create_dir_all(&own_ctrl_dir).map_err(CliError::Io)?;
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&own_ctrl_dir)
+            .map_err(CliError::Io)?;
+    }
     let own_ctrl_path = own_ctrl_dir.join(format!("server-{}", std::process::id()));
 
     crate::sandbox::restrict_filesystem_for_mesh(
