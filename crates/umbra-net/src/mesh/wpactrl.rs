@@ -45,8 +45,7 @@ pub enum WpaEvent {
 /// Strips a leading `<N>` `wpa_supplicant` priority marker, if present.
 fn strip_priority(line: &str) -> &str {
     if let Some(rest) = line.strip_prefix('<')
-        && let Some(close) = rest.find('>')
-    {
+        && let Some(close) = rest.find('>') {
         return &rest[close.saturating_add(1)..];
     }
     line
@@ -74,12 +73,10 @@ pub fn parse_event_line(line: &str) -> WpaEvent {
             },
             _ => WpaEvent::Other(body.to_string()),
         },
-        Some("P2P-GO-NEG-REQUEST") => {
-            match parts.next().and_then(|s| MeshPeerAddr::parse(s).ok()) {
-                Some(peer) => WpaEvent::GoNegRequest { peer },
-                None => WpaEvent::Other(body.to_string()),
-            }
-        }
+        Some("P2P-GO-NEG-REQUEST") => match parts.next().and_then(|s| MeshPeerAddr::parse(s).ok()) {
+            Some(peer) => WpaEvent::GoNegRequest { peer },
+            None => WpaEvent::Other(body.to_string()),
+        },
         Some("P2P-GROUP-FORMATION-FAILURE") => WpaEvent::GroupFormationFailure,
         _ => WpaEvent::Other(body.to_string()),
     }

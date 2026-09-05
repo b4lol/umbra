@@ -56,9 +56,8 @@ fn parse_hex_addr(hex_addr: &str, iface: &str) -> Result<Ipv6Addr, TransportErro
             let start = i * 2;
             let end = start + 2;
             let byte_str = &hex_addr[start..end];
-            *octet = u8::from_str_radix(byte_str, 16).map_err(|_e| {
-                TransportError::Mesh(format!("malformed if_inet6 address for {iface}"))
-            })?;
+            *octet = u8::from_str_radix(byte_str, 16)
+                .map_err(|_e| TransportError::Mesh(format!("malformed if_inet6 address for {iface}")))?;
         }
     }
     Ok(Ipv6Addr::from(octets))
