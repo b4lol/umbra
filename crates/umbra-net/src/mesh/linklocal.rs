@@ -50,11 +50,15 @@ fn parse_hex_addr(hex_addr: &str, iface: &str) -> Result<Ipv6Addr, TransportErro
     }
     let mut octets = [0u8; 16];
     for (i, octet) in octets.iter_mut().enumerate() {
-        let start = i.saturating_mul(2);
-        let end = start.saturating_add(2);
-        let byte_str = &hex_addr[start..end];
-        *octet = u8::from_str_radix(byte_str, 16)
-            .map_err(|_e| TransportError::Mesh(format!("malformed if_inet6 address for {iface}")))?;
+        // i ranges 0-15 (16-element array), so i*2 and i*2+2 cannot overflow usize.
+        #[allow(clippy::arithmetic_side_effects)]
+        {
+            let start = i * 2;
+            let end = start + 2;
+            let byte_str = &hex_addr[start..end];
+            *octet = u8::from_str_radix(byte_str, 16)
+                .map_err(|_e| TransportError::Mesh(format!("malformed if_inet6 address for {iface}")))?;
+        }
     }
     Ok(Ipv6Addr::from(octets))
 }
