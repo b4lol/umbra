@@ -27,7 +27,7 @@ tor = ["umbra-net/tor", "dep:tokio"]
 # sandbox exceptions for the mesh control sockets used by the mesh
 # `send`/`serve` flows. No new CLI-crate dependencies (landlock is
 # already a hard dependency of this crate).
-mesh = ["umbra-net/mesh"]
+mesh = ["umbra-net/mesh", "dep:tokio"]
 
 [dependencies]
 umbra-crypto.workspace = true
