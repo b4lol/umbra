@@ -76,14 +76,32 @@ pub fn validate_onion(address: &str) -> Result<(), CliError> {
         })
 }
 
-/// Saves (or overwrites) a peer's pairing payload under `name`, with an
-/// optional `.onion` service address (the value `umbra serve` publishes).
-/// The payload is parsed (SPK signature verified) and the address is
-/// validated BEFORE anything touches disk, so a typo fails here instead
-/// of at first use.
+/// Validates a Wi-Fi Direct P2P Device Address or fails with a
+/// transport-flavored error (shared by the record store and the mesh
+/// transport flow). Mirrors [`validate_onion`].
 ///
-/// Record file format: line 1 = base64url payload, optional line 2 =
-/// `onion <address>`.
+/// # Errors
+///
+/// Returns [`CliError::Io`] for an invalid address.
+pub fn validate_mesh_addr(address: &str) -> Result<(), CliError> {
+    umbra_net::addr::MeshPeerAddr::parse(address)
+        .map(|_addr| ())
+        .map_err(|_e| {
+            CliError::Io(std::io::Error::other(
+                "invalid mesh address (aa:bb:cc:dd:ee:ff expected)",
+            ))
+        })
+}
+
+/// Saves (or overwrites) a peer's pairing payload under `name`, with an
+/// optional `.onion` service address and/or an optional Wi-Fi Direct
+/// mesh address. The payload is parsed (SPK signature verified) and
+/// both addresses are validated BEFORE anything touches disk, so a typo
+/// fails here instead of at first use.
+///
+/// Record file format: line 1 = base64url payload, optional further
+/// lines = `onion <address>` and/or `mesh <address>` (either order,
+/// either or both present).
 ///
 /// # Errors
 ///
@@ -94,12 +112,17 @@ pub fn save_peer(
     name: &str,
     payload_b64: &str,
     onion: Option<&str>,
+    mesh_addr: Option<&str>,
 ) -> Result<(), CliError> {
     parse_payload(payload_b64)?;
     let mut contents = format!("{payload_b64}\n");
     if let Some(address) = onion {
         validate_onion(address)?;
         contents.push_str(&format!("onion {address}\n"));
+    }
+    if let Some(address) = mesh_addr {
+        validate_mesh_addr(address)?;
+        contents.push_str(&format!("mesh {address}\n"));
     }
     let path = record_path(peers_dir, name)?;
     fs::create_dir_all(peers_dir)
@@ -132,6 +155,10 @@ pub fn load_peer(peers_dir: &Path, name: &str) -> Result<crate::pairing::PeerIde
             let address = address.trim();
             validate_onion(address)?;
             identity.onion = Some(address.to_string());
+        } else if let Some(address) = address_line.strip_prefix("mesh ") {
+            let address = address.trim();
+            validate_mesh_addr(address)?;
+            identity.mesh_addr = Some(address.to_string());
         } else {
             return Err(CliError::Keystore(format!(
                 "unknown peer-record line: {address_line}"

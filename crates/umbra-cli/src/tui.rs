@@ -498,6 +498,7 @@ mod tests {
                         kem_arr: [0u8; 1184],
                         dsa: Vec::new(),
                         onion: None,
+                        mesh_addr: None,
                     },
                 )
             })

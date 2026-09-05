@@ -131,22 +131,63 @@ fn peer_record_roundtrip() -> Result<(), Box<dyn std::error::Error + Send + Sync
     let bundle = umbra_crypto::keys::IdentityBundle::generate();
     let payload = umbra_cli::pairing::payload_for(&bundle)?;
 
-    peers::save_peer(&dir, "colleague", &payload, None)?;
+    peers::save_peer(&dir, "colleague", &payload, None, None)?;
     let peer = peers::load_peer(&dir, "colleague")?;
     assert_eq!(peer.ik_arr, bundle.x25519.public_bytes());
     assert!(peer.onion.is_none());
+    assert!(peer.mesh_addr.is_none());
 
     // Onion address roundtrip (validated BEFORE the record is written).
     let addr = "5vzwalpq2cyjrhm5lvzhcjn6mbnwbv42xakxiqhunwpgz6hr32f7gxad";
-    peers::save_peer(&dir, "colleague", &payload, Some(addr))?;
+    peers::save_peer(&dir, "colleague", &payload, Some(addr), None)?;
     let peer = peers::load_peer(&dir, "colleague")?;
     assert_eq!(peer.onion.as_deref(), Some(addr));
 
     // Invalid onion addresses are rejected before touching the record.
-    assert!(peers::save_peer(&dir, "colleague", &payload, Some("not-onion")).is_err());
+    assert!(peers::save_peer(&dir, "colleague", &payload, Some("not-onion"), None).is_err());
 
     // Invalid names are rejected before touching the filesystem.
-    assert!(peers::save_peer(&dir, "../evil", &payload, None).is_err());
+    assert!(peers::save_peer(&dir, "../evil", &payload, None, None).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Mesh address roundtrip and validation (TODO B.1) — mirrors the onion
+/// coverage in `peer_record_roundtrip` above.
+#[test]
+fn peer_record_mesh_addr_roundtrip() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use umbra_cli::peers;
+    let dir = temp_keystore("peers-mesh");
+    let bundle = umbra_crypto::keys::IdentityBundle::generate();
+    let payload = umbra_cli::pairing::payload_for(&bundle)?;
+
+    peers::save_peer(&dir, "colleague", &payload, None, Some("aa:bb:cc:dd:ee:ff"))?;
+    let peer = peers::load_peer(&dir, "colleague")?;
+    assert_eq!(peer.mesh_addr.as_deref(), Some("aa:bb:cc:dd:ee:ff"));
+
+    // Invalid mesh addresses are rejected before touching the record.
+    assert!(peers::save_peer(&dir, "colleague", &payload, None, Some("not-a-mac")).is_err());
+
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// A record can carry BOTH an onion and a mesh address at once (an
+/// operator may have paired for both transports with the same peer).
+#[test]
+fn peer_record_carries_both_onion_and_mesh() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+{
+    use umbra_cli::peers;
+    let dir = temp_keystore("peers-both");
+    let bundle = umbra_crypto::keys::IdentityBundle::generate();
+    let payload = umbra_cli::pairing::payload_for(&bundle)?;
+    let onion = "5vzwalpq2cyjrhm5lvzhcjn6mbnwbv42xakxiqhunwpgz6hr32f7gxad";
+
+    peers::save_peer(&dir, "colleague", &payload, Some(onion), Some("aa:bb:cc:dd:ee:ff"))?;
+    let peer = peers::load_peer(&dir, "colleague")?;
+    assert_eq!(peer.onion.as_deref(), Some(onion));
+    assert_eq!(peer.mesh_addr.as_deref(), Some("aa:bb:cc:dd:ee:ff"));
+
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }

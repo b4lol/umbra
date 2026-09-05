@@ -489,7 +489,7 @@ fn pair(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let peers_dir = keystore_dir.join("peers");
-    crate::peers::save_peer(&peers_dir, peer_name, peer_payload, onion)?;
+    crate::peers::save_peer(&peers_dir, peer_name, peer_payload, onion, None)?;
 
     // SAS: own payload (from the keystore identity) vs the peer payload.
     let bundle = load_identity(cli)?;
