@@ -1,1 +1,10 @@
 build/
+
+# libFuzzer grows corpus/ in place with hash-named files it discovers
+# during a run (`make fuzz` / `make fuzz-smoke`); only the hand-picked,
+# named seeds are meant to be tracked. libFuzzer also drops crash-*/
+# oom-*/leak-* artifacts in the working directory on a finding.
+fuzz/corpus/*/[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*
+crash-*
+oom-*
+leak-*

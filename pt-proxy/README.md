@@ -1,12 +1,19 @@
 # umbra-pt-proxy — Standalone Pluggable Transport Proxy
 
-> **Status: FUNCTIONAL (iat-mode 0/1/2).** SOCKS5 front-end, obfs4
-> ntor/Elligator handshake, framing, packet and traffic-shaping layers
-> are implemented and verified byte-exact against the Go reference
-> (lyrebird); the end-to-end relay is integration-tested against a
-> reference-faithful mock bridge in all three iat modes
-> (`make relay-test`, also under ASan/UBSan). NOT yet done: live interop
-> against a real bridge and the fuzz harness (step 6).
+> **Status: FUNCTIONAL, roadmap complete (iat-mode 0/1/2).** SOCKS5
+> front-end, obfs4 ntor/Elligator handshake, framing, packet and
+> traffic-shaping layers are implemented and verified byte-exact
+> against the Go reference (lyrebird); the end-to-end relay is
+> integration-tested against a reference-faithful mock bridge in all
+> three iat modes (`make relay-test`, also under ASan/UBSan). Step 6
+> has now landed: `make interop-test` drives the client against the
+> REAL, unmodified upstream lyrebird server (not our own mock) under
+> both the normal and ASan/UBSan builds; `make fuzz-build`/`fuzz-smoke`
+> run libFuzzer against the handshake-response and cert parsers
+> (`fuzz/`). OPEN: live interop against a real censorship-path bridge
+> (as opposed to a local reference-server instance) and a longer,
+> continuously-run fuzzing campaign are both future/CI work, not a
+> one-time gate.
 
 A standalone, OS-managed pluggable-transport client proxy for Umbra's
 censorship-circumvention path (TODO B.1, **ADR-030**). It runs as a
@@ -43,12 +50,22 @@ upstream SHA-512 verified at import time. Vendored files are built
 with a relaxed warning set (documented in the Makefile); the hardening
 mitigations still apply.
 
+Optional, dev-only extras (not needed for `make all`/`test`/`vectors`/
+`relay-test`): **Go** (1.21+) for `make interop-test` — it builds and
+runs `tests/interop/`, a thin wrapper around the actual upstream
+lyrebird server, and needs network access on first build to fetch the
+pinned module; **clang** for `make fuzz-build`/`fuzz-smoke`/`fuzz` —
+GCC has no `-fsanitize=fuzzer`, see `fuzz/README.md`.
+
 ```sh
 make            # hardened release build into build/umbra-pt-proxy
 make sanitize   # ASan+UBSan builds (proxy + all test binaries)
 make test       # SOCKS5 integration tests
 make vectors    # obfs4 handshake/framing vector tests (normal + ASan)
 make relay-test # end-to-end tunnel tests via the test-only mock bridge
+make interop-test # end-to-end tunnel tests via the REAL upstream lyrebird
+make fuzz-build   # build the libFuzzer handshake/cert-parser harnesses
+make fuzz-smoke   # bounded fuzz run (CI-suitable)
 make clean
 ```
 
@@ -100,8 +117,22 @@ process at startup, before any accept (fail-closed).
        the distribution TABLES are byte-exact, individual SAMPLES are
        CSPRNG-drawn (Go's csrand does the same), and delays quantize UP
        to whole milliseconds (poll granularity, shape-preserving).
-6. [ ] Interop tests against the reference (Go) lyrebird, ASan/UBSan
-       clean, fuzz harness for the handshake parser.
+6. [x] Interop tests against the reference (Go) lyrebird, ASan/UBSan
+       clean, fuzz harness for the handshake parser: `tests/interop/`
+       drives the client through the actual, unmodified upstream
+       lyrebird server (`obfs4.Transport.ServerFactory` +
+       `WrapConn`, pinned to the same commit `tests/govectors/` uses),
+       not our own `tests/mockbridge.c` — echo round-trips pass in all
+       three iat-modes under both the normal and ASan/UBSan proxy
+       builds (`make interop-test`). Two libFuzzer targets
+       (`fuzz/`, clang-only) cover `obfs4_cert_parse` (fully reachable
+       by mutation) and `obfs4_client_finish`, the handshake-response
+       parser (the pre-authentication surface — tail mark/MAC scan,
+       length/offset handling — is exhaustively fuzzable; the
+       post-MAC path is cryptographically un-reachable by mutation and
+       is instead covered by `vectors`/`relay-test`/`interop-test`; see
+       `fuzz/README.md`). Both ran clean locally for tens of millions
+       of executions (`make fuzz-smoke`).
 
 ## Non-goals
 

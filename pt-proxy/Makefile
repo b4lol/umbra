@@ -36,7 +36,7 @@ PROTO   := src/obfs4.c src/obfs4_frame.c src/obfs4_packet.c \
            src/siphash24.c src/gorand.c src/probdist.c
 VENDOR  := vendor/monocypher/monocypher.c
 
-.PHONY: all sanitize test vectors relay-test clean
+.PHONY: all sanitize test vectors relay-test interop-test fuzz-build fuzz-smoke fuzz clean
 
 all: $(BUILD)/umbra-pt-proxy
 
@@ -105,6 +105,54 @@ relay-test: $(BUILD)/umbra-pt-proxy $(BUILD)/mockbridge sanitize
 	    $(BUILD)/umbra-pt-proxy $(BUILD)/mockbridge
 	LSAN_OPTIONS=detect_leaks=0 bash tests/relay.sh \
 	    $(BUILD)/umbra-pt-proxy-asan $(BUILD)/mockbridge-asan
+
+# Live interop (roadmap step 6): the REAL upstream lyrebird server
+# (tests/interop/), not our own tests/mockbridge.c reimplementation.
+# Needs network access on first run (Go module fetch, cached after).
+$(BUILD)/interop-bridge: tests/interop/main.go tests/interop/go.mod tests/interop/go.sum
+	mkdir -p $(BUILD)
+	cd tests/interop && go build -o ../../$(BUILD)/interop-bridge .
+
+interop-test: $(BUILD)/umbra-pt-proxy $(BUILD)/interop-bridge sanitize
+	LSAN_OPTIONS=detect_leaks=0 bash tests/interop.sh \
+	    $(BUILD)/umbra-pt-proxy $(BUILD)/interop-bridge
+	LSAN_OPTIONS=detect_leaks=0 bash tests/interop.sh \
+	    $(BUILD)/umbra-pt-proxy-asan $(BUILD)/interop-bridge
+
+# libFuzzer harnesses for the handshake parser (roadmap step 6).
+# clang-only (GCC has no -fsanitize=fuzzer); fuzzing-only dev
+# dependency — all/test/vectors/relay-test/interop-test stay on $(CC).
+FUZZ_CC     := clang
+FUZZ_FLAGS  := -std=c11 -Wall -Wextra -g -O1 \
+               -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer
+FUZZ_SMOKE_SECONDS ?= 30
+
+$(BUILD)/fuzz_obfs4_cert: fuzz/fuzz_obfs4_cert.c $(PROTO) $(HEADERS) $(VENDOR)
+	mkdir -p $(BUILD)
+	$(FUZZ_CC) $(FUZZ_FLAGS) $(SODIUM_CFLAGS) fuzz/fuzz_obfs4_cert.c \
+	    $(PROTO) $(VENDOR) -o $@ $(SODIUM_LIBS)
+
+$(BUILD)/fuzz_obfs4_handshake: fuzz/fuzz_obfs4_handshake.c $(PROTO) $(HEADERS) $(VENDOR)
+	mkdir -p $(BUILD)
+	$(FUZZ_CC) $(FUZZ_FLAGS) $(SODIUM_CFLAGS) fuzz/fuzz_obfs4_handshake.c \
+	    $(PROTO) $(VENDOR) -o $@ $(SODIUM_LIBS)
+
+fuzz-build: $(BUILD)/fuzz_obfs4_cert $(BUILD)/fuzz_obfs4_handshake
+
+# Bounded smoke run, suitable for CI: proves the harnesses build and
+# survive a short run clean, without claiming a full fuzzing campaign.
+# LSAN_OPTIONS=detect_leaks=0: see the `sanitize` target note above —
+# LeakSanitizer needs ptrace_scope=0; ASan/UBSan still run either way.
+fuzz-smoke: fuzz-build
+	LSAN_OPTIONS=detect_leaks=0 $(BUILD)/fuzz_obfs4_cert \
+	    -max_total_time=$(FUZZ_SMOKE_SECONDS) fuzz/corpus/obfs4_cert
+	LSAN_OPTIONS=detect_leaks=0 $(BUILD)/fuzz_obfs4_handshake \
+	    -max_total_time=$(FUZZ_SMOKE_SECONDS) fuzz/corpus/obfs4_handshake
+
+# Unbounded, for manual/nightly deep runs.
+fuzz: fuzz-build
+	LSAN_OPTIONS=detect_leaks=0 $(BUILD)/fuzz_obfs4_cert fuzz/corpus/obfs4_cert
+	LSAN_OPTIONS=detect_leaks=0 $(BUILD)/fuzz_obfs4_handshake fuzz/corpus/obfs4_handshake
 
 clean:
 	rm -rf $(BUILD)
