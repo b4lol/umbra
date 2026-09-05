@@ -114,6 +114,73 @@ pub fn restrict_filesystem_with_exceptions(
     Ok(status)
 }
 
+/// Landlock exception for the mesh transport (TODO B.1): read+write on
+/// `wpa_supplicant`'s existing `ctrl_interface` DIRECTORY (we never
+/// create anything there — the daemon owns that socket) plus
+/// read+write+MAKE-SOCKET on our OWN client-side control-socket
+/// directory (we bind a fresh datagram socket there per run). A
+/// SEPARATE function from [`restrict_filesystem_with_exceptions`]
+/// deliberately: the Tor exception grant must not gain `MakeSock` just
+/// because mesh needs it elsewhere.
+///
+/// # Errors
+///
+/// Returns [`CliError::Sandbox`] if the ruleset cannot be created, an
+/// exception path cannot be opened, or the kernel does not fully
+/// enforce the ruleset.
+pub fn restrict_filesystem_for_mesh(
+    wpa_ctrl_dir: &std::path::Path,
+    own_ctrl_dir: &std::path::Path,
+) -> Result<landlock::RestrictionStatus, CliError> {
+    let created = Ruleset::default()
+        .set_compatibility(CompatLevel::HardRequirement)
+        .handle_access(AccessFs::from_all(ABI::V5))?
+        .create()?;
+
+    let tty_rights = AccessFs::ReadFile | AccessFs::WriteFile | AccessFs::IoctlDev;
+    let mut created = match PathFd::new("/dev/tty") {
+        Ok(tty) => created
+            .add_rule(PathBeneath::new(tty, tty_rights))
+            .map_err(CliError::Sandbox)?,
+        Err(_e) => created,
+    };
+
+    // wpa_supplicant's own ctrl_interface directory: read+write on the
+    // socket the DAEMON already created; we never make/remove anything
+    // here.
+    let wpa_rights = AccessFs::ReadFile | AccessFs::WriteFile | AccessFs::ReadDir;
+    let wpa_fd = PathFd::new(wpa_ctrl_dir).map_err(|err| {
+        CliError::Io(std::io::Error::other(format!(
+            "sandbox exception path {}: {err}",
+            wpa_ctrl_dir.display()
+        )))
+    })?;
+    created = created
+        .add_rule(PathBeneath::new(wpa_fd, wpa_rights))
+        .map_err(CliError::Sandbox)?;
+
+    // Our own control-socket directory: we CREATE a UnixDatagram socket
+    // file here every run, so MakeSock is required (the one right the
+    // Tor exception's grant deliberately omits).
+    let own_rights = AccessFs::ReadFile
+        | AccessFs::WriteFile
+        | AccessFs::ReadDir
+        | AccessFs::MakeSock
+        | AccessFs::RemoveFile;
+    let own_fd = PathFd::new(own_ctrl_dir).map_err(|err| {
+        CliError::Io(std::io::Error::other(format!(
+            "sandbox exception path {}: {err}",
+            own_ctrl_dir.display()
+        )))
+    })?;
+    created = created
+        .add_rule(PathBeneath::new(own_fd, own_rights))
+        .map_err(CliError::Sandbox)?;
+
+    let status = created.restrict_self()?;
+    Ok(status)
+}
+
 /// The syscall allowlist for sandboxed session commands (x86_64 numbers
 /// via the `libc` SYS_* constants; the profile is fail-closed: every
 /// non-listed syscall returns `EPERM` instead of killing the process, so

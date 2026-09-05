@@ -23,6 +23,11 @@ default = []
 # `serve`: inbound Tor onion-service flow (production call site for the
 # persistent-identity + sandbox-exception mechanisms, TODO A.2).
 tor = ["umbra-net/tor", "dep:tokio"]
+# Wi-Fi Direct off-grid mesh transport (TODO B.1): the Landlock/Seccomp
+# sandbox exceptions for the mesh control sockets used by the mesh
+# `send`/`serve` flows. No new CLI-crate dependencies (landlock is
+# already a hard dependency of this crate).
+mesh = ["umbra-net/mesh"]
 
 [dependencies]
 umbra-crypto.workspace = true
