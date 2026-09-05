@@ -254,7 +254,7 @@ static uint8_t parse_address(int fd, char *host, size_t host_len, uint16_t *port
     return atyp;
 }
 
-void socks5_handle(int conn_fd, const Obfs4BridgeCert *cert)
+void socks5_handle(int conn_fd, const Obfs4BridgeCert *cert, int iat_mode)
 {
     uint8_t header[2];
     uint8_t methods[255];
@@ -335,6 +335,6 @@ void socks5_handle(int conn_fd, const Obfs4BridgeCert *cert)
 
     /* The tunnel: obfs4 handshake on the upstream socket, then the
      * bidirectional relay. Any failure tears the connection down. */
-    relay_run(conn_fd, upstream, cert);
+    relay_run(conn_fd, upstream, cert, iat_mode);
     close(upstream);
 }

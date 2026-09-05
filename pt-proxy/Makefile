@@ -26,12 +26,14 @@ VENDOR_WARN := -std=c11
 BUILD   := build
 # The obfs4 modules are linked into the proxy: the relay is live.
 SRC     := src/main.c src/socks5.c src/relay.c src/obfs4.c \
-           src/obfs4_frame.c src/obfs4_packet.c src/siphash24.c
+           src/obfs4_frame.c src/obfs4_packet.c src/siphash24.c \
+           src/gorand.c src/probdist.c
 HEADERS := src/obfs4.h src/obfs4_frame.h src/obfs4_packet.h \
-           src/siphash24.h src/relay.h src/socks5.h
+           src/siphash24.h src/gorand.h src/probdist.h \
+           src/relay.h src/socks5.h
 # Protocol modules reused by the test binaries (no main/socks5/relay).
 PROTO   := src/obfs4.c src/obfs4_frame.c src/obfs4_packet.c \
-           src/siphash24.c
+           src/siphash24.c src/gorand.c src/probdist.c
 VENDOR  := vendor/monocypher/monocypher.c
 
 .PHONY: all sanitize test vectors relay-test clean

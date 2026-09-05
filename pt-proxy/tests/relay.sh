@@ -5,8 +5,9 @@
 #
 # Wires a SOCKS5 client (python3, binary-safe) through the proxy into
 # the test-only mock obfs4 bridge (tests/mockbridge.c) and asserts echo
-# round-trips: sub-frame, multi-packet, and >64 KiB streams, plus the
-# fail-closed path against a bridge that closes mid-handshake.
+# round-trips under ALL THREE iat-modes: sub-frame, multi-packet, and
+# >64 KiB streams, plus the fail-closed path against a bridge that
+# closes mid-handshake.
 
 set -euo pipefail
 
@@ -15,13 +16,11 @@ MOCK_BIN=${2:?mockbridge binary}
 
 WORKDIR=$(mktemp -d)
 MOCK_PORT=$(shuf -i 20000-42000 -n 1)
-PROXY_PORT=$(shuf -i 43000-61000 -n 1)
-MOCK_PID=""
 PROXY_PID=""
 
 cleanup() {
     [ -n "$PROXY_PID" ] && kill "$PROXY_PID" 2>/dev/null || true
-    [ -n "$MOCK_PID" ] && kill "$MOCK_PID" 2>/dev/null || true
+    [ -n "${MOCK_PID:-}" ] && kill "$MOCK_PID" 2>/dev/null || true
     rm -rf "$WORKDIR"
 }
 trap cleanup EXIT
@@ -31,7 +30,6 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 # --- Mock bridge up; grab its freshly generated cert. -----------------
 "$MOCK_BIN" "$MOCK_PORT" > "$WORKDIR/mock.out" 2> "$WORKDIR/mock.err" &
 MOCK_PID=$!
-CERT=""
 for _ in $(seq 1 50); do
     [ -s "$WORKDIR/mock.out" ] && break
     sleep 0.1
@@ -39,28 +37,31 @@ done
 CERT=$(sed -n 's/^CERT //p' "$WORKDIR/mock.out")
 [ -n "$CERT" ] || fail "mockbridge did not print a cert"
 
-# --- Proxy up. ---------------------------------------------------------
-"$PROXY_BIN" --socks "127.0.0.1:$PROXY_PORT" --obfs4-cert "$CERT" \
-    2> "$WORKDIR/proxy.err" &
-PROXY_PID=$!
-sleep 0.5
-kill -0 "$PROXY_PID" 2>/dev/null || {
-    cat "$WORKDIR/proxy.err" >&2
-    fail "proxy exited at startup"
-}
+# --- Echo round-trips through the tunnel, per iat-mode. ----------------
+run_echo() { # iat_mode
+    local mode=$1
+    local port
+    port=$(shuf -i 43000-61000 -n 1)
 
-# --- Echo round-trips through the tunnel. ------------------------------
-MOCK_PORT="$MOCK_PORT" PROXY_PORT="$PROXY_PORT" python3 - <<'PYEOF'
+    "$PROXY_BIN" --socks "127.0.0.1:$port" --obfs4-cert "$CERT" \
+        --iat-mode "$mode" 2> "$WORKDIR/proxy.$mode.err" &
+    PROXY_PID=$!
+    sleep 0.5
+    kill -0 "$PROXY_PID" 2>/dev/null || {
+        cat "$WORKDIR/proxy.$mode.err" >&2
+        fail "proxy exited at startup (iat-mode $mode)"
+    }
+
+    MOCK_PORT="$MOCK_PORT" PROXY_PORT="$port" python3 - <<'PYEOF'
 import os
 import socket
-import sys
 
 mock_port = int(os.environ["MOCK_PORT"])
 proxy_port = int(os.environ["PROXY_PORT"])
 
 
 def socks5_connect(port):
-    s = socket.create_connection(("127.0.0.1", proxy_port), timeout=15)
+    s = socket.create_connection(("127.0.0.1", proxy_port), timeout=30)
     s.sendall(b"\x05\x01\x00")
     resp = s.recv(2)
     assert resp == b"\x05\x00", f"method reply: {resp!r}"
@@ -103,8 +104,17 @@ s.sendall(p3)
 assert recv_exact(s, len(p3)) == p3, "echo mismatch (100000 B)"
 
 s.close()
-print("ok - echo round-trips (1 KB / 5 KB / 100 KB)")
 PYEOF
+
+    kill "$PROXY_PID" 2>/dev/null || true
+    wait "$PROXY_PID" 2>/dev/null || true
+    PROXY_PID=""
+    echo "ok - echo round-trips (1 KB / 5 KB / 100 KB), iat-mode $mode"
+}
+
+run_echo 0
+run_echo 1
+run_echo 2
 
 # --- Fail-closed: a bridge that accepts and closes mid-handshake. ------
 export WORKDIR
@@ -125,11 +135,16 @@ conn.close()  # handshake bytes are never answered
 srv.close()
 PYEOF
 CLOSER_PID=$!
-export WORKDIR
 for _ in $(seq 1 50); do
     [ -f "$WORKDIR/closer.ready" ] && break
     sleep 0.1
 done
+
+PROXY_PORT=$(shuf -i 43000-61000 -n 1)
+"$PROXY_BIN" --socks "127.0.0.1:$PROXY_PORT" --obfs4-cert "$CERT" \
+    --iat-mode 0 2> "$WORKDIR/proxy.fc.err" &
+PROXY_PID=$!
+sleep 0.5
 
 CLOSE_PORT="$CLOSE_PORT" PROXY_PORT="$PROXY_PORT" python3 - <<'PYEOF'
 import os
@@ -158,9 +173,11 @@ s.close()
 print("ok - bridge close mid-handshake fails closed")
 PYEOF
 wait "$CLOSER_PID" 2>/dev/null || true
+kill "$PROXY_PID" 2>/dev/null || true
+wait "$PROXY_PID" 2>/dev/null || true
+PROXY_PID=""
 
-# --- Both sides still healthy after the chaos. --------------------------
-kill -0 "$PROXY_PID" 2>/dev/null || fail "proxy died during the tests"
+# --- The mock bridge survived all the chaos. ----------------------------
 kill -0 "$MOCK_PID" 2>/dev/null || fail "mockbridge died during the tests"
 
 echo "relay: all tests passed"

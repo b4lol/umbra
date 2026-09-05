@@ -1,12 +1,18 @@
 /*
  * umbra-pt-proxy — the obfs4 tunnel relay. See relay.h for the
- * architecture notes and the security invariants.
+ * architecture notes, the iat-mode shaping design and the security
+ * invariants.
  */
+
+/* _GNU_SOURCE must precede every libc include (CLOCK_MONOTONIC +
+ * MSG_PEEK under strict -std=c11). */
+#define _GNU_SOURCE
 
 #include "relay.h"
 
 #include "obfs4_frame.h"
 #include "obfs4_packet.h"
+#include "probdist.h"
 
 #include <errno.h>
 #include <poll.h>
@@ -14,6 +20,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 /* Handshake read deadline on the upstream socket (bridges can be slow;
@@ -28,6 +35,51 @@
 /* Upstream accumulation buffer: many frames, bounded; a full buffer
  * with no decodable frame is a protocol error. */
 #define RELAY_UPSTREAM_BUF (16u * OBFS4_MAX_SEGMENT_LEN)
+
+/* Shaping bounds (lyrebird transports/obfs4/obfs4.go): the length
+ * distribution spans [0, MaximumSegmentLength], the iat distribution
+ * [0, maxIATDelay] in units of 100 µs. */
+#define RELAY_LEN_DIST_MAX ((int32_t)OBFS4_MAX_SEGMENT_LEN)
+#define RELAY_IAT_DIST_MAX 100
+
+/* Pending-write queue (iat-mode 1/2): fixed slots, one burst each.
+ * A burst is one client read (RELAY_CLIENT_CHUNK) plus padding; the
+ * 4-segment slack covers the pad-up paths with wide margin (padding is
+ * only ever appended at the burst tail, ≤ ~2 segments). */
+#define RELAY_MAX_BURST \
+    (RELAY_CLIENT_CHUNK + 4u * OBFS4_MAX_SEGMENT_LEN)
+#define RELAY_PEND_SLOTS 4u
+
+typedef struct {
+    size_t off;     /* bytes already written */
+    size_t len;     /* valid bytes in buf (grows when padded) */
+    uint64_t due;   /* monotonic ms at which the next chunk may go out */
+    uint8_t raw;    /* mode 2: buf holds raw payload until the head slot */
+    uint8_t buf[RELAY_MAX_BURST];
+} RelayPending;
+
+typedef struct {
+    RelayPending slots[RELAY_PEND_SLOTS];
+    size_t head;   /* oldest burst */
+    size_t count;  /* queued bursts */
+    /* Mode 2 only: the ENCODED head burst. Payload frames and pad-ups
+     * are both encoded at flush time, in wire order — encoding at
+     * enqueue time would let a later burst advance the DRBG before an
+     * earlier burst's pad frames, desyncing the stream. */
+    size_t enc_off;
+    size_t enc_len;
+    uint8_t enc_buf[RELAY_MAX_BURST];
+} RelayQueue;
+
+/* Monotonic clock in milliseconds (poll-timeout domain). */
+static uint64_t relay_now_ms(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0; /* cannot happen on Linux; 0 disables the delays */
+    }
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+}
 
 /* Writes the whole buffer or fails (EINTR-retried). */
 static int write_full(int fd, const uint8_t *buf, size_t len)
@@ -162,13 +214,16 @@ static void relay_drain_client(int client_fd)
     sodium_memzero(sink, sizeof(sink));
 }
 
-/* Encodes one client burst (payload chunks + one padding burst) and
- * writes it upstream. Returns 0 on success. */
-static int relay_client_burst(Obfs4FrameEncoder *enc, const uint8_t *data,
-                              size_t data_len, int upstream_fd)
+/* Builds one client burst (payload chunks +, for iat-mode 0/1, one
+ * padding burst with a lenDist-sampled target — Go Write parity; the
+ * paranoid mode pads per chunk instead). The burst is RETURNED, not
+ * written: the caller decides between an immediate write (mode 0) and
+ * the scheduled queue (modes 1/2). Returns 0 on success. */
+static int relay_build_burst(Obfs4FrameEncoder *enc, Obfs4Dist *len_dist,
+                             int iat_mode, const uint8_t *data,
+                             size_t data_len, uint8_t *out,
+                             size_t out_cap, size_t *out_len)
 {
-    static uint8_t out[RELAY_CLIENT_CHUNK + OBFS4_MAX_SEGMENT_LEN +
-                       2u * OBFS4_MAX_SEGMENT_LEN];
     size_t used = 0;
     size_t off = 0;
     size_t n = 0;
@@ -179,40 +234,38 @@ static int relay_client_burst(Obfs4FrameEncoder *enc, const uint8_t *data,
             chunk = OBFS4_MAX_PACKET_PAYLOAD;
         }
         if (obfs4_packet_encode(enc, OBFS4_PACKET_TYPE_PAYLOAD, data + off,
-                                chunk, 0u, out + used, sizeof(out) - used,
+                                chunk, 0u, out + used, out_cap - used,
                                 &n) != OBFS4_OK) {
-            sodium_memzero(out, sizeof(out));
             return -1;
         }
         used += n;
         off += chunk;
     }
-    /* One padding burst per write burst (Go iat-mode-0 parity; uniform
-     * sample instead of the Go probdist — a documented traffic-shape
-     * deviation, wire-compatible). */
-    if (obfs4_packet_padburst(enc, used,
-                              (uint16_t)randombytes_uniform(
-                                  OBFS4_MAX_SEGMENT_LEN),
-                              out + used, sizeof(out) - used,
-                              &n) != OBFS4_OK) {
-        sodium_memzero(out, sizeof(out));
-        return -1;
+    if (iat_mode != 2) {
+        /* One padding burst per write burst, target sampled from the
+         * length distribution (Go parity for iat-mode 0/1). */
+        if (obfs4_packet_padburst(enc, used,
+                                  (uint16_t)probdist_sample(len_dist),
+                                  out + used, out_cap - used,
+                                  &n) != OBFS4_OK) {
+            return -1;
+        }
+        used += n;
     }
-    used += n;
 
-    if (write_full(upstream_fd, out, used) != 0) {
-        sodium_memzero(out, sizeof(out));
-        return -1;
-    }
-    sodium_memzero(out, sizeof(out));
+    *out_len = used;
     return 0;
 }
 
 /* Decodes every complete frame in the accumulate buffer and delivers
- * payloads to the client. Returns 0 on success, -1 on a fatal
- * protocol/crypto error. */
+ * payloads to the client; a PRNG-seed packet resets the shaping
+ * distributions (Go: the client converges on the server's
+ * distribution). Returns 0 on success, -1 on a fatal protocol/crypto
+ * error. */
 static int relay_drain_upstream(Obfs4FrameDecoder *dec, uint8_t *buf,
-                                size_t *buf_len, int client_fd)
+                                size_t *buf_len, int client_fd,
+                                Obfs4Dist *len_dist, Obfs4Dist *iat_dist,
+                                int iat_mode)
 {
     uint8_t decoded[OBFS4_MAX_FRAME_PAYLOAD];
 
@@ -242,17 +295,140 @@ static int relay_drain_upstream(Obfs4FrameDecoder *dec, uint8_t *buf,
             sodium_memzero(decoded, sizeof(decoded));
             return -1;
         }
+        if (kind == OBFS4_PKT_SEED) {
+            probdist_reset(len_dist, RELAY_LEN_DIST_MAX, payload);
+            if (iat_mode != 0) {
+                /* iatSeed = SHA-256(lenSeed), truncated to the 24-byte
+                 * seed format (Go parity). */
+                uint8_t iat_hash[crypto_hash_sha256_BYTES];
+
+                crypto_hash_sha256(iat_hash, payload,
+                                   OBFS4_SEED_PAYLOAD_LEN);
+                probdist_reset(iat_dist, RELAY_IAT_DIST_MAX, iat_hash);
+                sodium_memzero(iat_hash, sizeof(iat_hash));
+            }
+        }
         sodium_memzero(decoded, sizeof(decoded));
     }
 }
 
-void relay_run(int client_fd, int upstream_fd, const Obfs4BridgeCert *cert)
+/* Sampled inter-chunk delay in milliseconds (iatDist unit = 100 µs,
+ * quantized UP to poll granularity — we never write early). */
+static uint64_t relay_iat_delay_ms(Obfs4Dist *iat_dist)
+{
+    uint32_t units = (uint32_t)probdist_sample(iat_dist);
+    return ((uint64_t)units * 100u + 999u) / 1000u;
+}
+
+/* Writes every due chunk of the queued bursts. iat-mode 2 chops the
+ * head burst at lenDist-sampled lengths (padding the tail up to the
+ * target, Go padBurst parity, resample on wrap; a sampled 0 cannot make
+ * progress and is redrawn — Go panics there). The mode-2 head is held
+ * RAW in its slot and encoded into q->enc_buf only once it reaches the
+ * head: the pad-ups are encoded at flush time, so the payload frames
+ * must be encoded at flush time too or the DRBG would advance out of
+ * wire order. Returns 0 on success. */
+static int relay_flush_pending(int upstream_fd, RelayQueue *q,
+                               Obfs4FrameEncoder *enc,
+                               Obfs4Dist *len_dist, Obfs4Dist *iat_dist,
+                               int iat_mode)
+{
+    while (q->count > 0u) {
+        RelayPending *b = &q->slots[(q->head) % RELAY_PEND_SLOTS];
+        uint64_t now = relay_now_ms();
+        uint8_t *buf = b->buf;
+        size_t *off = &b->off;
+        size_t *len = &b->len;
+        size_t cap = sizeof(b->buf);
+        size_t rem;
+        size_t chunk;
+
+        if (now < b->due) {
+            break; /* nothing due yet */
+        }
+        if (iat_mode == 2) {
+            int32_t target;
+
+            if (b->raw != 0u) {
+                /* The burst became the head: encode its payload frames
+                 * now (wire-order constraint above). */
+                if (relay_build_burst(enc, len_dist, iat_mode, b->buf,
+                                      b->len, q->enc_buf,
+                                      sizeof(q->enc_buf),
+                                      &q->enc_len) != 0) {
+                    return -1;
+                }
+                sodium_memzero(b->buf, b->len);
+                q->enc_off = 0;
+                b->raw = 0;
+            }
+            buf = q->enc_buf;
+            off = &q->enc_off;
+            len = &q->enc_len;
+            cap = sizeof(q->enc_buf);
+            rem = *len - *off;
+
+            do {
+                target = probdist_sample(len_dist);
+            } while (target == 0);
+            if (rem < (size_t)target) {
+                size_t n = 0;
+
+                if (obfs4_packet_padburst(enc, rem, (uint16_t)target,
+                                          buf + *len, cap - *len,
+                                          &n) != OBFS4_OK) {
+                    return -1;
+                }
+                *len += n;
+                rem = *len - *off;
+                if (rem != (size_t)target) {
+                    continue; /* padding wrapped a segment: resample */
+                }
+            }
+            chunk = (size_t)target;
+        } else {
+            rem = *len - *off;
+            chunk = rem > OBFS4_MAX_SEGMENT_LEN ? OBFS4_MAX_SEGMENT_LEN
+                                                : rem;
+        }
+
+        if (write_full(upstream_fd, buf + *off, chunk) != 0) {
+            return -1;
+        }
+        *off += chunk;
+        b->due = relay_now_ms() + relay_iat_delay_ms(iat_dist);
+
+        if (*off >= *len) {
+            sodium_memzero(buf, *len);
+            if (iat_mode == 2) {
+                q->enc_len = 0;
+                q->enc_off = 0;
+            }
+            q->head++;
+            q->count--;
+            if (q->count > 0u) {
+                /* A fresh burst starts immediately (Go: the next Write
+                 * call carries no leftover delay). */
+                q->slots[(q->head) % RELAY_PEND_SLOTS].due =
+                    relay_now_ms();
+            }
+        }
+    }
+    return 0;
+}
+
+void relay_run(int client_fd, int upstream_fd, const Obfs4BridgeCert *cert,
+               int iat_mode)
 {
     Obfs4SessionKeys keys;
     Obfs4FrameEncoder enc;
     Obfs4FrameDecoder dec;
+    Obfs4Dist len_dist;
+    Obfs4Dist iat_dist;
+    static RelayQueue queue;
     static uint8_t client_buf[RELAY_CLIENT_CHUNK];
     static uint8_t up_buf[RELAY_UPSTREAM_BUF];
+    uint8_t len_seed[GORAND_SEED_LEN];
     size_t up_len = 0;
 
     if (relay_handshake(upstream_fd, client_fd, cert, &keys, up_buf,
@@ -266,27 +442,65 @@ void relay_run(int client_fd, int upstream_fd, const Obfs4BridgeCert *cert)
     obfs4_frame_decoder_init(&dec, &keys.recv);
     obfs4_session_keys_wipe(&keys);
 
+    /* Shaping state: a fresh local seed now (Go newObfs4ClientConn
+     * parity); the bridge's PRNG-seed packet resets the distributions
+     * when it arrives. */
+    randombytes_buf(len_seed, sizeof(len_seed));
+    probdist_reset(&len_dist, RELAY_LEN_DIST_MAX, len_seed);
+    if (iat_mode != 0) {
+        uint8_t iat_hash[crypto_hash_sha256_BYTES];
+
+        crypto_hash_sha256(iat_hash, len_seed, sizeof(len_seed));
+        probdist_reset(&iat_dist, RELAY_IAT_DIST_MAX, iat_hash);
+        sodium_memzero(iat_hash, sizeof(iat_hash));
+    }
+    sodium_memzero(len_seed, sizeof(len_seed));
+
+    memset(&queue, 0, sizeof(queue));
+
     /* Bytes past the handshake mark may already hold frames (the seed
      * packet rides the server response burst). */
-    if (relay_drain_upstream(&dec, up_buf, &up_len, client_fd) != 0) {
+    if (relay_drain_upstream(&dec, up_buf, &up_len, client_fd, &len_dist,
+                             &iat_dist, iat_mode) != 0) {
         goto out;
     }
 
     for (;;) {
         struct pollfd fds[2];
         int ready;
+        int timeout = RELAY_IDLE_TIMEOUT_MS;
 
-        fds[0].fd = client_fd;
+        if (relay_flush_pending(upstream_fd, &queue, &enc, &len_dist,
+                                &iat_dist, iat_mode) != 0) {
+            break;
+        }
+
+        if (queue.count > 0u) {
+            uint64_t now = relay_now_ms();
+            const RelayPending *b =
+                &queue.slots[(queue.head) % RELAY_PEND_SLOTS];
+            uint64_t wait = b->due > now ? b->due - now : 0u;
+            if (wait < (uint64_t)timeout) {
+                timeout = (int)wait;
+            }
+        }
+
+        /* Backpressure: a full queue masks the client out of the poll
+         * set until a burst drains. */
+        fds[0].fd = queue.count < RELAY_PEND_SLOTS ? client_fd : -1;
         fds[0].events = POLLIN;
         fds[0].revents = 0;
         fds[1].fd = upstream_fd;
         fds[1].events = POLLIN;
         fds[1].revents = 0;
 
-        ready = poll(fds, 2, RELAY_IDLE_TIMEOUT_MS);
+        ready = poll(fds, 2, timeout);
         if (ready <= 0) {
             if (ready < 0 && errno == EINTR) {
                 continue;
+            }
+            if (ready == 0 && queue.count > 0u) {
+                continue; /* a chunk came due */
             }
             break; /* idle timeout or poll error */
         }
@@ -301,9 +515,40 @@ void relay_run(int client_fd, int upstream_fd, const Obfs4BridgeCert *cert)
             if (n <= 0) {
                 break; /* EOF/error: obfs4 has no close frame */
             }
-            if (relay_client_burst(&enc, client_buf, (size_t)n,
-                                   upstream_fd) != 0) {
-                break;
+            if (iat_mode == 0) {
+                static uint8_t burst[RELAY_MAX_BURST];
+                size_t burst_len = 0;
+
+                if (relay_build_burst(&enc, &len_dist, iat_mode,
+                                      client_buf, (size_t)n, burst,
+                                      sizeof(burst), &burst_len) != 0 ||
+                    write_full(upstream_fd, burst, burst_len) != 0) {
+                    sodium_memzero(burst, sizeof(burst));
+                    break;
+                }
+                sodium_memzero(burst, sizeof(burst));
+            } else {
+                RelayPending *b =
+                    &queue.slots[(queue.head + queue.count) %
+                                 RELAY_PEND_SLOTS];
+
+                b->off = 0;
+                b->due = relay_now_ms();
+                if (iat_mode == 2) {
+                    /* Raw payload: encoded only when the burst reaches
+                     * the head (see relay_flush_pending). */
+                    memcpy(b->buf, client_buf, (size_t)n);
+                    b->len = (size_t)n;
+                    b->raw = 1;
+                } else {
+                    b->raw = 0;
+                    if (relay_build_burst(&enc, &len_dist, iat_mode,
+                                          client_buf, (size_t)n, b->buf,
+                                          sizeof(b->buf), &b->len) != 0) {
+                        break;
+                    }
+                }
+                queue.count++;
             }
         }
 
@@ -321,8 +566,9 @@ void relay_run(int client_fd, int upstream_fd, const Obfs4BridgeCert *cert)
                 break;
             }
             up_len += (size_t)n;
-            if (relay_drain_upstream(&dec, up_buf, &up_len, client_fd) !=
-                0) {
+            if (relay_drain_upstream(&dec, up_buf, &up_len, client_fd,
+                                     &len_dist, &iat_dist,
+                                     iat_mode) != 0) {
                 break;
             }
         }
@@ -332,6 +578,9 @@ out:
     relay_drain_client(client_fd);
     obfs4_frame_encoder_wipe(&enc);
     obfs4_frame_decoder_wipe(&dec);
+    probdist_wipe(&len_dist);
+    probdist_wipe(&iat_dist);
+    sodium_memzero(&queue, sizeof(queue));
     sodium_memzero(client_buf, sizeof(client_buf));
     sodium_memzero(up_buf, sizeof(up_buf));
 }

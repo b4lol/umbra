@@ -1,12 +1,12 @@
 # umbra-pt-proxy — Standalone Pluggable Transport Proxy
 
-> **Status: FUNCTIONAL CORE (iat-mode 0).** SOCKS5 front-end, obfs4
-> ntor/Elligator handshake, framing and packet layers are implemented
-> and verified byte-exact against the Go reference (lyrebird); the
-> end-to-end relay is integration-tested against a reference-faithful
-> mock bridge (`make relay-test`, also under ASan/UBSan). NOT yet done:
-> iat-mode timing obfuscation (step 5) and live interop against a real
-> bridge (step 6).
+> **Status: FUNCTIONAL (iat-mode 0/1/2).** SOCKS5 front-end, obfs4
+> ntor/Elligator handshake, framing, packet and traffic-shaping layers
+> are implemented and verified byte-exact against the Go reference
+> (lyrebird); the end-to-end relay is integration-tested against a
+> reference-faithful mock bridge in all three iat modes
+> (`make relay-test`, also under ASan/UBSan). NOT yet done: live interop
+> against a real bridge and the fuzz harness (step 6).
 
 A standalone, OS-managed pluggable-transport client proxy for Umbra's
 censorship-circumvention path (TODO B.1, **ADR-030**). It runs as a
@@ -52,9 +52,10 @@ make relay-test # end-to-end tunnel tests via the test-only mock bridge
 make clean
 ```
 
-Runtime: `umbra-pt-proxy --socks 127.0.0.1:PORT --obfs4-cert CERT`
-where CERT is the `cert=` value of the bridge line. A missing or
-malformed cert fails the process at startup, before any accept.
+Runtime: `umbra-pt-proxy --socks 127.0.0.1:PORT --obfs4-cert CERT
+--iat-mode 0|1|2` where CERT and the iat-mode are taken from the bridge
+line. A missing/malformed cert or a missing/invalid iat-mode fails the
+process at startup, before any accept (fail-closed).
 
 ## Roadmap (each step gated on the previous one)
 
@@ -84,10 +85,21 @@ malformed cert fails the process at startup, before any accept.
        against `tests/mockbridge.c` (a reference-faithful test-only
        server) with 1 KB / 5 KB / 100 KB echo round-trips and a
        fail-closed mid-handshake cut (`make relay-test`, normal +
-       ASan/UBSan builds). Client traffic shape note: one uniform
-       padding burst per write burst — a documented deviation from Go's
-       probdist shaping, wire-compatible (iat-mode 0).
-5. [ ] iat-mode timing obfuscation.
+       ASan/UBSan builds).
+5. [x] iat-mode traffic shaping (0/1/2): Go `math/rand.Rand` helper
+       semantics replicated over the obfs4 SipHash-2-4-OFB DRBG
+       (`src/gorand.c`), the uniform weighted-distribution tables via
+       Vose's alias method (`src/probdist.c`) — both pinned BIT-EXACT
+       against `common/probdist` fixtures dumped from lyrebird
+       (`make vectors`); per-connection distributions reset from the
+       bridge's PRNG-seed packet (iat seed = SHA-256(len seed), Go
+       parity); scheduled (never slept) inter-chunk delays with a
+       bounded backpressure queue; paranoid mode chops/pads per sample
+       with Go padBurst semantics. Verified end-to-end in all three
+       modes (`make relay-test`, normal + ASan/UBSan). Honest notes:
+       the distribution TABLES are byte-exact, individual SAMPLES are
+       CSPRNG-drawn (Go's csrand does the same), and delays quantize UP
+       to whole milliseconds (poll granularity, shape-preserving).
 6. [ ] Interop tests against the reference (Go) lyrebird, ASan/UBSan
        clean, fuzz harness for the handshake parser.
 

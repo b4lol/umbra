@@ -8,10 +8,10 @@
  *     uint8[]    payload
  *     uint8[]    zero padding
  *
- * The server sends ONE PRNG-seed packet (24-byte payload, no padding)
- * right after its handshake. We do no length shaping (iat-mode 0), so
- * the seed is accepted and ignored; unknown packet types are ignored;
- * malformed packets are fatal.
+ * The server sends ONE PRNG-seed packet (24-byte payload) right after
+ * its handshake; iat-mode resets the shaping distributions from it
+ * (relay.c). Unknown packet types are ignored; malformed packets are
+ * fatal.
  */
 
 #ifndef UMBRA_PT_OBFS4_PACKET_H

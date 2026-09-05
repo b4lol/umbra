@@ -655,3 +655,142 @@ static const uint8_t vec_okm[144] = {
 	0x37, 0xe8, 0xb2, 0x3f, 0x5a, 0x04, 0xdf, 0x8e, 
 };
 
+/* probdist fixtures — same regeneration recipe as the header above. */
+
+#define vec_len_dist_N 62
+static const int32_t vec_len_dist_values[vec_len_dist_N] = {
+	181, 285, 832, 697, 1074, 842, 585, 749, 274, 679, 521, 1130, 
+	576, 593, 1201, 978, 549, 1017, 1344, 1101, 662, 1, 1047, 1428, 
+	371, 1417, 569, 1045, 360, 1044, 319, 219, 1381, 1098, 625, 867, 
+	598, 1023, 451, 1312, 453, 2, 1434, 950, 169, 114, 313, 812, 
+	996, 1176, 617, 488, 72, 1339, 902, 893, 1076, 422, 74, 457, 
+	537, 1236, 
+};
+
+static const uint64_t vec_len_dist_weights[vec_len_dist_N] = {
+	0x3fedf69132c60923, 0x3fe40a64af9bc70a, 0x3fe51941c467fe83, 0x3fd192b66f24ba8b, 
+	0x3fe7987a5512d28c, 0x3fbb1bd5cb1b8aef, 0x3fe0e9e1259efa32, 0x3fef269e53f49347, 
+	0x3fe66fecf2511429, 0x3fe60985ab7b08f2, 0x3fea43d83b958644, 0x3fd4ce10ccd8818c, 
+	0x3fd3eb0ec34cc164, 0x3fddc0f2dba0a18a, 0x3fb760ec726a9362, 0x3fe36fa5944ff70a, 
+	0x3fe86ba2dfdbb83c, 0x3fe6a14708093ef5, 0x3fd1bd0eaa81a10d, 0x3faca5bf665a354b, 
+	0x3fe695a7768c6f75, 0x3fefc8e8a803b500, 0x3fee38db38b34167, 0x3fe7c13d5dbc70c7, 
+	0x3fd02f6466290325, 0x3fe9ce1020d6023c, 0x3fe4654d3c4d9c03, 0x3fd5b9b6da12d5ac, 
+	0x3feddf3a5d58cd3d, 0x3fedf551941d538d, 0x3fd6b8878b390bd9, 0x3fe950dbea4ad3cd, 
+	0x3fe666a739c53e9a, 0x3fd9c813eb4fd57a, 0x3fec62fa8261394e, 0x3fe2b074b5cee85a, 
+	0x3fed625abf884d07, 0x3fee27d678cbdfaf, 0x3fd7abe5583d0b0f, 0x3fef973b4b4f9c12, 
+	0x3fd239a88df59686, 0x3fec13b64d51766c, 0x3fea69e7d7d1e92c, 0x3fc9e77953847c20, 
+	0x3fe308cff6378428, 0x3fe8232076616a0b, 0x3fe5e883352ddf04, 0x3fd75f81bca630b9, 
+	0x3fe78d7fedbc11b5, 0x3fe73c866ddd5455, 0x3fe434181a6de510, 0x3f9d0535394d40fe, 
+	0x3feb4686b173c184, 0x3febff0716eb8725, 0x3fc1c09cfcb0f875, 0x3fca482ab9bb02c4, 
+	0x3fce3ba748a1406d, 0x3fe92fa1dbdbcf2a, 0x3fdb51f5d6b2ec1b, 0x3fdc8932e6d655fe, 
+	0x3fe31f833a62d2ab, 0x3fd5a7aca96f1eac, 
+};
+
+static const int32_t vec_len_dist_alias[vec_len_dist_N] = {
+	52, 41, 53, 0, 42, 1, 2, 57, 44, 45, 46, 4, 
+	7, 8, 9, 48, 49, 50, 10, 15, 52, 0, 39, 53, 
+	16, 57, 60, 17, 22, 0, 20, 2, 7, 21, 21, 22, 
+	21, 22, 23, 42, 25, 22, 21, 26, 28, 36, 28, 28, 
+	37, 39, 42, 29, 39, 42, 31, 32, 34, 21, 36, 37, 
+	46, 39, 
+};
+
+static const uint64_t vec_len_dist_prob[vec_len_dist_N] = {
+	0x3fe6409d2f83bcd0, 0x3fcf318765699e60, 0x3fe31cb5b87b6fea, 0x3fddd9cf5f267b54, 
+	0x3fe9c05b7ce20c7c, 0x3fc7063b1ab514ce, 0x3fecbb04d791e401, 0x3fe70b7f86e463fc, 
+	0x3fef62562cc34838, 0x3fd4cbb8492b83c0, 0x3febae6f9242bef2, 0x3fe1ab9a6bd973bf, 
+	0x3fe0eacc40ab4921, 0x3fe94553634884af, 0x3fc3db316abbcf3c, 0x3fc03a3e8fc45110, 
+	0x3fe73a8fb44234fc, 0x3fe8e497342640e2, 0x3fde21bd4dfe39a5, 0x3fb854cb34eeec4c, 
+	0x3fe9a944fbe71f6c, 0x3ff0000000000000, 0x3fe77070e9a9f9a4, 0x3fec74dd480aa812, 
+	0x3fdb7e3d42257987, 0x3feb5031257ae3c6, 0x3fdb4ad3156a606c, 0x3fe273bf53a4e962, 
+	0x3fe5565eef1fc87c, 0x3fe46dfa41bd9c80, 0x3fe34c2b9a8863ca, 0x3fe28ac27885c3ea, 
+	0x3fe1367cbf907074, 0x3fe5e5a9ed4b64b4, 0x3fed0ef0ccfb6e6e, 0x3fefbf31418ce061, 
+	0x3fec844d13370d3e, 0x3fe786a39c0d3642, 0x3fe41ade93f9c548, 0x3fec705a6f54cdc8, 
+	0x3fdef56529897909, 0x3fe77de7782357cc, 0x3fed65240cf60df8, 0x3fd600545ca1cca3, 
+	0x3fefb79dfbda0a1a, 0x3fe36621e15a6306, 0x3fde0d5b32813788, 0x3fe3d9fd5af770d5, 
+	0x3fd821558a2c916c, 0x3feeb31e569b6572, 0x3feb36403ea21410, 0x3fa8a5df0e879941, 
+	0x3fee3edceda99cf4, 0x3fef1ff5d3367ab2, 0x3fce27c7a2d24c33, 0x3fd652743d841adf, 
+	0x3fd9ad8aff449fb0, 0x3fed2410496053ec, 0x3fe7343380276b28, 0x3fe83c8bdbb78c9d, 
+	0x3fdc4281808765e0, 0x3fe2646cf215d5f8, 
+};
+
+#define vec_len_dist2_N 69
+static const int32_t vec_len_dist2_values[vec_len_dist2_N] = {
+	846, 736, 22, 1394, 1118, 468, 1216, 165, 1161, 919, 209, 319, 
+	1056, 1401, 647, 604, 371, 280, 600, 531, 572, 213, 1334, 800, 
+	128, 1208, 1290, 142, 153, 1333, 856, 430, 1391, 397, 204, 1170, 
+	750, 380, 1369, 573, 776, 1090, 1364, 325, 934, 496, 211, 922, 
+	333, 660, 285, 381, 943, 1381, 179, 410, 1332, 126, 448, 405, 
+	1175, 723, 1151, 1363, 672, 840, 525, 530, 84, 
+};
+
+static const uint64_t vec_len_dist2_weights[vec_len_dist2_N] = {
+	0x3fe77dcd5759f2ad, 0x3fd38f295c28d224, 0x3fd1e5a00f49245b, 0x3fce431c7dc0109c, 
+	0x3fbee6e170796a17, 0x3fe4a4601b80f557, 0x3fc0290ff332900f, 0x3fe9bcb959665940, 
+	0x3fd28e2d23f509eb, 0x3fece767eed13f1f, 0x3fe8b47596be2f3f, 0x3fc948ecafd304fb, 
+	0x3fe7e2c29ea3cbe5, 0x3fd69e83efe7af59, 0x3feacea74b225ca5, 0x3fde7b49c5ed0f4f, 
+	0x3fdc5b2dcc1bd12c, 0x3fbf50bb15dc1a26, 0x3fdab178b93ac196, 0x3fbc84a72b0ffc6b, 
+	0x3fbfc03fafa2d4bf, 0x3fdec1ac5be4f15e, 0x3fee6ff6d02189e5, 0x3fd7880b599985df, 
+	0x3fea9e2fd7bd8132, 0x3fed58cf4944b991, 0x3fedd8edd2fa7d85, 0x3fdede1a9b9cd425, 
+	0x3fda2a5893edfbf5, 0x3fe9e46ae147ae96, 0x3fd0326fa75288ea, 0x3fe99c991a0b50ee, 
+	0x3fccee6e70841b7f, 0x3fe0daafb7cc8d06, 0x3fd733e3534359d4, 0x3fe1f1c2d821d75c, 
+	0x3fc3e8056fda300a, 0x3fbdac9db32346df, 0x3f9b1ea4ec4cdffa, 0x3fd98468025d9c08, 
+	0x3feeb561b288e096, 0x3fe640613b513362, 0x3fd7d3d3cb5b3806, 0x3fd80220f0696c8d, 
+	0x3fe41c45783ca9b5, 0x3fb4e122e7384116, 0x3fe2b47ed0657581, 0x3fdbc25cf4c74cba, 
+	0x3feb07a084e05f94, 0x3fe2ac11171a9213, 0x3fbcc8a10918b8f3, 0x3fcfab2c7a277cc8, 
+	0x3fe1b2e56b25f56f, 0x3fcdf9dd0177be27, 0x3fc08fafdbc87bee, 0x3feb54f959dfb0a3, 
+	0x3fef4b54dd443ef4, 0x3fedcd124ef21cd6, 0x3fd7278f569ff377, 0x3fec20c8753888ed, 
+	0x3fe5e411c647cb19, 0x3fef83cc2d895f08, 0x3fc304829c62fc57, 0x3fb1bf87e9da7d76, 
+	0x3fd0c6fd52f3c56e, 0x3fc35ddf49711cff, 0x3fe4ede8876b4908, 0x3fc101d9b2d4cfa0, 
+	0x3fd63cd5dda7e1e5, 
+};
+
+static const int32_t vec_len_dist2_alias[vec_len_dist2_N] = {
+	25, 0, 5, 7, 9, 25, 10, 26, 12, 31, 26, 14, 
+	41, 21, 49, 22, 24, 25, 26, 27, 29, 31, 26, 31, 
+	55, 57, 61, 40, 33, 41, 35, 22, 40, 49, 41, 55, 
+	44, 46, 48, 49, 55, 24, 52, 55, 56, 56, 57, 57, 
+	59, 25, 59, 60, 61, 61, 66, 61, 57, 61, 0, 61, 
+	22, 0, 7, 9, 12, 14, 24, 22, 24, 
+};
+
+static const uint64_t vec_len_dist2_prob[vec_len_dist2_N] = {
+	0x3fedfa65dddb3fa8, 0x3fe47e2bc1344893, 0x3fe2c0527ee1092a, 0x3fdfb4e8758054f3, 
+	0x3fd0303f50dbd050, 0x3fee018e7b8c2c14, 0x3fd0ee89ed2322f2, 0x3fdf7eb78290f8fc, 
+	0x3fe370eb3bab5375, 0x3fd29edfd117da78, 0x3fec3bf719401288, 0x3fda7de660a942e5, 
+	0x3fe712339d3030f0, 0x3fe7b2eabd85c04d, 0x3fdf215b4b05590c, 0x3fefefc435ba0983, 
+	0x3fedb5af571c1a78, 0x3fd067b2df23a2e2, 0x3febf7a837e097e5, 0x3fcde12383f64cbf, 
+	0x3fd0a21e88c92e1c, 0x3fe7ec6da04ea4dc, 0x3fe6a538e4bf0dec, 0x3fe8a797d327aea5, 
+	0x3fede666b2f15ffc, 0x3fe1d76273ae219a, 0x3fed238480637fbc, 0x3fcf3e55b84559e8, 
+	0x3feb6a14de4aa978, 0x3fee92b0962fe42a, 0x3fe0f85c2d1a8db8, 0x3fdf1d2fc643df48, 
+	0x3fde4ff7600e61ec, 0x3feebb5d4f719a68, 0x3fe84f6b6da7322e, 0x3fe6926f54fae1a4, 
+	0x3fd4db45ad4f895b, 0x3fcf173aa61c9b88, 0x3fac6a0a7bb26087, 0x3feabc388dad8575, 
+	0x3fe750d529f1d462, 0x3fec94e311506378, 0x3fe8f6fe5200fc3d, 0x3fe9278141d67be6, 
+	0x3fe491ab3a4e0a84, 0x3fc5e047462d2ee6, 0x3fddefe1f38f9380, 0x3fed15931fd929dd, 
+	0x3fea6a7a488ee9fa, 0x3fe028bc627ea5fa, 0x3fce285c08ec83cd, 0x3fe0971429ebf29f, 
+	0x3fee0d563bc8dd84, 0x3fdf6829e6424f2b, 0x3fd15a0fe2922594, 0x3fee371a1201c9ec, 
+	0x3feb9d38225aca84, 0x3fe7f496662ea482, 0x3fe84280cb8f9b9d, 0x3fece592201036ba, 
+	0x3fee7638a9e36580, 0x3ff0000000000000, 0x3fd3ece6b788a7eb, 0x3fc29868d8668b24, 
+	0x3fe1940122cd88c3, 0x3fd44a8760745b44, 0x3fe48859e23a9f04, 0x3fd1d1acc6d972ef, 
+	0x3fe74c930aac6494, 
+};
+
+#define vec_iat_dist_N 6
+static const int32_t vec_iat_dist_values[vec_iat_dist_N] = {
+	10, 26, 70, 2, 63, 36, 
+};
+
+static const uint64_t vec_iat_dist_weights[vec_iat_dist_N] = {
+	0x3fd674c927b1d1fa, 0x3fab5f56fd336440, 0x3fc8b2070317c09e, 0x3fdf48d065a1b719, 
+	0x3fef6a5637afa548, 0x3fd70603f5b68879, 
+};
+
+static const int32_t vec_iat_dist_alias[vec_iat_dist_N] = {
+	3, 4, 3, 4, 0, 4, 
+};
+
+static const uint64_t vec_iat_dist_prob[vec_iat_dist_N] = {
+	0x3febc062e1c6f606, 0x3fc0e9db922ca5e9, 0x3fde84cd4b83e571, 0x3fe1ac21838dfc30, 
+	0x3ff0000000000000, 0x3fec73dcafdb74be, 
+};
+
