@@ -15,3 +15,4 @@
 //! Umbra devices are communicating (THREAT_MODEL.md, "Off-Grid Mesh").
 
 pub mod wpactrl;
+pub mod linklocal;
