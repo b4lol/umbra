@@ -308,6 +308,68 @@ fn allowed_syscalls() -> Vec<i64> {
     SYSCALLS.to_vec()
 }
 
+/// Builds and installs a Seccomp-BPF filter from `allowed_syscalls()`
+/// plus a caller-supplied `socket()` rule set. Shared by
+/// [`restrict_syscalls`] (IPv4/UNIX STREAM only) and
+/// [`restrict_syscalls_mesh`] (adds IPv6 STREAM + UNIX DGRAM) so the
+/// masked-comparison logic is defined exactly once.
+fn install_filter(socket_rules: Vec<seccompiler::SeccompRule>) -> Result<(), CliError> {
+    use seccompiler::{SeccompAction, SeccompFilter, TargetArch, apply_filter};
+
+    #[cfg(target_arch = "x86_64")]
+    let arch = TargetArch::x86_64;
+    #[cfg(target_arch = "aarch64")]
+    let arch = TargetArch::aarch64;
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    return Ok(());
+
+    let mut rules: std::collections::BTreeMap<i64, Vec<seccompiler::SeccompRule>> =
+        allowed_syscalls()
+            .into_iter()
+            .map(|number| (number, Vec::new()))
+            .collect();
+    rules.insert(libc::SYS_socket, socket_rules);
+    let filter = SeccompFilter::new(
+        rules,
+        SeccompAction::Errno(libc::EPERM as u32),
+        SeccompAction::Allow,
+        arch,
+    )
+    .map_err(|e| CliError::Seccomp(e.to_string()))?;
+    let program: seccompiler::BpfProgram = filter
+        .try_into()
+        .map_err(|e: seccompiler::BackendError| CliError::Seccomp(e.to_string()))?;
+    apply_filter(&program).map_err(|e| CliError::Seccomp(e.to_string()))?;
+    Ok(())
+}
+
+/// Builds one masked `(domain, type)` socket rule (shared by both
+/// profiles — see [`install_filter`]).
+fn socket_rule(domain: i32, sock_type: i32) -> Result<seccompiler::SeccompRule, CliError> {
+    const SOCK_TYPE_MASK: u64 = 0x000F;
+    let domain64 =
+        u64::try_from(domain).map_err(|_e| CliError::Seccomp("negative socket domain".into()))?;
+    let type64 = u64::try_from(sock_type)
+        .map_err(|_e| CliError::Seccomp("negative socket type".into()))?;
+    seccompiler::SeccompRule::new(vec![
+        seccompiler::SeccompCondition::new(
+            0,
+            seccompiler::SeccompCmpArgLen::Qword,
+            seccompiler::SeccompCmpOp::Eq,
+            domain64,
+        )
+        .map_err(|e| CliError::Seccomp(e.to_string()))?,
+        seccompiler::SeccompCondition::new(
+            1,
+            seccompiler::SeccompCmpArgLen::Qword,
+            seccompiler::SeccompCmpOp::MaskedEq(SOCK_TYPE_MASK),
+            type64,
+        )
+        .map_err(|e| CliError::Seccomp(e.to_string()))?,
+    ])
+    .map_err(|e| CliError::Seccomp(e.to_string()))
+}
+
 /// Applies the Seccomp-BPF allowlist to the calling thread.
 ///
 /// Fail-closed via `Errno(EPERM)` on the mismatch action (not
@@ -327,65 +389,32 @@ fn allowed_syscalls() -> Vec<i64> {
 /// Returns [`CliError::Sandbox`] if the filter cannot be built or
 /// installed.
 pub fn restrict_syscalls() -> Result<(), CliError> {
-    use seccompiler::{SeccompAction, SeccompFilter, SeccompRule, TargetArch, apply_filter};
+    install_filter(vec![
+        socket_rule(libc::AF_INET, libc::SOCK_STREAM)?,
+        socket_rule(libc::AF_UNIX, libc::SOCK_STREAM)?,
+    ])
+}
 
-    #[cfg(target_arch = "x86_64")]
-    let arch = TargetArch::x86_64;
-    #[cfg(target_arch = "aarch64")]
-    let arch = TargetArch::aarch64;
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    return Ok(()); // No table for this architecture: degrade open.
-
-    let mut rules: std::collections::BTreeMap<i64, Vec<SeccompRule>> = allowed_syscalls()
-        .into_iter()
-        .map(|number| (number, Vec::new()))
-        .collect();
-    // Kill-switch (TODO A.4): `socket` is granted only for IPv4/UNIX
-    // STREAM sockets. Rules are OR'd across, AND'd within: everything
-    // else — IPv6 of any type, UDP of any family (DNS :53), raw, netlink
-    // — falls through to the mismatch action (EPERM). The masked type
-    // comparison keeps SOCK_CLOEXEC/SOCK_NONBLOCK variants working.
-    const SOCK_TYPE_MASK: u64 = 0x000F;
-    let stream_socket = |domain: i32| -> Result<SeccompRule, CliError> {
-        let domain64 = u64::try_from(domain)
-            .map_err(|_e| CliError::Seccomp("negative socket domain".into()))?;
-        SeccompRule::new(vec![
-            seccompiler::SeccompCondition::new(
-                0,
-                seccompiler::SeccompCmpArgLen::Qword,
-                seccompiler::SeccompCmpOp::Eq,
-                domain64,
-            )
-            .map_err(|e| CliError::Seccomp(e.to_string()))?,
-            seccompiler::SeccompCondition::new(
-                1,
-                seccompiler::SeccompCmpArgLen::Qword,
-                seccompiler::SeccompCmpOp::MaskedEq(SOCK_TYPE_MASK),
-                u64::try_from(libc::SOCK_STREAM)
-                    .map_err(|_e| CliError::Seccomp("negative socket type".into()))?,
-            )
-            .map_err(|e| CliError::Seccomp(e.to_string()))?,
-        ])
-        .map_err(|e| CliError::Seccomp(e.to_string()))
-    };
-    rules.insert(
-        libc::SYS_socket,
-        vec![stream_socket(libc::AF_INET)?, stream_socket(libc::AF_UNIX)?],
-    );
-    let filter = SeccompFilter::new(
-        rules,
-        // Mismatch: every unlisted syscall gets EPERM (fail-closed).
-        SeccompAction::Errno(libc::EPERM as u32),
-        // Match: allow.
-        SeccompAction::Allow,
-        arch,
-    )
-    .map_err(|e| CliError::Seccomp(e.to_string()))?;
-    let program: seccompiler::BpfProgram = filter
-        .try_into()
-        .map_err(|e: seccompiler::BackendError| CliError::Seccomp(e.to_string()))?;
-    apply_filter(&program).map_err(|e| CliError::Seccomp(e.to_string()))?;
-    Ok(())
+/// Mesh-mode Seccomp profile (TODO B.1): the SAME base allowlist as
+/// [`restrict_syscalls`], with the `socket()` kill-switch widened by
+/// exactly two rules — `(AF_INET6, SOCK_STREAM)` for the peer TCP link
+/// and `(AF_UNIX, SOCK_DGRAM)` for the `wpa_supplicant` control socket.
+/// Used ONLY by `send --mesh` / `serve-mesh`; every other command keeps
+/// calling [`restrict_syscalls`] unchanged. This is a deliberate,
+/// narrowly-scoped widening of the IPv6/UDP kill-switch — see ADR-031
+/// and the design spec's "Sandbox" section for the rationale.
+///
+/// # Errors
+///
+/// Returns [`CliError::Seccomp`] if the filter cannot be built or
+/// installed.
+pub fn restrict_syscalls_mesh() -> Result<(), CliError> {
+    install_filter(vec![
+        socket_rule(libc::AF_INET, libc::SOCK_STREAM)?,
+        socket_rule(libc::AF_UNIX, libc::SOCK_STREAM)?,
+        socket_rule(libc::AF_INET6, libc::SOCK_STREAM)?,
+        socket_rule(libc::AF_UNIX, libc::SOCK_DGRAM)?,
+    ])
 }
 
 /// Test hook: applies the allowlist to the calling thread (hermetic test
@@ -397,6 +426,16 @@ pub fn restrict_syscalls() -> Result<(), CliError> {
 #[doc(hidden)]
 pub fn restrict_syscalls_for_tests() -> Result<(), crate::cli::CliError> {
     restrict_syscalls()
+}
+
+/// Test hook: applies the mesh allowlist to the calling thread.
+///
+/// # Errors
+///
+/// See [`restrict_syscalls_mesh`].
+#[doc(hidden)]
+pub fn restrict_syscalls_mesh_for_tests() -> Result<(), crate::cli::CliError> {
+    restrict_syscalls_mesh()
 }
 
 /// Test hook: fills a buffer from the OS entropy source.
