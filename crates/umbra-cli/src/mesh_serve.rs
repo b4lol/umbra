@@ -41,7 +41,10 @@ fn emit_event(event: &str, data: Option<&[u8]>) -> Result<(), CliError> {
 pub fn run(wpa_ctrl_path: &std::path::Path, identity: IdentityBundle) -> Result<(), CliError> {
     let own_ctrl_dir = wpa_ctrl_path
         .parent()
-        .map_or_else(|| std::path::PathBuf::from("."), std::path::Path::to_path_buf)
+        .map_or_else(
+            || std::path::PathBuf::from("."),
+            std::path::Path::to_path_buf,
+        )
         .join("umbra-mesh-ctrl");
     {
         use std::os::unix::fs::DirBuilderExt as _;

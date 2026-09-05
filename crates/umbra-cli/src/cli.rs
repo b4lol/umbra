@@ -284,9 +284,9 @@ pub fn run() -> Result<(), CliError> {
             let peer_record = load_peer_record(&cli, peer)?;
             #[cfg(feature = "mesh")]
             if let Some(address) = mesh.as_deref().or(peer_record.mesh_addr.as_deref()) {
-                let ctrl_path = wpa_ctrl.as_ref().ok_or_else(|| {
-                    CliError::Keystore("--mesh requires --wpa-ctrl PATH".into())
-                })?;
+                let ctrl_path = wpa_ctrl
+                    .as_ref()
+                    .ok_or_else(|| CliError::Keystore("--mesh requires --wpa-ctrl PATH".into()))?;
                 return crate::mesh_send::run(
                     ctrl_path,
                     address,

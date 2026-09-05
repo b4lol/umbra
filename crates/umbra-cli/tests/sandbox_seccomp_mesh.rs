@@ -12,8 +12,8 @@ use umbra_cli::sandbox::restrict_syscalls_mesh_for_tests;
 /// allowance — NOT a blanket opendoor: IPv6 DGRAM/RAW and IPv4 DGRAM
 /// stay blocked.
 #[test]
-fn mesh_profile_allows_ipv6_stream_and_unix_dgram_but_nothing_else(
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn mesh_profile_allows_ipv6_stream_and_unix_dgram_but_nothing_else()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let handle = std::thread::spawn(|| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         restrict_syscalls_mesh_for_tests()?;
 
@@ -22,12 +22,18 @@ fn mesh_profile_allows_ipv6_stream_and_unix_dgram_but_nothing_else(
             libc::AF_INET6,
             libc::SOCK_STREAM | libc::SOCK_CLOEXEC,
         )?;
-        assert!(fd >= 0, "AF_INET6 STREAM must be allowed under the mesh profile");
+        assert!(
+            fd >= 0,
+            "AF_INET6 STREAM must be allowed under the mesh profile"
+        );
         let fd = umbra_hardware::process::probe_socket(
             libc::AF_UNIX,
             libc::SOCK_DGRAM | libc::SOCK_CLOEXEC,
         )?;
-        assert!(fd >= 0, "AF_UNIX DGRAM must be allowed under the mesh profile");
+        assert!(
+            fd >= 0,
+            "AF_UNIX DGRAM must be allowed under the mesh profile"
+        );
 
         // Still blocked — proves this is a narrow, scoped widening, not
         // "allow everything":

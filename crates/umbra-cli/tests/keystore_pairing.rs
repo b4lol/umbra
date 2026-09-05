@@ -183,7 +183,13 @@ fn peer_record_carries_both_onion_and_mesh() -> Result<(), Box<dyn std::error::E
     let payload = umbra_cli::pairing::payload_for(&bundle)?;
     let onion = "5vzwalpq2cyjrhm5lvzhcjn6mbnwbv42xakxiqhunwpgz6hr32f7gxad";
 
-    peers::save_peer(&dir, "colleague", &payload, Some(onion), Some("aa:bb:cc:dd:ee:ff"))?;
+    peers::save_peer(
+        &dir,
+        "colleague",
+        &payload,
+        Some(onion),
+        Some("aa:bb:cc:dd:ee:ff"),
+    )?;
     let peer = peers::load_peer(&dir, "colleague")?;
     assert_eq!(peer.onion.as_deref(), Some(onion));
     assert_eq!(peer.mesh_addr.as_deref(), Some("aa:bb:cc:dd:ee:ff"));

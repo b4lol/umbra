@@ -14,16 +14,16 @@
 //! radio range can observe the P2P device address and the fact that two
 //! Umbra devices are communicating (THREAT_MODEL.md, "Off-Grid Mesh").
 
-pub mod wpactrl;
 pub mod linklocal;
+pub mod wpactrl;
 
 use std::net::Ipv6Addr;
 use std::time::Duration;
 
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::error::TransportError;
 pub use crate::addr::MeshPeerAddr;
+use crate::error::TransportError;
 pub use wpactrl::{GroupRole, WpaCtrl, WpaEvent, parse_event_line};
 
 /// TCP port the Group Owner listens on once the P2P link is up. Fixed
@@ -152,9 +152,8 @@ async fn stream_for_role(
     role: GroupRole,
 ) -> Result<TcpStream, TransportError> {
     let scope_id = interface_index(iface)?;
-    let socket_addr = std::net::SocketAddr::V6(std::net::SocketAddrV6::new(
-        address, MESH_PORT, 0, scope_id,
-    ));
+    let socket_addr =
+        std::net::SocketAddr::V6(std::net::SocketAddrV6::new(address, MESH_PORT, 0, scope_id));
     match role {
         GroupRole::GroupOwner => {
             let listener = TcpListener::bind(socket_addr)

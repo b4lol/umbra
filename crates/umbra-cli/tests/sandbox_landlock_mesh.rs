@@ -33,7 +33,10 @@ fn can_create_and_connect_a_socket_in_the_own_ctrl_dir()
             // there must succeed under the restriction.
             let sock_path = own_dir.join("client.sock");
             let socket = std::os::unix::net::UnixDatagram::bind(&sock_path);
-            assert!(socket.is_ok(), "must be able to create our own ctrl socket: {socket:?}");
+            assert!(
+                socket.is_ok(),
+                "must be able to create our own ctrl socket: {socket:?}"
+            );
             Ok(())
         },
     );
@@ -59,7 +62,10 @@ fn cannot_create_a_socket_outside_the_granted_dirs()
 
             let sock_path = outside_dir.join("client.sock");
             let socket = std::os::unix::net::UnixDatagram::bind(&sock_path);
-            assert!(socket.is_err(), "must NOT be able to create a socket outside the grant");
+            assert!(
+                socket.is_err(),
+                "must NOT be able to create a socket outside the grant"
+            );
             Ok(())
         },
     );

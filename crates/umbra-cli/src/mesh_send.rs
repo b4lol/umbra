@@ -82,7 +82,10 @@ pub fn run(
     // grants MakeSock on.
     let own_ctrl_dir = wpa_ctrl_path
         .parent()
-        .map_or_else(|| std::path::PathBuf::from("."), std::path::Path::to_path_buf)
+        .map_or_else(
+            || std::path::PathBuf::from("."),
+            std::path::Path::to_path_buf,
+        )
         .join("umbra-mesh-ctrl");
     {
         use std::os::unix::fs::DirBuilderExt as _;

@@ -349,8 +349,8 @@ fn socket_rule(domain: i32, sock_type: i32) -> Result<seccompiler::SeccompRule, 
     const SOCK_TYPE_MASK: u64 = 0x000F;
     let domain64 =
         u64::try_from(domain).map_err(|_e| CliError::Seccomp("negative socket domain".into()))?;
-    let type64 = u64::try_from(sock_type)
-        .map_err(|_e| CliError::Seccomp("negative socket type".into()))?;
+    let type64 =
+        u64::try_from(sock_type).map_err(|_e| CliError::Seccomp("negative socket type".into()))?;
     seccompiler::SeccompRule::new(vec![
         seccompiler::SeccompCondition::new(
             0,
