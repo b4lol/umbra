@@ -49,7 +49,7 @@ pub async fn connect(ctrl: &WpaCtrl, peer: MeshPeerAddr) -> Result<TcpStream, Tr
     expect_ok(ctrl, &format!("P2P_CONNECT {peer} pbc")).await?;
     let (iface, role) = wait_for_group(ctrl).await?;
     let address = linklocal::link_local_address(&iface)?;
-    stream_for_role(address, role).await
+    stream_for_role(&iface, address, role).await
 }
 
 /// Responder side (`umbra serve-mesh`): becomes discoverable, answers
@@ -80,7 +80,7 @@ pub async fn listen(ctrl: &WpaCtrl) -> Result<TcpStream, TransportError> {
             }
             WpaEvent::GroupStarted { iface, role } => {
                 let address = linklocal::link_local_address(&iface)?;
-                return stream_for_role(address, role).await;
+                return stream_for_role(&iface, address, role).await;
             }
             WpaEvent::GroupFormationFailure => {
                 return Err(TransportError::Mesh("P2P group formation failed".into()));
@@ -128,24 +128,46 @@ async fn wait_for_group(ctrl: &WpaCtrl) -> Result<(String, GroupRole), Transport
     }
 }
 
+/// Reads the kernel-assigned interface index for `iface` from sysfs —
+/// needed as the IPv6 scope id: a bare link-local address is ambiguous
+/// whenever more than one interface has one (the normal case here: the
+/// P2P group interface coexists with the base station interface).
+fn interface_index(iface: &str) -> Result<u32, TransportError> {
+    let path = format!("/sys/class/net/{iface}/ifindex");
+    let contents = std::fs::read_to_string(&path)
+        .map_err(|e| TransportError::Mesh(format!("read {path}: {e}")))?;
+    contents
+        .trim()
+        .parse::<u32>()
+        .map_err(|e| TransportError::Mesh(format!("malformed ifindex for {iface}: {e}")))
+}
+
 /// Once a group exists on `address`: the Group Owner listens and
 /// accepts one connection, the client dials it. Shared tail of
 /// [`connect`] and [`listen`] (both end the same way once they know the
 /// interface and role).
-async fn stream_for_role(address: Ipv6Addr, role: GroupRole) -> Result<TcpStream, TransportError> {
+async fn stream_for_role(
+    iface: &str,
+    address: Ipv6Addr,
+    role: GroupRole,
+) -> Result<TcpStream, TransportError> {
+    let scope_id = interface_index(iface)?;
+    let socket_addr = std::net::SocketAddr::V6(std::net::SocketAddrV6::new(
+        address, MESH_PORT, 0, scope_id,
+    ));
     match role {
         GroupRole::GroupOwner => {
-            let listener = TcpListener::bind((address, MESH_PORT))
+            let listener = TcpListener::bind(socket_addr)
                 .await
-                .map_err(|e| TransportError::Mesh(format!("bind {address}: {e}")))?;
+                .map_err(|e| TransportError::Mesh(format!("bind {socket_addr}: {e}")))?;
             let (stream, _peer_addr) = listener
                 .accept()
                 .await
                 .map_err(|e| TransportError::Mesh(format!("accept: {e}")))?;
             Ok(stream)
         }
-        GroupRole::Client => TcpStream::connect((address, MESH_PORT))
+        GroupRole::Client => TcpStream::connect(socket_addr)
             .await
-            .map_err(|e| TransportError::Mesh(format!("connect {address}: {e}"))),
+            .map_err(|e| TransportError::Mesh(format!("connect {socket_addr}: {e}"))),
     }
 }
