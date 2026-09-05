@@ -82,6 +82,111 @@ pub fn parse_event_line(line: &str) -> WpaEvent {
     }
 }
 
+use std::path::Path;
+use std::time::Duration;
+
+use tokio::net::UnixDatagram;
+
+use crate::error::TransportError;
+
+/// Maximum control-socket datagram this client will read.
+/// `wpa_supplicant` replies and event lines are always short ASCII
+/// text; this bound stops a misbehaving daemon from forcing an
+/// unbounded allocation (hostile-input-style cap, matching every other
+/// wire parser in this codebase).
+const MAX_CTRL_MESSAGE: usize = 4096;
+
+/// Bound on a single request/response round trip.
+const CTRL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A client bound to `wpa_supplicant`'s control-interface `SOCK_DGRAM`
+/// Unix socket. Mirrors the well-documented `wpa_ctrl` protocol: the
+/// client binds its OWN named socket (the daemon replies via `sendto`
+/// to whatever address a request came from) and `sendto`s command lines
+/// to the daemon's socket.
+pub struct WpaCtrl {
+    /// The client's own named `SOCK_DGRAM` socket, already `connect`ed
+    /// to the daemon's control-interface socket.
+    socket: UnixDatagram,
+}
+
+impl WpaCtrl {
+    /// Binds `own_path` (must not already exist) and connects it to the
+    /// daemon's `ctrl_interface` socket at `daemon_path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError::Mesh`] if the bind or connect fails.
+    pub async fn connect(own_path: &Path, daemon_path: &Path) -> Result<Self, TransportError> {
+        let socket = UnixDatagram::bind(own_path)
+            .map_err(|e| TransportError::Mesh(format!("bind {}: {e}", own_path.display())))?;
+        socket
+            .connect(daemon_path)
+            .map_err(|e| TransportError::Mesh(format!("connect {}: {e}", daemon_path.display())))?;
+        Ok(Self { socket })
+    }
+
+    /// Sends one command line and waits for the synchronous one-datagram
+    /// reply (`OK`, `FAIL`, or a command-specific value).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError::Mesh`] on I/O failure, timeout, or a
+    /// non-UTF-8 reply.
+    pub async fn request(&self, command: &str) -> Result<String, TransportError> {
+        self.socket
+            .send(command.as_bytes())
+            .await
+            .map_err(|e| TransportError::Mesh(format!("send {command}: {e}")))?;
+        let mut buf = vec![0u8; MAX_CTRL_MESSAGE];
+        let len = tokio::time::timeout(CTRL_TIMEOUT, self.socket.recv(&mut buf))
+            .await
+            .map_err(|_elapsed| {
+                TransportError::Mesh(format!("timed out waiting for a reply to {command}"))
+            })?
+            .map_err(|e| TransportError::Mesh(format!("recv: {e}")))?;
+        let received = buf
+            .get(..len)
+            .ok_or_else(|| TransportError::Mesh("recv returned an out-of-range length".into()))?;
+        String::from_utf8(received.to_vec())
+            .map_err(|_e| TransportError::Mesh("reply was not valid UTF-8".into()))
+    }
+
+    /// Subscribes this socket to unsolicited events (`ATTACH`) —
+    /// required once before [`Self::next_event`] sees anything.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError::Mesh`] if the daemon does not answer
+    /// `OK`.
+    pub async fn attach(&self) -> Result<(), TransportError> {
+        match self.request("ATTACH").await?.trim() {
+            "OK" => Ok(()),
+            other => Err(TransportError::Mesh(format!("ATTACH failed: {other}"))),
+        }
+    }
+
+    /// Reads the next line the daemon sends unprompted (a P2P event).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError::Mesh`] on I/O failure, timeout, or a
+    /// non-UTF-8 line.
+    pub async fn next_event(&self, timeout: Duration) -> Result<WpaEvent, TransportError> {
+        let mut buf = vec![0u8; MAX_CTRL_MESSAGE];
+        let len = tokio::time::timeout(timeout, self.socket.recv(&mut buf))
+            .await
+            .map_err(|_elapsed| TransportError::Mesh("timed out waiting for a P2P event".into()))?
+            .map_err(|e| TransportError::Mesh(format!("recv: {e}")))?;
+        let received = buf
+            .get(..len)
+            .ok_or_else(|| TransportError::Mesh("recv returned an out-of-range length".into()))?;
+        let line = String::from_utf8(received.to_vec())
+            .map_err(|_e| TransportError::Mesh("event line was not valid UTF-8".into()))?;
+        Ok(parse_event_line(&line))
+    }
+}
+
 #[cfg(test)]
 mod event_parsing_tests {
     use super::{GroupRole, WpaEvent, parse_event_line};
@@ -162,5 +267,147 @@ mod event_parsing_tests {
     #[test]
     fn empty_line_falls_back_to_other() {
         assert_eq!(parse_event_line(""), WpaEvent::Other(String::new()));
+    }
+}
+
+#[cfg(test)]
+mod wpa_ctrl_tests {
+    use std::time::Duration;
+
+    use tokio::net::UnixDatagram;
+
+    use super::{GroupRole, WpaCtrl, WpaEvent};
+
+    /// Unique temp-file pair per test run (parallel `cargo test` runs
+    /// must not collide on socket paths).
+    fn socket_paths(label: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let base = std::env::temp_dir().join(format!(
+            "umbra-wpactrl-test-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        (base.with_extension("client"), base.with_extension("daemon"))
+    }
+
+    #[tokio::test]
+    async fn request_round_trips_through_a_fake_daemon() {
+        let (client_path, daemon_path) = socket_paths("request");
+        let daemon = UnixDatagram::bind(&daemon_path).expect("bind fake daemon");
+        let ctrl = WpaCtrl::connect(&client_path, &daemon_path)
+            .await
+            .expect("client connect");
+
+        let responder = tokio::spawn(async move {
+            let mut buf = [0u8; 256];
+            let (len, from) = daemon.recv_from(&mut buf).await.expect("recv");
+            assert_eq!(&buf[..len], b"PING");
+            daemon
+                .send_to(b"PONG", from.as_pathname().expect("named socket"))
+                .await
+                .expect("reply");
+        });
+
+        let reply = ctrl.request("PING").await.expect("request");
+        assert_eq!(reply, "PONG");
+        responder.await.expect("responder task");
+
+        let _ = std::fs::remove_file(&client_path);
+        let _ = std::fs::remove_file(&daemon_path);
+    }
+
+    #[tokio::test]
+    async fn attach_succeeds_when_daemon_answers_ok() {
+        let (client_path, daemon_path) = socket_paths("attach");
+        let daemon = UnixDatagram::bind(&daemon_path).expect("bind fake daemon");
+        let ctrl = WpaCtrl::connect(&client_path, &daemon_path)
+            .await
+            .expect("client connect");
+
+        let responder = tokio::spawn(async move {
+            let mut buf = [0u8; 256];
+            let (len, from) = daemon.recv_from(&mut buf).await.expect("recv");
+            assert_eq!(&buf[..len], b"ATTACH");
+            daemon
+                .send_to(b"OK", from.as_pathname().expect("named socket"))
+                .await
+                .expect("reply");
+        });
+
+        ctrl.attach().await.expect("attach");
+        responder.await.expect("responder task");
+
+        let _ = std::fs::remove_file(&client_path);
+        let _ = std::fs::remove_file(&daemon_path);
+    }
+
+    #[tokio::test]
+    async fn next_event_parses_an_unsolicited_line() {
+        let (client_path, daemon_path) = socket_paths("event");
+        let daemon = UnixDatagram::bind(&daemon_path).expect("bind fake daemon");
+        let ctrl = WpaCtrl::connect(&client_path, &daemon_path)
+            .await
+            .expect("client connect");
+
+        // The daemon needs the client's bound address to push an
+        // unsolicited datagram; it learns that address from the ATTACH
+        // request, exactly like real wpa_supplicant does. The daemon's
+        // recv+reply runs concurrently with the client's `attach()`
+        // call (mirroring the responder pattern used by the other
+        // tests in this module): it acks ATTACH with "OK" first (so
+        // `attach()`'s own recv consumes exactly that reply), then
+        // separately pushes the event line as a second datagram, which
+        // is what `next_event` below reads.
+        let responder = tokio::spawn(async move {
+            let mut buf = [0u8; 256];
+            let (_len, from) = daemon.recv_from(&mut buf).await.expect("recv ATTACH");
+            let from = from.as_pathname().expect("named socket");
+            daemon.send_to(b"OK", from).await.expect("ack attach");
+            daemon
+                .send_to(
+                    b"<3>P2P-GROUP-STARTED wlan0-p2p-0 client ssid=\"x\" go_dev_addr=aa:bb:cc:dd:ee:ff",
+                    from,
+                )
+                .await
+                .expect("push event");
+        });
+
+        ctrl.attach().await.expect("attach");
+        responder.await.expect("responder task");
+
+        let event = ctrl
+            .next_event(Duration::from_secs(2))
+            .await
+            .expect("next_event");
+        assert_eq!(
+            event,
+            WpaEvent::GroupStarted {
+                iface: "wlan0-p2p-0".to_string(),
+                role: GroupRole::Client,
+            }
+        );
+
+        let _ = std::fs::remove_file(&client_path);
+        let _ = std::fs::remove_file(&daemon_path);
+    }
+
+    #[tokio::test]
+    async fn request_times_out_when_daemon_never_answers() {
+        let (client_path, daemon_path) = socket_paths("timeout");
+        let _daemon = UnixDatagram::bind(&daemon_path).expect("bind fake daemon (never replies)");
+        let ctrl = WpaCtrl::connect(&client_path, &daemon_path)
+            .await
+            .expect("client connect");
+
+        // CTRL_TIMEOUT is 5s in production; the test does not wait that
+        // long for a pass/fail signal on a broken implementation, so
+        // this asserts on the ERROR VARIANT via a bounded outer timeout
+        // instead of waiting for the real 5s internal bound.
+        let outcome = tokio::time::timeout(Duration::from_secs(7), ctrl.request("PING")).await;
+        assert!(matches!(outcome, Ok(Err(_))), "must fail closed, not hang");
+
+        let _ = std::fs::remove_file(&client_path);
+        let _ = std::fs::remove_file(&daemon_path);
     }
 }
