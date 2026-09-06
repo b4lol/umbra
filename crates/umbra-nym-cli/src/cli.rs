@@ -1,7 +1,9 @@
 //! `umbra-nym` CLI surface (TODO B.1): the `send-nym`/`serve-nym`
 //! subcommands wiring together the Nym transport (Task 7), the PQXDH
 //! stream-to-single-message bridge (Task 8), and this crate's own
-//! Seccomp profile (Task 12) onto `umbra-cli`'s reused keystore and
+//! Seccomp profile (Task 12 — needed by `serve-nym` only; `send-nym`'s
+//! ephemeral client stays on the narrower default profile) onto
+//! `umbra-cli`'s reused keystore and
 //! peer-record infrastructure — consumed as an EXTERNAL crate
 //! (`umbra_cli::keystore`, `umbra_cli::peers`, `umbra_cli::sandbox`),
 //! since `umbra-nym-cli` is a separate Cargo workspace (see
@@ -59,7 +61,7 @@ use umbra_crypto::keys::IdentityBundle;
 use umbra_net::{PeerPqxdhKeys, TransportError};
 
 use crate::addr::NymPeerAddr;
-use crate::client::{NymClient, NymNetwork};
+use crate::client::{NymClient, NymNetwork, STREAM_ENDED};
 use crate::transport::NymTransport as _;
 
 /// Upper bound on the plaintext `send-nym` accepts from stdin, matching
@@ -71,15 +73,6 @@ use crate::transport::NymTransport as _;
 /// it here, before ever touching the network, gives the operator an
 /// immediate, actionable error.
 const MAX_SEND_MESSAGE: usize = umbra_net::messenger::MAX_TEXT_MESSAGE;
-
-/// Exact error message `crate::client::NymClient::recv` returns when
-/// the underlying mixnet client's own stream ends (the SDK's
-/// `MixnetClient` will never yield another message afterward) — see
-/// `client.rs`'s `NymTransport::recv` impl. Matched in
-/// [`run_serve_nym`]'s accept loop to distinguish this FATAL condition
-/// from a per-message handshake/decode failure, which is recoverable
-/// and should not stop the loop.
-const STREAM_ENDED_MESSAGE: &str = "mixnet client stream ended";
 
 /// `umbra-nym`: standalone CLI for Umbra's Nym Mixnet adapter.
 #[derive(Debug, Parser)]
@@ -98,10 +91,13 @@ pub enum Command {
     /// this one send (Task 8's duplex-bridge finding: PQXDH lets a
     /// sender complete and transmit using only the recipient's
     /// asynchronously-known prekey bundle, so no reply — and thus no
-    /// persistent Nym address for the sender — is ever needed). Like
-    /// `umbra send`'s own Tor/mesh outbound paths, the caller's
-    /// KEYSTORE IDENTITY is never read for a send: `--keystore` is used
-    /// only to locate the `peers/` directory next to it.
+    /// persistent Nym address for the sender — is ever needed). That
+    /// identity is generated in memory and never written to disk, so
+    /// `send-nym` has no config directory and deliberately exposes no
+    /// flag to give it one. Like `umbra send`'s own Tor/mesh outbound
+    /// paths, the caller's KEYSTORE IDENTITY is never read for a send:
+    /// `--keystore` is used only to locate the `peers/` directory next
+    /// to it.
     SendNym {
         /// Keystore file path; used only to locate the `peers/`
         /// directory next to it (`<parent>/peers`) — the identity it
@@ -199,8 +195,10 @@ fn emit_event(event: &str, data: Option<&[u8]>) -> std::io::Result<()> {
 /// caller's OWN keystore identity is never read — see the module docs
 /// and `SendNym`'s own doc comment), reads one message from `input`
 /// (bounded to [`MAX_SEND_MESSAGE`]), and delivers it as exactly one
-/// Nym message using a fresh, EPHEMERAL, per-invocation config
-/// directory (removed on every exit path, success or failure).
+/// Nym message over a fresh, EPHEMERAL, in-memory Nym identity
+/// ([`NymClient::connect_ephemeral`]) — no config directory, no
+/// `StoragePaths`, and no transport identity material written to disk
+/// at any point, so there is nothing to clean up afterwards.
 ///
 /// # Errors
 ///
@@ -245,55 +243,53 @@ pub fn run_send_nym(
         return Err("empty stdin: nothing to send".into());
     }
 
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    let config_dir =
-        std::env::temp_dir().join(format!("umbra-nym-send-{}-{nanos}", std::process::id()));
-    {
-        use std::os::unix::fs::DirBuilderExt as _;
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&config_dir)?;
+    // Network selection resolved HERE, on the main thread, BEFORE the
+    // Tokio runtime (and its worker threads) exists: the Sandbox arm
+    // populates the process environment on first use, and doing that
+    // while worker threads could be reading it would be a data race no
+    // `Once` can prevent. See `NymNetwork::details`.
+    let network = if mainnet {
+        NymNetwork::Mainnet
+    } else {
+        NymNetwork::Sandbox
     }
+    .details();
 
+    // `send-nym` needs NO filesystem access from here on: the peer
+    // record was already read above, stdin's descriptor is already
+    // open (Landlock does not revoke open descriptors), and the
+    // ephemeral Nym identity below never touches disk. So the grant is
+    // empty except for /etc.
     umbra_cli::sandbox::restrict_filesystem_with_exceptions(
-        &[config_dir.as_path()],
+        &[],
         // /etc is READ-ONLY: public resolver/config content only. Every
         // other network-touching flow in this project grants exactly
         // this (`umbra-cli`'s `serve.rs` and `tor_send.rs`) and the Nym
         // flows need it for the same class of reason: `nym-sdk` reaches
-        // the network through `reqwest` →`rustls-platform-verifier` →
+        // the network through `reqwest` → `rustls-platform-verifier` →
         // `rustls-native-certs`, which reads the system TLS trust store
-        // (`/etc/ssl/certs`) while `NymClient::connect` negotiates TLS
-        // to Nym's API/gateway endpoints.
+        // (`/etc/ssl/certs`) while connecting negotiates TLS to Nym's
+        // API/gateway endpoints.
         &[std::path::Path::new("/etc")],
     )?;
-    crate::sandbox::restrict_syscalls_nym()?;
+    // The DEFAULT profile, not `restrict_syscalls_nym()`: the three
+    // extra base syscalls that one adds (`mkdir`/`unlink`/`chmod`) exist
+    // solely for `nym-sdk`'s persistent SQLite storage backend and
+    // `nym-pemstore`'s key-file writing, neither of which an ephemeral
+    // client uses. Verified against the live Sandbox testnet: a full
+    // `connect_ephemeral` + send round trip succeeds under this
+    // narrower profile.
+    umbra_cli::sandbox::restrict_syscalls()?;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    // Cloned so the cleanup below can still reach it after the `async
-    // move` block takes ownership of its own copy (mirrors
-    // `mesh_send.rs`'s `cleanup_path` pattern).
-    let cleanup_dir = config_dir.clone();
-    let result = runtime.block_on(async move {
-        let network = if mainnet {
-            NymNetwork::Mainnet
-        } else {
-            NymNetwork::Sandbox
-        };
-        let client = NymClient::connect(&config_dir, network).await?;
+    runtime.block_on(async move {
+        let client = NymClient::connect_ephemeral(network).await?;
         crate::bridge::send_via_nym(&client, peer_addr, &peer_keys, &plaintext).await?;
         client.disconnect().await;
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-    });
-    // Best-effort cleanup on every path: an ephemeral identity left on
-    // disk would be a needless persistence of transport metadata.
-    let _ = std::fs::remove_dir_all(&cleanup_dir);
-    result
+    })
 }
 
 /// Runs the `serve-nym` flow: loads the caller's identity seeds once,
@@ -326,6 +322,16 @@ pub fn run_serve_nym(
     let passphrase = load_passphrase(passphrase_file)?;
     let seeds = std::sync::Arc::new(umbra_cli::keystore::load_seeds(keystore, &passphrase)?);
 
+    // Network selection resolved HERE, on the main thread, BEFORE the
+    // Tokio runtime (and its worker threads) exists — see
+    // `NymNetwork::details` and `run_send_nym`'s matching comment.
+    let network = if mainnet {
+        NymNetwork::Mainnet
+    } else {
+        NymNetwork::Sandbox
+    }
+    .details();
+
     {
         use std::os::unix::fs::DirBuilderExt as _;
         std::fs::DirBuilder::new()
@@ -349,11 +355,6 @@ pub fn run_serve_nym(
         .enable_all()
         .build()?;
     runtime.block_on(async move {
-        let network = if mainnet {
-            NymNetwork::Mainnet
-        } else {
-            NymNetwork::Sandbox
-        };
         let mut client = NymClient::connect(nym_config, network).await?;
         emit_event(
             "ready",
@@ -367,7 +368,12 @@ pub fn run_serve_nym(
                     let plaintext = zeroize::Zeroizing::new(plaintext);
                     emit_event("text", Some(&plaintext))?;
                 }
-                Err(TransportError::Nym(ref message)) if message == STREAM_ENDED_MESSAGE => {
+                // The FATAL case: the SDK's own `MixnetClient` stream
+                // ended, so no further message will ever arrive.
+                // Compared against `client.rs`'s `STREAM_ENDED`
+                // constant — the same value that impl constructs — so
+                // the two cannot drift apart.
+                Err(TransportError::Nym(ref message)) if message == STREAM_ENDED => {
                     return Err(Box::<dyn std::error::Error + Send + Sync>::from(format!(
                         "nym transport: {message}"
                     )));
