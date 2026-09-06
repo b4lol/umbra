@@ -9106,6 +9106,7 @@ dependencies = [
 name = "umbra-nym-cli"
 version = "1.0.0-alpha.3"
 dependencies = [
+ "base64 0.22.1",
  "clap",
  "futures",
  "landlock",

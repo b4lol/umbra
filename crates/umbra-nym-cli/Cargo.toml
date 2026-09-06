@@ -45,3 +45,4 @@ libc = "0.2.189"
 zeroize = { version = "1.9.0", features = ["derive", "alloc", "simd"] }
 thiserror = "2.0.20"
 futures = "0.3"
+base64 = "0.22.1"
