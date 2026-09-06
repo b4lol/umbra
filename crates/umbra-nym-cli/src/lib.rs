@@ -6,4 +6,5 @@ pub mod addr;
 pub mod bridge;
 pub mod client;
 pub mod nym_network;
+pub mod sandbox;
 pub mod transport;
