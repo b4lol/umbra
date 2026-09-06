@@ -61,4 +61,11 @@ pub enum TransportError {
     #[cfg(feature = "mesh")]
     #[error("mesh transport failure: {0}")]
     Mesh(String),
+
+    /// A Nym mixnet transport failure (TODO B.1, Nym Mixnet adapter,
+    /// implemented in the separate `umbra-nym-cli` crate — see
+    /// docs/superpowers/specs/2026-09-06-nym-mixnet-design.md for why
+    /// `umbra-net` itself never depends on `nym-sdk`).
+    #[error("nym transport failure: {0}")]
+    Nym(String),
 }
