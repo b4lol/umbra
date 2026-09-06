@@ -36,7 +36,7 @@
 use std::collections::BTreeMap;
 
 use seccompiler::{
-    BpfProgram, SeccompAction, SeccompFilter, SeccompRule, TargetArch, apply_filter,
+    apply_filter, BpfProgram, SeccompAction, SeccompFilter, SeccompRule, TargetArch,
 };
 use umbra_cli::sandbox::{allowed_syscalls, socket_rule};
 
@@ -64,8 +64,10 @@ fn install_filter_nym(
     let mut base = allowed_syscalls();
     base.extend_from_slice(&[libc::SYS_mkdir, libc::SYS_unlink, libc::SYS_chmod]);
 
-    let mut rules: BTreeMap<i64, Vec<SeccompRule>> =
-        base.into_iter().map(|number| (number, Vec::new())).collect();
+    let mut rules: BTreeMap<i64, Vec<SeccompRule>> = base
+        .into_iter()
+        .map(|number| (number, Vec::new()))
+        .collect();
     rules.insert(libc::SYS_socket, socket_rules);
     let filter = SeccompFilter::new(
         rules,
@@ -127,10 +129,10 @@ mod tests {
     /// structure. In-process: the filter applies to the spawned thread
     /// only, so the test runner is unaffected.
     #[test]
-    fn nym_profile_allows_raw_mkdir_unlink_chmod_and_default_sockets_only()
-    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let handle = std::thread::spawn(
-            || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn nym_profile_allows_raw_mkdir_unlink_chmod_and_default_sockets_only(
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let handle =
+            std::thread::spawn(|| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 restrict_syscalls_nym()?;
 
                 // The three additions: exercised via std's SAFE wrappers,
@@ -165,8 +167,7 @@ mod tests {
                 );
 
                 Ok(())
-            },
-        );
+            });
         match handle.join() {
             Ok(result) => result,
             Err(_panic) => Err("worker thread panicked".into()),

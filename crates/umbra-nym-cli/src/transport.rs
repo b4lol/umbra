@@ -18,7 +18,8 @@ pub trait NymTransport {
         payload: Vec<u8>,
     ) -> impl std::future::Future<Output = Result<(), TransportError>> + Send;
 
-    fn recv(&mut self) -> impl std::future::Future<Output = Result<Vec<u8>, TransportError>> + Send;
+    fn recv(&mut self)
+        -> impl std::future::Future<Output = Result<Vec<u8>, TransportError>> + Send;
 }
 
 // Test-only: not gated per the original sketch's wording, but in

@@ -239,10 +239,7 @@ pub fn run_send_nym(
         .take((MAX_SEND_MESSAGE as u64).saturating_add(1))
         .read_to_end(&mut plaintext)?;
     if plaintext.len() > MAX_SEND_MESSAGE {
-        return Err(format!(
-            "stdin exceeds the {MAX_SEND_MESSAGE}-byte send-nym ceiling"
-        )
-        .into());
+        return Err(format!("stdin exceeds the {MAX_SEND_MESSAGE}-byte send-nym ceiling").into());
     }
     if plaintext.is_empty() {
         return Err("empty stdin: nothing to send".into());
@@ -338,7 +335,10 @@ pub fn run_serve_nym(
             NymNetwork::Sandbox
         };
         let mut client = NymClient::connect(nym_config, network).await?;
-        emit_event("ready", Some(format!("nym:{}", client.address()).as_bytes()))?;
+        emit_event(
+            "ready",
+            Some(format!("nym:{}", client.address()).as_bytes()),
+        )?;
 
         loop {
             let bundle = IdentityBundle::from_seeds(&seeds);

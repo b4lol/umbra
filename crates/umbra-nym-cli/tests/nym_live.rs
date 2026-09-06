@@ -45,8 +45,8 @@ use umbra_nym_cli::nym_network::sandbox_network_details;
 
 #[tokio::test]
 #[ignore = "requires live network access to Nym's Sandbox testnet"]
-async fn self_send_round_trip_over_sandbox()
--> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn self_send_round_trip_over_sandbox() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+{
     let mut client = MixnetClientBuilder::new_ephemeral()
         .network_details(sandbox_network_details())
         .build()?
@@ -81,7 +81,11 @@ fn main_workspace_manifest() -> Result<PathBuf, Box<dyn std::error::Error + Send
     let root = manifest_dir.join("../..").canonicalize()?;
     let manifest = root.join("Cargo.toml");
     if !manifest.is_file() {
-        return Err(format!("main workspace Cargo.toml not found at {}", manifest.display()).into());
+        return Err(format!(
+            "main workspace Cargo.toml not found at {}",
+            manifest.display()
+        )
+        .into());
     }
     Ok(manifest)
 }
@@ -201,10 +205,7 @@ fn parse_serve_event(line: &str) -> Result<ServeEvent, Box<dyn std::error::Error
 /// [`ServeEvent`] over `tx`. Runs on a background thread for the
 /// lifetime of the `serve-nym` child process; stops silently once the
 /// pipe closes (child killed) or the channel's receiver is dropped.
-fn spawn_event_reader(
-    reader: impl std::io::Read + Send + 'static,
-    tx: mpsc::Sender<ServeEvent>,
-) {
+fn spawn_event_reader(reader: impl std::io::Read + Send + 'static, tx: mpsc::Sender<ServeEvent>) {
     std::thread::spawn(move || {
         let buffered = BufReader::new(reader);
         for line in buffered.lines() {
@@ -229,9 +230,9 @@ fn wait_for_event(
     want_event: &str,
     timeout: Duration,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-    let deadline = std::time::Instant::now().checked_add(timeout).ok_or(
-        "timeout duration overflowed while computing serve-nym event deadline",
-    )?;
+    let deadline = std::time::Instant::now()
+        .checked_add(timeout)
+        .ok_or("timeout duration overflowed while computing serve-nym event deadline")?;
     loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
@@ -325,11 +326,15 @@ fn send_nym_to_serve_nym() -> Result<(), Box<dyn std::error::Error + Send + Sync
     let a_keystore_str = a_keystore
         .to_str()
         .ok_or("A's keystore path is not valid UTF-8")?;
-    let a_pass_str = a_pass.to_str().ok_or("A's passphrase path is not valid UTF-8")?;
+    let a_pass_str = a_pass
+        .to_str()
+        .ok_or("A's passphrase path is not valid UTF-8")?;
     let b_keystore_str = b_keystore
         .to_str()
         .ok_or("B's keystore path is not valid UTF-8")?;
-    let b_pass_str = b_pass.to_str().ok_or("B's passphrase path is not valid UTF-8")?;
+    let b_pass_str = b_pass
+        .to_str()
+        .ok_or("B's passphrase path is not valid UTF-8")?;
 
     // Step 1: create both identities via the real `umbra init`.
     run_umbra(
@@ -405,7 +410,10 @@ fn send_nym_to_serve_nym() -> Result<(), Box<dyn std::error::Error + Send + Sync
     )?
     .trim()
     .to_string();
-    assert!(!b_payload.is_empty(), "B's pairing payload must not be empty");
+    assert!(
+        !b_payload.is_empty(),
+        "B's pairing payload must not be empty"
+    );
 
     let pair_stdout = run_umbra(
         &main_manifest,

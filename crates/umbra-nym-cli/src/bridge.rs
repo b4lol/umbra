@@ -117,8 +117,8 @@ mod tests {
     /// `crates/umbra-net/tests/messenger.rs` fixture does, using only
     /// non-test-gated constructors (`IdentityBundle::generate` and
     /// `PeerPqxdhKeys::from_parts`).
-    fn identity_and_peer_keys()
-    -> Result<(IdentityBundle, PeerPqxdhKeys), Box<dyn std::error::Error + Send + Sync>> {
+    fn identity_and_peer_keys(
+    ) -> Result<(IdentityBundle, PeerPqxdhKeys), Box<dyn std::error::Error + Send + Sync>> {
         let bundle = IdentityBundle::generate();
         let keys = PeerPqxdhKeys::from_parts(
             &bundle.x25519.public_bytes(),
@@ -131,8 +131,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn round_trips_a_pqxdh_message_through_two_fakes()
-    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn round_trips_a_pqxdh_message_through_two_fakes(
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let addr = NymPeerAddr::parse(crate::addr::tests_support::SAMPLE_VALID_ADDRESS)?;
         let (b_identity, b_peer_keys) = identity_and_peer_keys()?;
 
@@ -158,8 +158,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn receive_via_nym_surfaces_transport_errors()
-    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn receive_via_nym_surfaces_transport_errors(
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let addr = NymPeerAddr::parse(crate::addr::tests_support::SAMPLE_VALID_ADDRESS)?;
         let mut transport = FakeNymTransport::new(addr);
         let (identity, _peer_keys) = identity_and_peer_keys()?;
