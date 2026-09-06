@@ -364,7 +364,7 @@ fn allowed_syscalls() -> Vec<i64> {
 /// [`restrict_syscalls`] (IPv4/UNIX STREAM only) and
 /// [`restrict_syscalls_mesh`] (adds IPv6 STREAM + UNIX DGRAM) so the
 /// masked-comparison logic is defined exactly once.
-fn install_filter(socket_rules: Vec<seccompiler::SeccompRule>) -> Result<(), CliError> {
+pub fn install_filter(socket_rules: Vec<seccompiler::SeccompRule>) -> Result<(), CliError> {
     use seccompiler::{SeccompAction, SeccompFilter, TargetArch, apply_filter};
 
     #[cfg(target_arch = "x86_64")]
@@ -396,7 +396,7 @@ fn install_filter(socket_rules: Vec<seccompiler::SeccompRule>) -> Result<(), Cli
 
 /// Builds one masked `(domain, type)` socket rule (shared by both
 /// profiles — see [`install_filter`]).
-fn socket_rule(domain: i32, sock_type: i32) -> Result<seccompiler::SeccompRule, CliError> {
+pub fn socket_rule(domain: i32, sock_type: i32) -> Result<seccompiler::SeccompRule, CliError> {
     const SOCK_TYPE_MASK: u64 = 0x000F;
     let domain64 =
         u64::try_from(domain).map_err(|_e| CliError::Seccomp("negative socket domain".into()))?;
