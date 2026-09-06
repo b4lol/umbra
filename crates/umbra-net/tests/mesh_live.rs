@@ -15,7 +15,9 @@
 //! - a second device listening for this one's `P2P_FIND`/`P2P_CONNECT`
 //!   and running a PLAIN TCP ECHO LISTENER on the mesh port
 //!   (`umbra_net::mesh::MESH_PORT`) on its group interface once the P2P
-//!   group forms — e.g. `socat TCP-LISTEN:7420,fork EXEC:cat`. This
+//!   group forms — e.g. `socat TCP6-LISTEN:7420,fork EXEC:cat` (the
+//!   mesh transport dials an IPv6 link-local address; plain
+//!   `TCP-LISTEN` defaults to IPv4 and would never accept it). This
 //!   test exercises the mesh transport/negotiation layer in isolation;
 //!   it deliberately does NOT run `umbra serve-mesh`, which performs a
 //!   real PQXDH handshake (already exhaustively tested elsewhere, see

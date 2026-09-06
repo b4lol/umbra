@@ -401,6 +401,7 @@ mod wpa_ctrl_tests {
         join_responder(responder).await?;
 
         let _ = std::fs::remove_file(&client_path);
+        let _ = std::fs::remove_file(WpaCtrl::monitor_path(&client_path));
         let _ = std::fs::remove_file(&daemon_path);
         Ok(())
     }
@@ -425,6 +426,7 @@ mod wpa_ctrl_tests {
         join_responder(responder).await?;
 
         let _ = std::fs::remove_file(&client_path);
+        let _ = std::fs::remove_file(WpaCtrl::monitor_path(&client_path));
         let _ = std::fs::remove_file(&daemon_path);
         Ok(())
     }
@@ -472,6 +474,7 @@ mod wpa_ctrl_tests {
         );
 
         let _ = std::fs::remove_file(&client_path);
+        let _ = std::fs::remove_file(WpaCtrl::monitor_path(&client_path));
         let _ = std::fs::remove_file(&daemon_path);
         Ok(())
     }
@@ -490,6 +493,7 @@ mod wpa_ctrl_tests {
         assert!(matches!(outcome, Ok(Err(_))), "must fail closed, not hang");
 
         let _ = std::fs::remove_file(&client_path);
+        let _ = std::fs::remove_file(WpaCtrl::monitor_path(&client_path));
         let _ = std::fs::remove_file(&daemon_path);
         Ok(())
     }
