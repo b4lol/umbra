@@ -67,6 +67,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   up to whole milliseconds.
 - Hermetic tests: PT config validation + builder tests (umbra-net),
   CLI/bridges-file plumbing tests (umbra-cli).
+- **`pt-proxy` live interop + fuzz harness** (roadmap step 6, the last
+  open `pt-proxy` roadmap item): `pt-proxy/tests/interop/` drives
+  `umbra-pt-proxy` through the actual, unmodified upstream lyrebird
+  obfs4 server (`obfs4.Transport.ServerFactory` + `WrapConn`, pinned to
+  the same commit `tests/govectors/` already uses for the byte-exact
+  vectors) instead of `tests/mockbridge.c` — closing the "our own mock
+  bridge" gap a shared client/mock bug could previously hide behind.
+  `make interop-test` passes 1 KB/5 KB/100 KB echo round-trips in all
+  three iat-modes under both the normal and ASan/UBSan proxy builds.
+  Two libFuzzer targets (`pt-proxy/fuzz/`, clang-only — GCC has no
+  `-fsanitize=fuzzer`) cover `obfs4_cert_parse` (fully reachable by
+  mutation) and `obfs4_client_finish`, the handshake-response parser,
+  against a fixed deterministic client state (`fixtures.h`) plus a
+  genuinely valid seed response generated once via the same
+  `server_ntor` construction `tests/mockbridge.c` already implements.
+  Honest scope note carried into `fuzz/README.md`: mutation cannot
+  forge a valid MAC_S/AUTH, so the harness's real coverage is the
+  pre-authentication surface (tail mark/MAC scan, length/offset
+  handling) every bridge response passes through regardless of
+  validity — the post-MAC path stays covered by `vectors`/
+  `relay-test`/`interop-test`. Both targets ran clean locally for tens
+  of millions of executions with zero ASan/UBSan findings
+  (`make fuzz-smoke`).
 
 ### Fixed
 - `pair --peer-payload` / `pairing-sas --own-payload` / `--peer-payload`
