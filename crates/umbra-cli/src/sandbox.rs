@@ -243,8 +243,13 @@ pub fn restrict_filesystem_for_mesh(
 /// process exit paths. Filesystem syscalls remain listed because Landlock
 /// already denies the content access; defence in depth keeps the process
 /// functional while both layers gate.
+///
+/// `pub` (TODO B.1) so the standalone `umbra-nym-cli` crate can reuse
+/// this exact base list — the single source of truth for it — rather
+/// than maintaining its own copy; see that crate's `sandbox.rs` for the
+/// three extra syscalls its Nym-specific profile appends on top.
 #[must_use]
-fn allowed_syscalls() -> Vec<i64> {
+pub fn allowed_syscalls() -> Vec<i64> {
     const SYSCALLS: &[i64] = &[
         // Memory management.
         libc::SYS_mmap,
