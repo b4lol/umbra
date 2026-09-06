@@ -179,6 +179,10 @@ pub enum Command {
         /// `mesh` build feature to be USED, but is always storable).
         #[arg(long)]
         mesh_addr: Option<String>,
+        /// Peer's Nym mixnet client address; stored with the record for
+        /// `send --nym`.
+        #[arg(long)]
+        nym_addr: Option<String>,
     },
     /// Waits for an incoming Wi-Fi Direct connection from ANY paired
     /// peer (mesh has no onion identity to publish — see
@@ -472,12 +476,14 @@ pub fn run() -> Result<(), CliError> {
             ref peer_payload,
             ref onion,
             ref mesh_addr,
+            ref nym_addr,
         } => pair(
             &cli,
             peer_name,
             peer_payload,
             onion.as_deref(),
             mesh_addr.as_deref(),
+            nym_addr.as_deref(),
         ),
     }
 }
@@ -554,6 +560,7 @@ fn pair(
     peer_payload: &str,
     onion: Option<&str>,
     mesh_addr: Option<&str>,
+    nym_addr: Option<&str>,
 ) -> Result<(), CliError> {
     // The peer record lives next to the keystore.
     let keystore_dir = cli
@@ -563,10 +570,14 @@ fn pair(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let peers_dir = keystore_dir.join("peers");
-    // TODO(nym CLI wiring task): `--nym-addr` is not yet plumbed through
-    // `Command::Pair`; this crate's `pair` command cannot store a Nym
-    // address until that flag is added.
-    crate::peers::save_peer(&peers_dir, peer_name, peer_payload, onion, mesh_addr, None)?;
+    crate::peers::save_peer(
+        &peers_dir,
+        peer_name,
+        peer_payload,
+        onion,
+        mesh_addr,
+        nym_addr,
+    )?;
 
     // SAS: own payload (from the keystore identity) vs the peer payload.
     let bundle = load_identity(cli)?;
