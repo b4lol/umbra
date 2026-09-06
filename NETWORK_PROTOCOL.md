@@ -77,7 +77,11 @@ In crisis/wartime environments where the communication infrastructure has been c
 
 ---
 
-## 5. Poisson Artificial Cover Traffic & Nym Mixnet Integration
+## 5. Nym Mixnet Integration (`umbra-nym-cli`, separate `umbra-nym` binary)
 
-- **Loopix / Sphinx Packet Format:** As packets traverse the mixnet nodes, they are randomly reordered and micro-delays are added, making timing correlation attacks significantly harder.
-- **Poisson-Distributed Queue:** Whether or not there is a real message, dummy/cover packets are continuously pumped according to the configured $\lambda$ parameter.
+Nym mixnet support LANDED as a single-message adaptation on top of Nym's own SDK (`nym-sdk` v1.21.6), not as a from-scratch Loopix/Sphinx reimplementation. Nym's SDK already implements the mixnet's packet mixing, Poisson-distributed sending delay, and cover traffic internally (`nym-client-core`); Umbra's adapter does not re-derive any of that layer — it hands the SDK one fully-assembled message per send and lets the SDK's own mix-network path handle reordering, delay, and cover packets end-to-end between sender and recipient gateways.
+
+- **Duplex-bridge mechanism:** Umbra's existing session code — `umbra_net::messenger::send_text_stream` (sender side) and `receive_message` (recipient side) — is reused completely unmodified; both only require `AsyncWrite`/`AsyncRead` byte streams, not a specific transport. The adapter drives each one over an in-memory `tokio::io::duplex`: on send, `send_text_stream` writes the PQXDH/Double-Ratchet-sealed bytes into one end of the duplex, the adapter reads the accumulated bytes off the other end, and forwards them as exactly one Nym message; on receive, an incoming Nym message is written into a fresh duplex and `receive_message` reads it off the far end exactly as it would any other stream.
+- **Persistent identity:** the Nym client uses on-disk persistent storage (`StoragePaths` rooted under the keystore config directory) so its Nym address survives process restarts, matching the `.onion` identity model rather than generating a new address per run.
+- **Separate crate and binary:** this entire integration lives in `crates/umbra-nym-cli` (binary `umbra-nym`), a fully separate Cargo workspace — not a feature flag on the main `umbra` binary. See ADR-032 for why (a `links = "sqlite3"` Cargo dependency conflict between `nym-sdk`'s bandwidth-fetcher chain and the already-shipped Tor stack) and `crates/umbra-nym-cli/README.md` for its independent build/test commands.
+- **Sandbox vs. mainnet:** by default the adapter targets Nym's Sandbox testnet; mainnet (real anonymity set, real bandwidth credentials) is available via `--mainnet` but is entirely outside this project's scope to acquire or manage credentials for — see `THREAT_MODEL.md`'s Nym-mode honest-scope note.

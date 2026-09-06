@@ -25,6 +25,8 @@ This document describes the adversary profiles that **Umbra** is designed to wit
 
 **Mesh-mode honest scope:** unlike the Tor transport, Wi-Fi Direct mesh mode has NO onion routing — anyone within radio range can observe the P2P device address in use and the fact that two Umbra devices are communicating. It is a last-resort AVAILABILITY mechanism for a total infrastructure blackout, not a metadata-protected transport; do not conflate its guarantees with Tor mode's.
 
+**Nym-mode honest scope:** Nym mixnet mode depends on a real, third-party-operated network (independent mixnode and gateway operators), whose node population is smaller and newer than Tor's decade-plus relay set — the anonymity set is correspondingly smaller and less battle-tested. The Sandbox testnet, which is the default and the only environment this project has verified against, does NOT carry mainnet's anonymity-set guarantees: it is a smaller, purpose-built test network. Umbra's own privacy claims for this transport only fully apply once an operator deliberately opts into mainnet (`--mainnet`) with real bandwidth credentials — acquiring and managing those credentials is entirely outside this project's scope. Separately, Nym support ships as its own standalone binary (`umbra-nym`), never as a flag on the main `umbra` binary (see ADR-032) — there is no risk of a user accidentally enabling it.
+
 ---
 
 ## 2. Advanced STRIDE Analysis
