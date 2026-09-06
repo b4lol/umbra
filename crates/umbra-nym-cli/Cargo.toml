@@ -1,0 +1,41 @@
+[workspace]
+
+[package]
+name = "umbra-nym-cli"
+description = "Umbra Nym Mixnet adapter: a standalone CLI reusing Umbra's PQXDH session and peer-record infrastructure over Nym's mixnet (TODO B.1). Kept as its own Cargo workspace deliberately — nym-sdk's SQLite dependency chain conflicts with the main workspace's Tor feature via Cargo's `links` uniqueness rule; see docs/superpowers/specs/2026-09-06-nym-mixnet-design.md."
+version = "1.0.0-alpha.3"
+edition = "2021"
+rust-version = "1.87.0"
+license = "GPL-3.0-or-later"
+publish = false
+
+[lints.clippy]
+# Mirrors the main workspace's [workspace.lints.clippy] exactly (repo root
+# Cargo.toml, verified 2026-09-06).
+all = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+missing_docs_in_private_items = "deny"
+undocumented_unsafe_blocks = "deny"
+
+[[bin]]
+name = "umbra-nym"
+path = "src/main.rs"
+
+[dependencies]
+umbra-net = { path = "../umbra-net" }
+umbra-cli = { path = "../umbra-cli" }
+nym-sdk = "=1.21.6"
+tokio = { version = "1.53.1", features = ["full"] }
+clap = { version = "4.6.6", features = ["derive"] }
+landlock = "0.4.7"
+seccompiler = "0.5.0"
+libc = "0.2.189"
+zeroize = { version = "1.9.0", features = ["derive", "alloc", "simd"] }
+thiserror = "2.0.20"
