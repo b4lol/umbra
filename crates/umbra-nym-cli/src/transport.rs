@@ -43,15 +43,27 @@ pub(crate) mod fake {
     /// An in-process `NymTransport` fake: test bodies push directly
     /// onto a peer's `inbox` to simulate delivery — `send` here does
     /// NOT auto-route between two fakes (see Task 8's tests for the
-    /// two-fake wiring pattern).
+    /// two-fake wiring pattern). Instead, every call to `send` is
+    /// recorded into `sent` so a test can retrieve the bytes that
+    /// would have gone out and manually feed them into the recipient
+    /// fake's `inbox`.
     pub(crate) struct FakeNymTransport {
         pub(crate) own_address: NymPeerAddr,
         pub(crate) inbox: VecDeque<Vec<u8>>,
+        /// Every `(to, payload)` pair passed to `send`, in call order.
+        /// A `Mutex` (not a `RefCell`) because `NymTransport::send`
+        /// takes `&self` and its returned future must stay `Send`,
+        /// which `RefCell`'s non-`Sync` guard would break.
+        pub(crate) sent: std::sync::Mutex<Vec<(NymPeerAddr, Vec<u8>)>>,
     }
 
     impl FakeNymTransport {
         pub(crate) fn new(own_address: NymPeerAddr) -> Self {
-            Self { own_address, inbox: VecDeque::new() }
+            Self {
+                own_address,
+                inbox: VecDeque::new(),
+                sent: std::sync::Mutex::new(Vec::new()),
+            }
         }
     }
 
@@ -60,7 +72,11 @@ pub(crate) mod fake {
             self.own_address.clone()
         }
 
-        async fn send(&self, _to: NymPeerAddr, _payload: Vec<u8>) -> Result<(), TransportError> {
+        async fn send(&self, to: NymPeerAddr, payload: Vec<u8>) -> Result<(), TransportError> {
+            self.sent
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((to, payload));
             Ok(())
         }
 
