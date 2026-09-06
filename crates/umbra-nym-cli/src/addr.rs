@@ -7,6 +7,15 @@ use core::fmt;
 
 use umbra_net::TransportError;
 
+/// A Nym mixnet address that has already been parsed and validated by
+/// `nym-sdk`'s own `Recipient` parser — the three-segment
+/// `identity.encryption@gateway` form, each segment base58. Holding one
+/// of these is proof the address is well formed, so call sites never
+/// re-validate; this is the Nym counterpart to `umbra-net`'s
+/// `OnionAddr`/`MeshPeerAddr`.
+///
+/// Note this says nothing about the address being ROUTABLE — only that
+/// its shape and checksums are valid.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NymPeerAddr {
     /// The validated, SDK-parsed address.

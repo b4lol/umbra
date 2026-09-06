@@ -9,6 +9,13 @@ rust-version = "1.87.0"
 license = "GPL-3.0-or-later"
 publish = false
 
+[lints.rust]
+# Mirrors the main workspace's [workspace.lints.rust] exactly (repo root
+# Cargo.toml). This crate is a separate Cargo workspace, so it inherits
+# nothing from the root and must restate them.
+unsafe_code = "forbid"
+missing_docs = "deny"
+
 [lints.clippy]
 # Mirrors the main workspace's [workspace.lints.clippy] exactly (repo root
 # Cargo.toml, verified 2026-09-06).
@@ -38,15 +45,21 @@ umbra-crypto = { path = "../umbra-crypto" }
 umbra-cli = { path = "../umbra-cli" }
 umbra-hardware = { path = "../umbra-hardware" }
 nym-sdk = "=1.21.6"
-tokio = { version = "1.53.1", features = ["full"] }
+# Exactly the feature set the main workspace's root Cargo.toml selects —
+# NOT "full", which drags in `process`/`signal` support this binary has
+# no use for (it bans `execve` via Seccomp in the first place).
+tokio = { version = "1.53.1", features = [
+    "rt",
+    "rt-multi-thread",
+    "macros",
+    "sync",
+    "net",
+    "time",
+    "io-util",
+] }
 clap = { version = "4.6.6", features = ["derive"] }
-landlock = "0.4.7"
 seccompiler = "0.5.0"
 libc = "0.2.189"
 zeroize = { version = "1.9.0", features = ["derive", "alloc", "simd"] }
-thiserror = "2.0.20"
 futures = "0.3"
 base64 = "0.22.1"
-
-[dev-dependencies]
-tempfile = "3.27.0"

@@ -38,3 +38,24 @@ live-test-tui:
 asan:
     RUSTFLAGS="-Zsanitizer=address" cargo +nightly test \
         --workspace --all-targets --target x86_64-unknown-linux-gnu
+
+# 8. umbra-nym-cli verification (separate Cargo workspace — see ADR-032;
+#    NOT covered by `check` above, since it's deliberately not a workspace
+#    member).
+check-nym:
+    cargo fmt --manifest-path crates/umbra-nym-cli/Cargo.toml -- --check
+    cargo clippy --manifest-path crates/umbra-nym-cli/Cargo.toml --all-targets -- -D warnings
+    cargo test --manifest-path crates/umbra-nym-cli/Cargo.toml --all-targets
+
+# 9. RUSTSEC/CVE scanning for umbra-nym-cli's independent lockfile (see
+#    the ADR-032 residual on nym-sdk's inherited advisories). `scan`'s own
+#    `cargo audit` only ever sees the main workspace's lockfile.
+audit-nym:
+    cargo audit --file crates/umbra-nym-cli/Cargo.lock
+
+# 10. LIVE-NETWORK Nym Sandbox two-process interop test — NOT part of the
+#     hermetic CI set; requires RLIMIT_MEMLOCK raised above this project's
+#     default expectations for harden_process() to succeed (see ADR-025,
+#     TODO.md B.1's Nym residual).
+live-test-nym:
+    cargo test --manifest-path crates/umbra-nym-cli/Cargo.toml --test nym_live -- --ignored --nocapture

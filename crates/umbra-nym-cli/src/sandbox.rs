@@ -87,8 +87,20 @@ fn install_filter_nym(
 /// `(AF_UNIX, SOCK_STREAM)` — widened by exactly three base syscalls
 /// (`mkdir`, `unlink`, `chmod`) that Task 12's live Sandbox-testnet probe
 /// found `nym-sdk`'s storage backend and `nym-pemstore`'s key persistence
-/// need. IPv6 and UDP (including DNS `:53`) stay blocked: a full mixnet
-/// connection round trip never touched either.
+/// need. IPv6 and UDP (including DNS `:53`) stay blocked, and a full
+/// mixnet connection round trip never touched either — but note that
+/// observation is specific to the environment Task 12 probed in, whose
+/// `/etc/nsswitch.conf` resolves `hosts` through `resolve
+/// [!UNAVAIL=return]` BEFORE `dns` — i.e. name resolution reaches
+/// `systemd-resolved` over an AF_UNIX stream socket (`nss-resolve`) and
+/// never falls through to the UDP-sending `dns` module at all. This is
+/// a property of the deployment, not of Nym: a host whose resolver
+/// stack talks UDP to `:53`
+/// directly, or whose gateway is reachable only over IPv6, would need
+/// this kill-switch widened the way `restrict_syscalls_mesh` widens it
+/// for its own transport. It is deliberately NOT widened pre-emptively:
+/// see ADR-031 on keeping each profile as narrow as its transport
+/// actually requires.
 ///
 /// Thread model: identical to `restrict_syscalls` — seccomp filters are
 /// inherited across `clone`, so this MUST run before the Tokio runtime

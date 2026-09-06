@@ -10,14 +10,27 @@ use crate::addr::NymPeerAddr;
 /// A Nym mixnet endpoint capable of sending to and receiving from
 /// other Nym addresses, one message at a time.
 pub trait NymTransport {
+    /// This endpoint's OWN Nym address — what a counterparty would have
+    /// to be told in order to reach it. `serve-nym` publishes this in
+    /// its NDJSON `ready` event.
     fn address(&self) -> NymPeerAddr;
 
+    /// Delivers `payload` to `to` as exactly ONE Nym message, with no
+    /// stream-sequencing layer above it (TODO B.1, Decision 2) and no
+    /// reply channel: the mixnet gives no delivery confirmation, so a
+    /// successful return means the message was handed off, not that it
+    /// arrived.
     fn send(
         &self,
         to: NymPeerAddr,
         payload: Vec<u8>,
     ) -> impl std::future::Future<Output = Result<(), TransportError>> + Send;
 
+    /// Waits for the next inbound Nym message and yields its fully
+    /// reassembled bytes. The sender is NOT authenticated at this
+    /// layer — any Nym address on the network can reach here — so
+    /// callers must treat what comes back as wholly untrusted input,
+    /// including its length (see `bridge::receive_via_nym`).
     fn recv(&mut self)
         -> impl std::future::Future<Output = Result<Vec<u8>, TransportError>> + Send;
 }
