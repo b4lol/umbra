@@ -9107,6 +9107,7 @@ name = "umbra-nym-cli"
 version = "1.0.0-alpha.3"
 dependencies = [
  "clap",
+ "futures",
  "landlock",
  "libc",
  "nym-sdk",
