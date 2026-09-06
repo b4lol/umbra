@@ -27,6 +27,11 @@ pub enum WpaEvent {
         iface: String,
         /// Our role in the new group.
         role: GroupRole,
+        /// The Group Owner's P2P Device Address (`go_dev_addr=` field),
+        /// when present — needed by the client role to derive the GO's
+        /// link-local address (see `mesh::mac_to_link_local`), since
+        /// Umbra's no-DHCP design means nothing else ever learns it.
+        go_dev_addr: Option<MeshPeerAddr>,
     },
     /// `P2P-GO-NEG-REQUEST <addr> dev_passwd_id=<n>` — a peer is asking
     /// to negotiate a group with us (the `serve-mesh` / responder path
@@ -64,14 +69,21 @@ pub fn parse_event_line(line: &str) -> WpaEvent {
     let mut parts = body.split_whitespace();
     match parts.next() {
         Some("P2P-GROUP-STARTED") => match (parts.next(), parts.next()) {
-            (Some(iface), Some("GO")) => WpaEvent::GroupStarted {
-                iface: iface.to_string(),
-                role: GroupRole::GroupOwner,
-            },
-            (Some(iface), Some("client")) => WpaEvent::GroupStarted {
-                iface: iface.to_string(),
-                role: GroupRole::Client,
-            },
+            (Some(iface), Some(role_str @ ("GO" | "client"))) => {
+                let role = if role_str == "GO" {
+                    GroupRole::GroupOwner
+                } else {
+                    GroupRole::Client
+                };
+                let go_dev_addr = parts
+                    .find_map(|field| field.strip_prefix("go_dev_addr="))
+                    .and_then(|addr| MeshPeerAddr::parse(addr).ok());
+                WpaEvent::GroupStarted {
+                    iface: iface.to_string(),
+                    role,
+                    go_dev_addr,
+                }
+            }
             _ => WpaEvent::Other(body.to_string()),
         },
         Some("P2P-GO-NEG-REQUEST") => {
@@ -103,46 +115,77 @@ const MAX_CTRL_MESSAGE: usize = 4096;
 const CTRL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A client bound to `wpa_supplicant`'s control-interface `SOCK_DGRAM`
-/// Unix socket. Mirrors the well-documented `wpa_ctrl` protocol: the
-/// client binds its OWN named socket (the daemon replies via `sendto`
-/// to whatever address a request came from) and `sendto`s command lines
-/// to the daemon's socket.
+/// Unix socket. Mirrors the well-documented `wpa_ctrl` protocol AND its
+/// standard two-connection pattern: one socket issues commands and
+/// reads their synchronous replies, a SEPARATE socket is `ATTACH`ed
+/// purely to receive unsolicited events — sharing one socket for both
+/// would let an event be mistaken for a command's reply (or vice
+/// versa), since both arrive as plain datagrams with no framing to tell
+/// them apart.
 pub struct WpaCtrl {
-    /// The client's own named `SOCK_DGRAM` socket, already `connect`ed
-    /// to the daemon's control-interface socket.
-    socket: UnixDatagram,
+    /// Issues commands (`request`) and reads their synchronous replies.
+    command: UnixDatagram,
+    /// `ATTACH`ed purely to receive unsolicited P2P events
+    /// (`next_event`) — never used for a command/reply round trip.
+    monitor: UnixDatagram,
 }
 
 impl WpaCtrl {
-    /// Binds `own_path` (must not already exist) and connects it to the
-    /// daemon's `ctrl_interface` socket at `daemon_path`.
+    /// Binds two sockets derived from `own_path` (`own_path` itself for
+    /// commands, `own_path` with `-mon` appended for the event monitor
+    /// — neither may already exist) and connects both to the daemon's
+    /// `ctrl_interface` socket at `daemon_path`.
     ///
     /// # Errors
     ///
-    /// Returns [`TransportError::Mesh`] if the bind or connect fails.
+    /// Returns [`TransportError::Mesh`] if either bind or connect fails.
     pub async fn connect(own_path: &Path, daemon_path: &Path) -> Result<Self, TransportError> {
+        let command = Self::bind_and_connect(own_path, daemon_path)?;
+        let monitor_path = Self::monitor_path(own_path);
+        let monitor = Self::bind_and_connect(&monitor_path, daemon_path)?;
+        Ok(Self { command, monitor })
+    }
+
+    /// Derives the monitor socket's bind path from the command socket's
+    /// path (`<own_path>-mon`) — a single, well-known place shared by
+    /// [`Self::connect`] and callers that need to clean the file up
+    /// afterwards.
+    #[must_use]
+    pub fn monitor_path(own_path: &Path) -> std::path::PathBuf {
+        let mut path = own_path.as_os_str().to_owned();
+        path.push("-mon");
+        std::path::PathBuf::from(path)
+    }
+
+    /// Binds `own_path` (must not already exist) and connects it to
+    /// `daemon_path`. Shared by both sockets [`Self::connect`] creates.
+    fn bind_and_connect(
+        own_path: &Path,
+        daemon_path: &Path,
+    ) -> Result<UnixDatagram, TransportError> {
         let socket = UnixDatagram::bind(own_path)
             .map_err(|e| TransportError::Mesh(format!("bind {}: {e}", own_path.display())))?;
         socket
             .connect(daemon_path)
             .map_err(|e| TransportError::Mesh(format!("connect {}: {e}", daemon_path.display())))?;
-        Ok(Self { socket })
+        Ok(socket)
     }
 
-    /// Sends one command line and waits for the synchronous one-datagram
-    /// reply (`OK`, `FAIL`, or a command-specific value).
+    /// Sends one command line on the COMMAND socket and waits for the
+    /// synchronous one-datagram reply (`OK`, `FAIL`, or a
+    /// command-specific value).
     ///
     /// # Errors
     ///
     /// Returns [`TransportError::Mesh`] on I/O failure, timeout, or a
     /// non-UTF-8 reply.
     pub async fn request(&self, command: &str) -> Result<String, TransportError> {
-        self.socket
+        self.command
             .send(command.as_bytes())
             .await
             .map_err(|e| TransportError::Mesh(format!("send {command}: {e}")))?;
         let mut buf = vec![0u8; MAX_CTRL_MESSAGE];
-        let len = tokio::time::timeout(CTRL_TIMEOUT, self.socket.recv(&mut buf))
+        let len = tokio::time::timeout(CTRL_TIMEOUT, self.command.recv(&mut buf))
             .await
             .map_err(|_elapsed| {
                 TransportError::Mesh(format!("timed out waiting for a reply to {command}"))
@@ -155,21 +198,37 @@ impl WpaCtrl {
             .map_err(|_e| TransportError::Mesh("reply was not valid UTF-8".into()))
     }
 
-    /// Subscribes this socket to unsolicited events (`ATTACH`) —
-    /// required once before [`Self::next_event`] sees anything.
+    /// Subscribes the MONITOR socket to unsolicited events (`ATTACH`) —
+    /// required once before [`Self::next_event`] sees anything. Sent on
+    /// the monitor socket, not the command socket, so a later `request`
+    /// call is never confused with this handshake.
     ///
     /// # Errors
     ///
     /// Returns [`TransportError::Mesh`] if the daemon does not answer
     /// `OK`.
     pub async fn attach(&self) -> Result<(), TransportError> {
-        match self.request("ATTACH").await?.trim() {
-            "OK" => Ok(()),
-            other => Err(TransportError::Mesh(format!("ATTACH failed: {other}"))),
+        self.monitor
+            .send(b"ATTACH")
+            .await
+            .map_err(|e| TransportError::Mesh(format!("send ATTACH: {e}")))?;
+        let mut buf = vec![0u8; MAX_CTRL_MESSAGE];
+        let len = tokio::time::timeout(CTRL_TIMEOUT, self.monitor.recv(&mut buf))
+            .await
+            .map_err(|_elapsed| TransportError::Mesh("timed out waiting for ATTACH reply".into()))?
+            .map_err(|e| TransportError::Mesh(format!("recv: {e}")))?;
+        let received = buf
+            .get(..len)
+            .ok_or_else(|| TransportError::Mesh("recv returned an out-of-range length".into()))?;
+        match std::str::from_utf8(received).map(str::trim) {
+            Ok("OK") => Ok(()),
+            Ok(other) => Err(TransportError::Mesh(format!("ATTACH failed: {other}"))),
+            Err(_e) => Err(TransportError::Mesh("ATTACH reply was not valid UTF-8".into())),
         }
     }
 
-    /// Reads the next line the daemon sends unprompted (a P2P event).
+    /// Reads the next line the daemon sends unprompted (a P2P event) on
+    /// the MONITOR socket.
     ///
     /// # Errors
     ///
@@ -177,7 +236,7 @@ impl WpaCtrl {
     /// non-UTF-8 line.
     pub async fn next_event(&self, timeout: Duration) -> Result<WpaEvent, TransportError> {
         let mut buf = vec![0u8; MAX_CTRL_MESSAGE];
-        let len = tokio::time::timeout(timeout, self.socket.recv(&mut buf))
+        let len = tokio::time::timeout(timeout, self.monitor.recv(&mut buf))
             .await
             .map_err(|_elapsed| TransportError::Mesh("timed out waiting for a P2P event".into()))?
             .map_err(|e| TransportError::Mesh(format!("recv: {e}")))?;
@@ -196,7 +255,7 @@ mod event_parsing_tests {
     use crate::addr::MeshPeerAddr;
 
     #[test]
-    fn parses_group_started_as_go() {
+    fn parses_group_started_as_go() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let event = parse_event_line(
             r#"<3>P2P-GROUP-STARTED wlan0-p2p-0 GO ssid="DIRECT-ab" freq=2437 go_dev_addr=aa:bb:cc:dd:ee:ff"#,
         );
@@ -205,12 +264,14 @@ mod event_parsing_tests {
             WpaEvent::GroupStarted {
                 iface: "wlan0-p2p-0".to_string(),
                 role: GroupRole::GroupOwner,
+                go_dev_addr: Some(MeshPeerAddr::parse("aa:bb:cc:dd:ee:ff")?),
             }
         );
+        Ok(())
     }
 
     #[test]
-    fn parses_group_started_as_client() {
+    fn parses_group_started_as_client() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let event = parse_event_line(
             r#"<3>P2P-GROUP-STARTED wlan0-p2p-0 client ssid="DIRECT-ab" freq=2437 go_dev_addr=aa:bb:cc:dd:ee:ff"#,
         );
@@ -219,10 +280,15 @@ mod event_parsing_tests {
             WpaEvent::GroupStarted {
                 iface: "wlan0-p2p-0".to_string(),
                 role: GroupRole::Client,
+                go_dev_addr: Some(MeshPeerAddr::parse("aa:bb:cc:dd:ee:ff")?),
             }
         );
+        Ok(())
     }
 
+    /// Also the regression case for a `P2P-GROUP-STARTED` line WITHOUT a
+    /// `go_dev_addr` field: it must still parse as `GroupStarted` (not
+    /// fall back to `Other`), with `go_dev_addr: None`.
     #[test]
     fn parses_without_priority_prefix() {
         let event = parse_event_line("P2P-GROUP-STARTED wlan0-p2p-0 GO ssid=\"x\"");
@@ -231,6 +297,7 @@ mod event_parsing_tests {
             WpaEvent::GroupStarted {
                 iface: "wlan0-p2p-0".to_string(),
                 role: GroupRole::GroupOwner,
+                go_dev_addr: None,
             }
         );
     }
@@ -284,6 +351,7 @@ mod wpa_ctrl_tests {
     use tokio::net::UnixDatagram;
 
     use super::{GroupRole, WpaCtrl, WpaEvent};
+    use crate::addr::MeshPeerAddr;
 
     /// Unique temp-file pair per test run (parallel `cargo test` runs
     /// must not collide on socket paths).
@@ -397,6 +465,7 @@ mod wpa_ctrl_tests {
             WpaEvent::GroupStarted {
                 iface: "wlan0-p2p-0".to_string(),
                 role: GroupRole::Client,
+                go_dev_addr: Some(MeshPeerAddr::parse("aa:bb:cc:dd:ee:ff")?),
             }
         );
 

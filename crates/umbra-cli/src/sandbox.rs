@@ -118,10 +118,17 @@ pub fn restrict_filesystem_with_exceptions(
 /// `wpa_supplicant`'s existing `ctrl_interface` DIRECTORY (we never
 /// create anything there — the daemon owns that socket) plus
 /// read+write+MAKE-SOCKET on our OWN client-side control-socket
-/// directory (we bind a fresh datagram socket there per run). A
-/// SEPARATE function from [`restrict_filesystem_with_exceptions`]
-/// deliberately: the Tor exception grant must not gain `MakeSock` just
-/// because mesh needs it elsewhere.
+/// directory (we bind a fresh datagram socket there per run), plus
+/// read-only grants on `/proc/net`, `/sys/class/net` and `/sys/devices`
+/// — the mesh negotiation path reads `/proc/net/if_inet6` (our own
+/// link-local address) and `/sys/class/net/<iface>/ifindex` (the IPv6
+/// scope id), and both would otherwise fail closed with `EACCES` under
+/// the zero-access default. `/sys/class/net/<iface>` entries are
+/// symlinks into `/sys/devices/...`, and Landlock enforces against the
+/// RESOLVED path, so both trees need a grant. A SEPARATE function from
+/// [`restrict_filesystem_with_exceptions`] deliberately: the Tor
+/// exception grant must not gain `MakeSock` just because mesh needs it
+/// elsewhere.
 ///
 /// # Errors
 ///
@@ -175,6 +182,50 @@ pub fn restrict_filesystem_for_mesh(
     })?;
     created = created
         .add_rule(PathBeneath::new(own_fd, own_rights))
+        .map_err(CliError::Sandbox)?;
+
+    // The mesh negotiation path also reads two fixed, well-known kernel
+    // paths that a caller never supplies: `/proc/net/if_inet6`
+    // (`linklocal::link_local_address`, to find our own address on the
+    // group interface) and `/sys/class/net/<iface>/ifindex`
+    // (`interface_index`, for the IPv6 scope id). Both grants are
+    // read-only — we never write or create anything under either tree.
+    let procfs_rights = AccessFs::ReadFile | AccessFs::ReadDir;
+    let procfs_fd = PathFd::new("/proc/net").map_err(|err| {
+        CliError::Io(std::io::Error::other(format!(
+            "sandbox exception path /proc/net: {err}"
+        )))
+    })?;
+    created = created
+        .add_rule(PathBeneath::new(procfs_fd, procfs_rights))
+        .map_err(CliError::Sandbox)?;
+
+    // `/sys/class/net/<iface>` entries are SYMLINKS (e.g.
+    // `/sys/class/net/lo -> ../../devices/virtual/net/lo`; a real wifi
+    // NIC resolves under `/sys/devices/pci.../net/<iface>` or similar,
+    // depending on the bus it's attached to). Landlock enforces against
+    // the RESOLVED path, not the symlink's own location, so
+    // `/sys/class/net` alone does not cover `ifindex` once the kernel
+    // follows the link — both the symlink directory itself (to look up
+    // `<iface>`) and the real `/sys/devices` tree it resolves into must
+    // be granted.
+    let sysfs_rights = AccessFs::ReadFile | AccessFs::ReadDir;
+    let sysfs_fd = PathFd::new("/sys/class/net").map_err(|err| {
+        CliError::Io(std::io::Error::other(format!(
+            "sandbox exception path /sys/class/net: {err}"
+        )))
+    })?;
+    created = created
+        .add_rule(PathBeneath::new(sysfs_fd, sysfs_rights))
+        .map_err(CliError::Sandbox)?;
+
+    let sysfs_devices_fd = PathFd::new("/sys/devices").map_err(|err| {
+        CliError::Io(std::io::Error::other(format!(
+            "sandbox exception path /sys/devices: {err}"
+        )))
+    })?;
+    created = created
+        .add_rule(PathBeneath::new(sysfs_devices_fd, sysfs_rights))
         .map_err(CliError::Sandbox)?;
 
     let status = created.restrict_self()?;

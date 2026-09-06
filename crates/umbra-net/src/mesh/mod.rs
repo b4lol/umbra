@@ -47,9 +47,8 @@ pub async fn connect(ctrl: &WpaCtrl, peer: MeshPeerAddr) -> Result<TcpStream, Tr
     ctrl.attach().await?;
     expect_ok(ctrl, "P2P_FIND").await?;
     expect_ok(ctrl, &format!("P2P_CONNECT {peer} pbc")).await?;
-    let (iface, role) = wait_for_group(ctrl).await?;
-    let address = linklocal::link_local_address(&iface)?;
-    stream_for_role(&iface, address, role).await
+    let (iface, role, go_dev_addr) = wait_for_group(ctrl).await?;
+    stream_for_role(&iface, role, go_dev_addr).await
 }
 
 /// Responder side (`umbra serve-mesh`): becomes discoverable, answers
@@ -78,9 +77,12 @@ pub async fn listen(ctrl: &WpaCtrl) -> Result<TcpStream, TransportError> {
             WpaEvent::GoNegRequest { peer } => {
                 expect_ok(ctrl, &format!("P2P_CONNECT {peer} pbc")).await?;
             }
-            WpaEvent::GroupStarted { iface, role } => {
-                let address = linklocal::link_local_address(&iface)?;
-                return stream_for_role(&iface, address, role).await;
+            WpaEvent::GroupStarted {
+                iface,
+                role,
+                go_dev_addr,
+            } => {
+                return stream_for_role(&iface, role, go_dev_addr).await;
             }
             WpaEvent::GroupFormationFailure => {
                 return Err(TransportError::Mesh("P2P group formation failed".into()));
@@ -106,7 +108,9 @@ async fn expect_ok(ctrl: &WpaCtrl, command: &str) -> Result<(), TransportError> 
 /// `P2P-GROUP-FORMATION-FAILURE`/the deadline (failure). Used by
 /// [`connect`]; [`listen`] has its own loop (it must ALSO answer
 /// `P2P-GO-NEG-REQUEST`, which [`connect`]'s initiator side never sees).
-async fn wait_for_group(ctrl: &WpaCtrl) -> Result<(String, GroupRole), TransportError> {
+async fn wait_for_group(
+    ctrl: &WpaCtrl,
+) -> Result<(String, GroupRole, Option<MeshPeerAddr>), TransportError> {
     // `Instant + Duration` only panics on overflow, which a 60s timeout
     // added to "now" cannot reach in practice.
     #[allow(clippy::arithmetic_side_effects)]
@@ -119,7 +123,11 @@ async fn wait_for_group(ctrl: &WpaCtrl) -> Result<(String, GroupRole), Transport
             ));
         }
         match ctrl.next_event(remaining).await? {
-            WpaEvent::GroupStarted { iface, role } => return Ok((iface, role)),
+            WpaEvent::GroupStarted {
+                iface,
+                role,
+                go_dev_addr,
+            } => return Ok((iface, role, go_dev_addr)),
             WpaEvent::GroupFormationFailure => {
                 return Err(TransportError::Mesh("P2P group formation failed".into()));
             }
@@ -142,20 +150,65 @@ fn interface_index(iface: &str) -> Result<u32, TransportError> {
         .map_err(|e| TransportError::Mesh(format!("malformed ifindex for {iface}: {e}")))
 }
 
-/// Once a group exists on `address`: the Group Owner listens and
-/// accepts one connection, the client dials it. Shared tail of
-/// [`connect`] and [`listen`] (both end the same way once they know the
-/// interface and role).
+/// Derives the IPv6 link-local address a network interface with MAC
+/// `mac` would self-assign via SLAAC (the standard "modified EUI-64"
+/// transformation, RFC 4291 Appendix A): split the MAC's two 24-bit
+/// halves, insert `ff:fe` between them, and flip the universal/local
+/// bit of the first byte.
+///
+/// Used as a best-effort way to reach a Wi-Fi Direct Group Owner:
+/// Umbra's no-DHCP design (see `linklocal`'s module docs) means the
+/// client never learns the GO's actual assigned address any other way.
+/// `wpa_supplicant`'s `P2P-GROUP-STARTED` event reports the GO's P2P
+/// Device Address (`go_dev_addr`), which commonly — not guaranteed —
+/// IS the group interface's own MAC. HONEST RESIDUAL: if a real
+/// deployment assigns the group interface a different MAC than its P2P
+/// Device Address, this prediction is wrong and the connect will fail;
+/// this can only be confirmed against real hardware (see
+/// `crates/umbra-net/tests/mesh_live.rs`), the same residual class as
+/// the rest of this transport.
+#[must_use]
+pub fn mac_to_link_local(mac: [u8; 6]) -> Ipv6Addr {
+    let eui64 = [
+        mac[0] ^ 0x02,
+        mac[1],
+        mac[2],
+        0xff,
+        0xfe,
+        mac[3],
+        mac[4],
+        mac[5],
+    ];
+    Ipv6Addr::new(
+        0xfe80,
+        0,
+        0,
+        0,
+        u16::from_be_bytes([eui64[0], eui64[1]]),
+        u16::from_be_bytes([eui64[2], eui64[3]]),
+        u16::from_be_bytes([eui64[4], eui64[5]]),
+        u16::from_be_bytes([eui64[6], eui64[7]]),
+    )
+}
+
+/// Once a group exists on `iface`: the Group Owner listens on its OWN
+/// link-local address and accepts one connection; the client dials the
+/// Group Owner's address, derived from `go_dev_addr` since nothing else
+/// in this no-DHCP design ever learns it (see [`mac_to_link_local`]).
+/// Shared tail of [`connect`] and [`listen`] (both end the same way
+/// once they know the interface, role, and the GO's device address).
 async fn stream_for_role(
     iface: &str,
-    address: Ipv6Addr,
     role: GroupRole,
+    go_dev_addr: Option<MeshPeerAddr>,
 ) -> Result<TcpStream, TransportError> {
     let scope_id = interface_index(iface)?;
-    let socket_addr =
-        std::net::SocketAddr::V6(std::net::SocketAddrV6::new(address, MESH_PORT, 0, scope_id));
     match role {
         GroupRole::GroupOwner => {
+            let address = linklocal::link_local_address(iface)?;
+            let socket_addr = std::net::SocketAddr::V6(std::net::SocketAddrV6::new(
+                address, MESH_PORT, 0, scope_id,
+            ));
             let listener = TcpListener::bind(socket_addr)
                 .await
                 .map_err(|e| TransportError::Mesh(format!("bind {socket_addr}: {e}")))?;
@@ -165,8 +218,51 @@ async fn stream_for_role(
                 .map_err(|e| TransportError::Mesh(format!("accept: {e}")))?;
             Ok(stream)
         }
-        GroupRole::Client => TcpStream::connect(socket_addr)
-            .await
-            .map_err(|e| TransportError::Mesh(format!("connect {socket_addr}: {e}"))),
+        GroupRole::Client => {
+            let peer = go_dev_addr.ok_or_else(|| {
+                TransportError::Mesh(
+                    "client role needs the Group Owner's device address to derive its link-local address"
+                        .into(),
+                )
+            })?;
+            let address = mac_to_link_local(peer.octets());
+            let socket_addr = std::net::SocketAddr::V6(std::net::SocketAddrV6::new(
+                address, MESH_PORT, 0, scope_id,
+            ));
+            TcpStream::connect(socket_addr)
+                .await
+                .map_err(|e| TransportError::Mesh(format!("connect {socket_addr}: {e}")))
+        }
+    }
+}
+
+#[cfg(test)]
+mod mac_to_link_local_tests {
+    use super::mac_to_link_local;
+    use std::net::Ipv6Addr;
+
+    /// Textbook modified-EUI-64 example: MAC `00:0c:29:11:22:33` self-
+    /// assigns link-local `fe80::20c:29ff:fe11:2233` (RFC 4291
+    /// Appendix A — insert `fffe` between the two 24-bit halves, flip
+    /// the universal/local bit of the first byte: `0x00 ^ 0x02 = 0x02`).
+    #[test]
+    fn matches_the_textbook_example() {
+        let addr = mac_to_link_local([0x00, 0x0c, 0x29, 0x11, 0x22, 0x33]);
+        assert_eq!(
+            addr,
+            Ipv6Addr::new(0xfe80, 0, 0, 0, 0x020c, 0x29ff, 0xfe11, 0x2233)
+        );
+    }
+
+    /// A MAC whose first byte already has the universal/local bit set
+    /// gets it CLEARED (the transformation is its own inverse on that
+    /// bit), not set again.
+    #[test]
+    fn flips_an_already_local_bit_off() {
+        let addr = mac_to_link_local([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
+        assert_eq!(
+            addr,
+            Ipv6Addr::new(0xfe80, 0, 0, 0, 0x0000, 0x00ff, 0xfe00, 0x0001)
+        );
     }
 }

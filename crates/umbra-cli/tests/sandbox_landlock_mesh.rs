@@ -118,3 +118,43 @@ fn can_read_and_write_in_the_wpa_ctrl_dir() -> Result<(), Box<dyn std::error::Er
         Err(_panic) => Err("worker thread panicked".into()),
     }
 }
+
+/// Regression test for the bug where `restrict_filesystem_for_mesh`
+/// granted no exception for `/proc/net/if_inet6` or
+/// `/sys/class/net/<iface>/ifindex` — the two fixed kernel paths the
+/// mesh negotiation path (`linklocal::link_local_address` and
+/// `interface_index`) actually reads. Without these grants both reads
+/// fail with `EACCES` under the sandbox, and every `send --mesh` /
+/// `serve-mesh` run dies as soon as a P2P group forms. `lo` is used as
+/// the probe interface because it always exists.
+#[test]
+fn can_read_procfs_and_sysfs_paths_the_mesh_transport_needs()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let wpa_dir = temp_dir("wpa4");
+    let own_dir = temp_dir("own4");
+    std::fs::create_dir_all(&wpa_dir)?;
+    std::fs::create_dir_all(&own_dir)?;
+
+    let handle = std::thread::spawn(
+        move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            restrict_filesystem_for_mesh(&wpa_dir, &own_dir)?;
+
+            let if_inet6 = std::fs::read_to_string("/proc/net/if_inet6");
+            assert!(
+                if_inet6.is_ok(),
+                "must be able to read /proc/net/if_inet6: {if_inet6:?}"
+            );
+
+            let ifindex = std::fs::read_to_string("/sys/class/net/lo/ifindex");
+            assert!(
+                ifindex.is_ok(),
+                "must be able to read /sys/class/net/lo/ifindex: {ifindex:?}"
+            );
+            Ok(())
+        },
+    );
+    match handle.join() {
+        Ok(result) => result,
+        Err(_panic) => Err("worker thread panicked".into()),
+    }
+}
