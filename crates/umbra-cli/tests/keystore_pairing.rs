@@ -261,6 +261,42 @@ fn validate_nym_addr_format_check() {
     assert!(umbra_cli::peers::validate_nym_addr("first.second@").is_err());
 }
 
+/// `validate_nym_addr` must reject anything outside base58 in any
+/// segment — above all an embedded NEWLINE. `save_peer` writes an
+/// accepted address verbatim as a `nym {address}\n` record line, so a
+/// newline-carrying address would inject a second, forged line that
+/// `load_peer` parses as a separately-recorded `.onion` (or `mesh`)
+/// address for that peer, silently redirecting a later
+/// `umbra send --onion <peer>` to an attacker-chosen hidden service.
+#[test]
+fn validate_nym_addr_rejects_record_injection_and_non_base58() {
+    // The injection payload itself: three otherwise well-shaped
+    // segments, with a newline plus a forged `onion` record line
+    // smuggled into the gateway segment.
+    assert!(
+        umbra_cli::peers::validate_nym_addr(
+            "aaa.bbb@ccc\nonion abcdefghij234567abcdefghij234567abcdefghij234567abcd.onion"
+        )
+        .is_err()
+    );
+    // A newline in each of the other two segments, too.
+    assert!(umbra_cli::peers::validate_nym_addr("aa\na.bbb@ccc").is_err());
+    assert!(umbra_cli::peers::validate_nym_addr("aaa.bb\nb@ccc").is_err());
+    // A carriage return and a trailing newline are equally rejected.
+    assert!(umbra_cli::peers::validate_nym_addr("aaa.bbb@ccc\r\nnym ddd.eee@fff").is_err());
+    assert!(umbra_cli::peers::validate_nym_addr("aaa.bbb@ccc\n").is_err());
+    // Whitespace, and the base58 alphabet's four excluded characters.
+    assert!(umbra_cli::peers::validate_nym_addr("aaa.bbb@c c").is_err());
+    assert!(umbra_cli::peers::validate_nym_addr("aaa.bbb@ccc0").is_err());
+    assert!(umbra_cli::peers::validate_nym_addr("aaa.bbb@cccO").is_err());
+    assert!(umbra_cli::peers::validate_nym_addr("aaa.bbb@cccI").is_err());
+    assert!(umbra_cli::peers::validate_nym_addr("aaa.bbb@cccl").is_err());
+    // A second `@` or `.` cannot smuggle past the structural split
+    // either (they land inside a segment, which is base58-only).
+    assert!(umbra_cli::peers::validate_nym_addr("aaa.bbb@ccc@ddd").is_err());
+    assert!(umbra_cli::peers::validate_nym_addr("aaa.bbb.ccc@ddd").is_err());
+}
+
 /// `list_names` is the pre-sandbox peer loader for the interactive TUI:
 /// a MISSING directory is an empty list (fresh keystore, not an error),
 /// non-`.peer` files are ignored, and names come back sorted.

@@ -93,17 +93,45 @@ pub fn validate_mesh_addr(address: &str) -> Result<(), CliError> {
         })
 }
 
+/// True when every byte of `segment` is in Bitcoin's base58 alphabet
+/// (`123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz` — no
+/// `0`, `O`, `I` or `l`), and `segment` is non-empty. Each of a Nym
+/// address's three segments is a base58-encoded key/identity, so this
+/// is the exact admissible alphabet — nothing else, and in particular
+/// no whitespace, newline, `@` or `.`, can pass.
+fn is_base58_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment.bytes().all(|byte| {
+            matches!(byte,
+                b'1'..=b'9'
+                | b'A'..=b'H' | b'J'..=b'N' | b'P'..=b'Z'
+                | b'a'..=b'k' | b'm'..=b'z')
+        })
+}
+
 /// Lightweight format check for a Nym mixnet address
-/// (`identity.encryption@gateway`, three non-empty segments) — NOT the
-/// authoritative parse (that lives in the separate `umbra-nym-cli`
-/// crate, which alone depends on `nym-sdk`; see
+/// (`identity.encryption@gateway`, three non-empty base58 segments) —
+/// NOT the authoritative parse (that lives in the separate
+/// `umbra-nym-cli` crate, which alone depends on `nym-sdk`; see
 /// docs/superpowers/specs/2026-09-06-nym-mixnet-design.md). Mirrors
-/// [`validate_mesh_addr`].
+/// [`validate_mesh_addr`]'s rigor: that one delegates to a parser which
+/// cannot admit anything but hex digits and colons, and this one admits
+/// nothing but the base58 alphabet and the two structural separators.
+///
+/// The character-class restriction is load-bearing, not cosmetic:
+/// [`save_peer`] writes an accepted address verbatim as a `nym
+/// {address}\n` line into the peer record, so a value carrying an
+/// embedded newline (`aaa.bbb@ccc\nonion <attacker-address>`) would
+/// inject a SECOND, forged record line that [`load_peer`] would then
+/// parse as a legitimately stored `.onion` address for that peer — a
+/// later `umbra send --onion <peer>` would dial the attacker's hidden
+/// service. Restricting every segment to base58 makes a newline (and
+/// any other separator or control byte) categorically impossible.
 ///
 /// # Errors
 ///
 /// Returns [`CliError::Io`] for a string that doesn't have the
-/// `<non-empty>.<non-empty>@<non-empty>` shape.
+/// `<base58>.<base58>@<base58>` shape.
 pub fn validate_nym_addr(addr: &str) -> Result<(), CliError> {
     let invalid = || {
         CliError::Io(std::io::Error::other(
@@ -114,7 +142,8 @@ pub fn validate_nym_addr(addr: &str) -> Result<(), CliError> {
     let (identity, encryption) = identity_and_encryption
         .split_once('.')
         .ok_or_else(invalid)?;
-    if identity.is_empty() || encryption.is_empty() || gateway.is_empty() {
+    if !is_base58_segment(identity) || !is_base58_segment(encryption) || !is_base58_segment(gateway)
+    {
         return Err(invalid());
     }
     Ok(())
