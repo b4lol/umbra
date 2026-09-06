@@ -36,6 +36,7 @@ path = "src/main.rs"
 umbra-net = { path = "../umbra-net" }
 umbra-crypto = { path = "../umbra-crypto" }
 umbra-cli = { path = "../umbra-cli" }
+umbra-hardware = { path = "../umbra-hardware" }
 nym-sdk = "=1.21.6"
 tokio = { version = "1.53.1", features = ["full"] }
 clap = { version = "4.6.6", features = ["derive"] }

@@ -44,14 +44,11 @@
 //! mixnet client's own stream ending) stops the loop and returns an
 //! error.
 //!
-//! Honest scope: unlike `umbra-cli`'s own flows, this crate carries no
-//! `umbra-hardware` dependency, so the pre-secret `harden_process()`
-//! (mlockall/MCL_FUTURE + non-dumpable, ADR-025) step that `serve.rs`
-//! and `mesh_send.rs` run before touching key material is NOT performed
-//! here — this task's brief lists only `umbra-net`, `umbra-crypto`,
-//! `umbra-cli`, and the Nym/sandbox crates as this crate's interfaces,
-//! and adding a new cross-cutting dependency was judged out of scope
-//! for this wiring task. See the Task 13 report for this call.
+//! Both flows call `umbra_hardware::process::harden_process()`
+//! (mlockall/MCL_FUTURE + non-dumpable, ADR-025) as their literal FIRST
+//! step, before any secret material (identity seeds, peer PQXDH keys,
+//! plaintext) touches RAM — matching `serve.rs`/`tor_send.rs`/
+//! `mesh_send.rs`'s own ordering exactly.
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -216,6 +213,11 @@ pub fn run_send_nym(
     mainnet: bool,
     input: &mut impl std::io::Read,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Memory hardening FIRST (ADR-025): mirrors `tor_send.rs`/`mesh_send.rs`/
+    // `serve.rs`, all of which call this as their literal first step, before
+    // any secret (here: the peer's PQXDH keys, the plaintext) touches RAM.
+    umbra_hardware::process::harden_process()?;
+
     let peer = umbra_cli::peers::load_peer(&peers_dir_from_keystore(keystore), peer_name)?;
 
     let nym_addr = nym_addr_override
@@ -289,8 +291,8 @@ pub fn run_send_nym(
 /// Runs the `serve-nym` flow: loads the caller's identity seeds once,
 /// connects a PERSISTENT Nym client rooted at `nym_config`, and loops
 /// accepting inbound messages until the process is terminated —
-/// mirroring `umbra-cli`'s own `serve.rs::run`'s structure (identity
-/// load, sandbox, connect, loop). A fresh [`IdentityBundle`] is derived
+/// mirroring `umbra-cli`'s own `serve.rs::run`'s structure (memory
+/// hardening, identity load, sandbox, connect, loop). A fresh [`IdentityBundle`] is derived
 /// from the loaded seeds for EVERY inbound message (no Argon2 re-run;
 /// `IdentityBundle::from_seeds` is cheap), mirroring `serve.rs`'s own
 /// `inbound_loop`, which does the same per accepted stream rather than
@@ -308,6 +310,11 @@ pub fn run_serve_nym(
     nym_config: &Path,
     mainnet: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Memory hardening FIRST (ADR-025), before the passphrase or the
+    // identity seeds it decrypts ever touch RAM — mirrors `serve.rs::run`'s
+    // own ordering exactly (its step 1, before the keystore is even opened).
+    umbra_hardware::process::harden_process()?;
+
     let passphrase = load_passphrase(passphrase_file)?;
     let seeds = std::sync::Arc::new(umbra_cli::keystore::load_seeds(keystore, &passphrase)?);
 
