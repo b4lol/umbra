@@ -258,7 +258,18 @@ pub fn run_send_nym(
             .create(&config_dir)?;
     }
 
-    umbra_cli::sandbox::restrict_filesystem_with_exceptions(&[config_dir.as_path()], &[])?;
+    umbra_cli::sandbox::restrict_filesystem_with_exceptions(
+        &[config_dir.as_path()],
+        // /etc is READ-ONLY: public resolver/config content only. Every
+        // other network-touching flow in this project grants exactly
+        // this (`umbra-cli`'s `serve.rs` and `tor_send.rs`) and the Nym
+        // flows need it for the same class of reason: `nym-sdk` reaches
+        // the network through `reqwest` →`rustls-platform-verifier` →
+        // `rustls-native-certs`, which reads the system TLS trust store
+        // (`/etc/ssl/certs`) while `NymClient::connect` negotiates TLS
+        // to Nym's API/gateway endpoints.
+        &[std::path::Path::new("/etc")],
+    )?;
     crate::sandbox::restrict_syscalls_nym()?;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -322,7 +333,16 @@ pub fn run_serve_nym(
             .mode(0o700)
             .create(nym_config)?;
     }
-    umbra_cli::sandbox::restrict_filesystem_with_exceptions(&[nym_config], &[])?;
+    umbra_cli::sandbox::restrict_filesystem_with_exceptions(
+        &[nym_config],
+        // /etc is READ-ONLY: public resolver/config content only. Same
+        // grant, and the same reason, as `run_send_nym` above and as
+        // `umbra-cli`'s own `serve.rs`/`tor_send.rs`: `nym-sdk`'s
+        // `reqwest` → `rustls-platform-verifier` → `rustls-native-certs`
+        // chain reads the system TLS trust store (`/etc/ssl/certs`)
+        // during `NymClient::connect`.
+        &[std::path::Path::new("/etc")],
+    )?;
     crate::sandbox::restrict_syscalls_nym()?;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
