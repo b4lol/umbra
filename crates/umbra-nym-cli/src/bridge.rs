@@ -24,10 +24,34 @@ use crate::addr::NymPeerAddr;
 use crate::transport::NymTransport;
 
 /// Size of the in-memory duplex buffer bridging the messenger's stream
-/// API to Nym's single-message API. Large enough to hold a full
-/// handshake blob plus the largest single-frame plaintext without the
-/// writer blocking on a reader that only drains after `shutdown`.
-const DUPLEX_BUF: usize = 64 * 1024;
+/// API to Nym's single-message API.
+///
+/// `send_via_nym` writes the ENTIRE stream produced by
+/// `send_text_stream` into one end of the duplex before ever reading
+/// from the other end (the read only starts after `shutdown`). If the
+/// total bytes written exceeded the buffer size, that write would block
+/// forever on a reader that isn't polling yet. So this must cover the
+/// true worst case for a single call, not just a typical one:
+///
+/// - Handshake blob: `HANDSHAKE_BLOB_LEN` = 1152 B (`umbra_crypto::pqxdh`).
+/// - Data frames: a plaintext at the messenger's own reassembly ceiling
+///   (`MAX_TEXT_MESSAGE` = 64 KiB = 65,536 B, `umbra_net::messenger`) is
+///   split into `CHUNK` = `MAX_PLAINTEXT` - 1 = 925 B pieces
+///   (`umbra_crypto::ratchet::MAX_PLAINTEXT` = 926), i.e.
+///   `ceil(65_536 / 925)` = 71 data frames, each one `PACKET_LEN` = 1024 B
+///   (`umbra_protocol::types::PACKET_LEN`): 71 * 1024 = 72,704 B. (A
+///   plaintext beyond `MAX_TEXT_MESSAGE` would be rejected by
+///   `receive_message` on the far end anyway, so this is the bridge's
+///   practical worst case, not an arbitrary bound.)
+/// - Cover frames: up to `MAX_COVER_PER_SEND` = 64 frames total across
+///   the whole burst (`umbra_net::messenger`), each `PACKET_LEN` = 1024 B:
+///   64 * 1024 = 65,536 B.
+/// - Termination frame: one more `PACKET_LEN` = 1024 B.
+///
+/// Worst case total: 1152 + 72,704 + 65,536 + 1024 = 140,416 B. 256 KiB
+/// (262,144 B) is used here for round-number headroom (~1.87x) above
+/// that figure.
+const DUPLEX_BUF: usize = 256 * 1024;
 
 /// Runs the PQXDH handshake + single-message send over an in-memory
 /// duplex, then forwards the accumulated bytes as exactly one Nym
