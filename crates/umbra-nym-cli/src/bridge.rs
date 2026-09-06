@@ -86,15 +86,34 @@ pub async fn send_via_nym<T: NymTransport>(
 /// Waits for exactly one Nym message from `transport`, then runs it
 /// through `receive_message` over an in-memory duplex.
 ///
+/// The inbound message is length-checked against [`DUPLEX_BUF`] BEFORE
+/// anything is written, and rejected outright if it is larger. This is
+/// a hard requirement, not a nicety: like `send_via_nym`, this function
+/// writes the WHOLE message into one end of the duplex before anything
+/// reads the other end, so a message beyond the buffer's capacity would
+/// park `write_all` forever on a reader that never starts. Nym's
+/// `MixnetClient` reassembles arbitrarily large fragmented messages with
+/// no cap of its own, and this runs BEFORE any PQXDH handshake — so
+/// without this check ANY Nym address on the network, paired or not,
+/// could wedge `serve-nym`'s receive loop permanently by sending one
+/// oversized message. `serve-nym` already treats a `receive_via_nym`
+/// error as recoverable (logged to stderr, loop continues), so the
+/// rejection degrades correctly.
+///
 /// # Errors
 ///
-/// Returns [`TransportError`] on Nym receive failure or handshake
-/// processing failure.
+/// Returns [`TransportError`] on Nym receive failure, an oversized
+/// inbound message, or handshake processing failure.
 pub async fn receive_via_nym<T: NymTransport>(
     transport: &mut T,
     identity: IdentityBundle,
 ) -> Result<Vec<u8>, TransportError> {
     let framed = transport.recv().await?;
+    if framed.len() > DUPLEX_BUF {
+        return Err(TransportError::Nym(
+            "received message exceeds duplex buffer capacity".into(),
+        ));
+    }
     let (mut writer, mut reader) = tokio::io::duplex(DUPLEX_BUF);
     writer
         .write_all(&framed)
@@ -154,6 +173,56 @@ mod tests {
 
         let received = receive_via_nym(&mut transport_b, b_identity).await?;
         assert_eq!(received, plaintext.to_vec());
+        Ok(())
+    }
+
+    /// An inbound message larger than [`DUPLEX_BUF`] must be rejected
+    /// PROMPTLY rather than parked forever inside `write_all` (nothing
+    /// drains the duplex until the write completes). Any Nym address on
+    /// the network can send one of these — no pairing, no valid PQXDH
+    /// handshake — so hanging here would wedge `serve-nym`'s whole
+    /// receive loop. The `tokio::time::timeout` is the actual assertion:
+    /// before the length check existed, this test would hang instead of
+    /// returning.
+    #[tokio::test]
+    async fn receive_via_nym_rejects_oversized_message_without_hanging(
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let addr = NymPeerAddr::parse(crate::addr::tests_support::SAMPLE_VALID_ADDRESS)?;
+        let mut transport = FakeNymTransport::new(addr);
+        transport
+            .inbox
+            .push_back(vec![0u8; DUPLEX_BUF.saturating_add(1)]);
+        let (identity, _peer_keys) = identity_and_peer_keys()?;
+
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            receive_via_nym(&mut transport, identity),
+        )
+        .await
+        .map_err(|_elapsed| "receive_via_nym hung on an oversized inbound message")?;
+        assert!(outcome.is_err(), "oversized message must be rejected");
+        Ok(())
+    }
+
+    /// A message of EXACTLY [`DUPLEX_BUF`] bytes still fits the duplex,
+    /// so it is not rejected by the length check — it fails later, in
+    /// `receive_message`, as the garbage frame it is. Pins the boundary
+    /// so the check can't silently drift into rejecting valid traffic.
+    #[tokio::test]
+    async fn receive_via_nym_accepts_the_exact_buffer_size_then_fails_decoding(
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let addr = NymPeerAddr::parse(crate::addr::tests_support::SAMPLE_VALID_ADDRESS)?;
+        let mut transport = FakeNymTransport::new(addr);
+        transport.inbox.push_back(vec![0u8; DUPLEX_BUF]);
+        let (identity, _peer_keys) = identity_and_peer_keys()?;
+
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            receive_via_nym(&mut transport, identity),
+        )
+        .await
+        .map_err(|_elapsed| "receive_via_nym hung on an exactly-buffer-sized message")?;
+        assert!(outcome.is_err(), "garbage frames must not decode");
         Ok(())
     }
 
