@@ -7,6 +7,10 @@
 pub mod cli;
 pub mod clipboard;
 pub mod keystore;
+#[cfg(feature = "mesh")]
+pub mod mesh_send;
+#[cfg(feature = "mesh")]
+pub mod mesh_serve;
 pub mod notify;
 pub mod pairing;
 pub mod peers;

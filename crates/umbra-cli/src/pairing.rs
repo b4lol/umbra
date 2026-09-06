@@ -96,6 +96,7 @@ pub fn parse_payload(encoded: &str) -> Result<PeerIdentity, CliError> {
         kem_arr,
         dsa,
         onion: None,
+        mesh_addr: None,
     })
 }
 
@@ -117,6 +118,10 @@ pub struct PeerIdentity {
     /// The peer's `.onion` service address, when the operator recorded
     /// one (`umbra pair --onion`); absent for payload-only records.
     pub onion: Option<String>,
+    /// The peer's Wi-Fi Direct P2P Device Address, when the operator
+    /// recorded one (`umbra pair --mesh-addr`); absent for
+    /// pipe/onion-only records.
+    pub mesh_addr: Option<String>,
 }
 
 /// Derives the shared 6-digit SAS code from BOTH pairing payloads

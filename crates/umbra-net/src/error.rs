@@ -55,4 +55,10 @@ pub enum TransportError {
     #[cfg(feature = "tor")]
     #[error(transparent)]
     Tor(#[from] arti_client::Error),
+
+    /// Mesh transport (`wpa_supplicant` control socket / P2P negotiation)
+    /// failure. Present only with the `mesh` feature.
+    #[cfg(feature = "mesh")]
+    #[error("mesh transport failure: {0}")]
+    Mesh(String),
 }

@@ -83,6 +83,24 @@ pub enum Command {
         /// peer record. Transport switches from pipe to embedded Tor.
         #[arg(long)]
         onion: Option<String>,
+        /// Use the Wi-Fi Direct mesh transport (must be explicit — mesh
+        /// mode has NO onion routing, THREAT_MODEL.md "Off-Grid Mesh";
+        /// a stored peer-record mesh address is never used unless this
+        /// flag is passed). Mutually exclusive with `--onion`. Requires
+        /// the `mesh` build feature.
+        #[cfg(feature = "mesh")]
+        #[arg(long, conflicts_with = "onion")]
+        mesh: bool,
+        /// Overrides the peer record's stored mesh address. Only
+        /// meaningful with `--mesh`.
+        #[cfg(feature = "mesh")]
+        #[arg(long, requires = "mesh")]
+        mesh_addr: Option<String>,
+        /// Path to `wpa_supplicant`'s P2P `ctrl_interface` socket.
+        /// Required when `--mesh` selects the mesh transport.
+        #[cfg(feature = "mesh")]
+        #[arg(long)]
+        wpa_ctrl: Option<std::path::PathBuf>,
         /// Censorship circumvention (ADR-030 unmanaged PT model);
         /// Tor-transport only.
         #[cfg(feature = "tor")]
@@ -156,6 +174,21 @@ pub enum Command {
         /// stored with the record for `send --peer`.
         #[arg(long)]
         onion: Option<String>,
+        /// Peer's Wi-Fi Direct P2P Device Address (`aa:bb:cc:dd:ee:ff`);
+        /// stored with the record for `send --mesh` (requires the
+        /// `mesh` build feature to be USED, but is always storable).
+        #[arg(long)]
+        mesh_addr: Option<String>,
+    },
+    /// Waits for an incoming Wi-Fi Direct connection from ANY paired
+    /// peer (mesh has no onion identity to publish — see
+    /// THREAT_MODEL.md "Off-Grid Mesh") and decrypts one message.
+    /// Requires the `mesh` build feature.
+    #[cfg(feature = "mesh")]
+    ServeMesh {
+        /// Path to `wpa_supplicant`'s P2P `ctrl_interface` socket.
+        #[arg(long)]
+        wpa_ctrl: std::path::PathBuf,
     },
 }
 
@@ -242,6 +275,12 @@ pub fn run() -> Result<(), CliError> {
         Command::Send {
             ref peer,
             ref onion,
+            #[cfg(feature = "mesh")]
+            ref mesh,
+            #[cfg(feature = "mesh")]
+            ref mesh_addr,
+            #[cfg(feature = "mesh")]
+            ref wpa_ctrl,
             #[cfg(feature = "tor")]
             ref pt,
         } => {
@@ -250,6 +289,27 @@ pub fn run() -> Result<(), CliError> {
             // branch (the Tor path does NOT load the keystore identity —
             // its initiator is per-session ephemeral by design).
             let peer_record = load_peer_record(&cli, peer)?;
+            #[cfg(feature = "mesh")]
+            if *mesh {
+                let address = mesh_addr
+                    .as_deref()
+                    .or(peer_record.mesh_addr.as_deref())
+                    .ok_or_else(|| {
+                        CliError::Keystore(
+                            "--mesh requires either --mesh-addr or a stored peer mesh address"
+                                .into(),
+                        )
+                    })?;
+                let ctrl_path = wpa_ctrl
+                    .as_ref()
+                    .ok_or_else(|| CliError::Keystore("--mesh requires --wpa-ctrl PATH".into()))?;
+                return crate::mesh_send::run(
+                    ctrl_path,
+                    address,
+                    &peer_record,
+                    &mut std::io::stdin().lock(),
+                );
+            }
             match onion.as_deref().or(peer_record.onion.as_deref()) {
                 #[cfg(feature = "tor")]
                 Some(address) => {
@@ -371,6 +431,12 @@ pub fn run() -> Result<(), CliError> {
             let passphrase = zeroize::Zeroizing::new(load_passphrase(&cli)?);
             crate::serve::run(&keystore, &passphrase, nickname, pt)
         }
+        #[cfg(feature = "mesh")]
+        Command::ServeMesh { ref wpa_ctrl } => {
+            harden_memory()?;
+            let bundle = load_identity(&cli)?;
+            crate::mesh_serve::run(wpa_ctrl, bundle)
+        }
         Command::ExportPairing => export_pairing(),
         Command::Fingerprint { ref peer } => match peer {
             Some(name) => {
@@ -405,7 +471,14 @@ pub fn run() -> Result<(), CliError> {
             ref peer_name,
             ref peer_payload,
             ref onion,
-        } => pair(&cli, peer_name, peer_payload, onion.as_deref()),
+            ref mesh_addr,
+        } => pair(
+            &cli,
+            peer_name,
+            peer_payload,
+            onion.as_deref(),
+            mesh_addr.as_deref(),
+        ),
     }
 }
 
@@ -480,6 +553,7 @@ fn pair(
     peer_name: &str,
     peer_payload: &str,
     onion: Option<&str>,
+    mesh_addr: Option<&str>,
 ) -> Result<(), CliError> {
     // The peer record lives next to the keystore.
     let keystore_dir = cli
@@ -489,7 +563,7 @@ fn pair(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let peers_dir = keystore_dir.join("peers");
-    crate::peers::save_peer(&peers_dir, peer_name, peer_payload, onion)?;
+    crate::peers::save_peer(&peers_dir, peer_name, peer_payload, onion, mesh_addr)?;
 
     // SAS: own payload (from the keystore identity) vs the peer payload.
     let bundle = load_identity(cli)?;

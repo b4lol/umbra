@@ -73,6 +73,10 @@ tor = [
     "dep:rustls",
     "dep:safelog",
 ]
+# Wi-Fi Direct off-grid mesh transport (TODO B.1). No new dependencies:
+# tokio's already-enabled "net" feature provides UnixDatagram/TcpStream/
+# TcpListener.
+mesh = []
 
 [dev-dependencies]
 zeroize.workspace = true

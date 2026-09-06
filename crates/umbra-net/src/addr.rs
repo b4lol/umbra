@@ -53,3 +53,92 @@ impl fmt::Display for OnionAddr {
         write!(f, "{}.onion", self.as_str())
     }
 }
+
+/// A validated Wi-Fi Direct P2P Device Address (IEEE 802 MAC form,
+/// `aa:bb:cc:dd:ee:ff`) — the mesh transport's peer identifier,
+/// analogous to [`OnionAddr`] for the Tor transport (TODO B.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MeshPeerAddr {
+    /// 6-byte MAC address octets.
+    octets: [u8; 6],
+}
+
+impl MeshPeerAddr {
+    /// Parses a colon-separated hex MAC address, case-insensitive.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransportError::InvalidPeer`] for the wrong number of
+    /// groups, wrong group length, or non-hex characters.
+    pub fn parse(addr: &str) -> Result<Self, TransportError> {
+        let mut octets = [0u8; 6];
+        let mut groups = addr.split(':');
+        for octet in &mut octets {
+            let group = groups.next().ok_or(TransportError::InvalidPeer)?;
+            if group.len() != 2 {
+                return Err(TransportError::InvalidPeer);
+            }
+            *octet = u8::from_str_radix(group, 16).map_err(|_e| TransportError::InvalidPeer)?;
+        }
+        if groups.next().is_some() {
+            return Err(TransportError::InvalidPeer);
+        }
+        Ok(Self { octets })
+    }
+
+    /// Raw 6-byte form, for building `P2P_CONNECT <addr> pbc`.
+    #[must_use]
+    pub fn octets(&self) -> [u8; 6] {
+        self.octets
+    }
+}
+
+impl fmt::Display for MeshPeerAddr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let [a, b, c, d, e, g] = self.octets;
+        write!(f, "{a:02x}:{b:02x}:{c:02x}:{d:02x}:{e:02x}:{g:02x}")
+    }
+}
+
+#[cfg(test)]
+mod mesh_addr_tests {
+    use super::MeshPeerAddr;
+
+    #[test]
+    fn parses_valid_address() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let addr = MeshPeerAddr::parse("aa:bb:cc:dd:ee:ff")?;
+        assert_eq!(addr.octets(), [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);
+        assert_eq!(addr.to_string(), "aa:bb:cc:dd:ee:ff");
+        Ok(())
+    }
+
+    #[test]
+    fn uppercase_hex_is_normalized_on_display()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let addr = MeshPeerAddr::parse("AA:BB:CC:DD:EE:FF")?;
+        assert_eq!(addr.octets(), [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);
+        assert_eq!(addr.to_string(), "aa:bb:cc:dd:ee:ff");
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_wrong_group_count() {
+        assert!(MeshPeerAddr::parse("aa:bb:cc:dd:ee").is_err());
+        assert!(MeshPeerAddr::parse("aa:bb:cc:dd:ee:ff:00").is_err());
+    }
+
+    #[test]
+    fn rejects_non_hex_group() {
+        assert!(MeshPeerAddr::parse("zz:bb:cc:dd:ee:ff").is_err());
+    }
+
+    #[test]
+    fn rejects_short_group() {
+        assert!(MeshPeerAddr::parse("a:bb:cc:dd:ee:ff").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_string() {
+        assert!(MeshPeerAddr::parse("").is_err());
+    }
+}

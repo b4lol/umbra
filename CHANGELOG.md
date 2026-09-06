@@ -67,6 +67,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   up to whole milliseconds.
 - Hermetic tests: PT config validation + builder tests (umbra-net),
   CLI/bridges-file plumbing tests (umbra-cli).
+<<<<<<< HEAD
 - **`pt-proxy` live interop + fuzz harness** (roadmap step 6, the last
   open `pt-proxy` roadmap item): `pt-proxy/tests/interop/` drives
   `umbra-pt-proxy` through the actual, unmodified upstream lyrebird
@@ -90,6 +91,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   `relay-test`/`interop-test`. Both targets ran clean locally for tens
   of millions of executions with zero ASan/UBSan findings
   (`make fuzz-smoke`).
+- **Off-grid mesh transport, Wi-Fi Direct increment** (TODO B.1, ADR-031): single-hop, paired-peers-only `umbra send --mesh` / `umbra serve-mesh`, reusing the existing PQXDH/Double-Ratchet session code completely unchanged (`umbra_net::messenger` already runs over any byte stream). New: a `wpa_supplicant` control-socket client and P2P Group Negotiation orchestrator (`crates/umbra-net/src/mesh/`, `mesh` feature, zero new dependencies), IPv6 link-local addressing (chosen because Umbra's `execve`-banned sandbox cannot spawn a DHCP daemon), a peer-record `mesh_addr` field, and a separately-scoped Seccomp profile (`restrict_syscalls_mesh`) plus a Landlock exception for the control sockets — the DEFAULT kill-switch and Landlock ruleset used by every other command are unchanged (see ADR-031). Hermetically unit-tested (protocol parsing, sandbox rules); live-hardware interop is tracked as an open item (`crates/umbra-net/tests/mesh_live.rs`, `#[ignore]`d — no real wpa_supplicant/radio was available to verify against).
 
 ### Fixed
 - `pair --peer-payload` / `pairing-sas --own-payload` / `--peer-payload`

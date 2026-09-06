@@ -23,6 +23,8 @@ This document describes the adversary profiles that **Umbra** is designed to wit
 | **DNS, IPv6, and WebRTC Network Leaks** | Background connections leaking the real IP address or DNS queries outside Tor. | **Kernel-Level Hardware Kill-Switch (`nftables` / Android VpnService DROP ALL)**; all packets outside Tor are dropped in hardware. |
 | **Post-Exploitation Memory Reading & Hooking (Post-Exploitation / Spyware Infiltration)** | The adversary breaching the process with a zero-day or hooking memory. | **Active Cyber Deception:** Canary Honeypot Keyrings (*Canary Keyrings* $\to$ *Silent Wipe*), Cryptographic Tar-Pit (*Tar-Pit Infinite Loop*), Hallucinatory Fake Messages, and *Ghost Mode*. |
 
+**Mesh-mode honest scope:** unlike the Tor transport, Wi-Fi Direct mesh mode has NO onion routing — anyone within radio range can observe the P2P device address in use and the fact that two Umbra devices are communicating. It is a last-resort AVAILABILITY mechanism for a total infrastructure blackout, not a metadata-protected transport; do not conflate its guarantees with Tor mode's.
+
 ---
 
 ## 2. Advanced STRIDE Analysis
