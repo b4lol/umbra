@@ -563,7 +563,10 @@ fn pair(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let peers_dir = keystore_dir.join("peers");
-    crate::peers::save_peer(&peers_dir, peer_name, peer_payload, onion, mesh_addr)?;
+    // TODO(nym CLI wiring task): `--nym-addr` is not yet plumbed through
+    // `Command::Pair`; this crate's `pair` command cannot store a Nym
+    // address until that flag is added.
+    crate::peers::save_peer(&peers_dir, peer_name, peer_payload, onion, mesh_addr, None)?;
 
     // SAS: own payload (from the keystore identity) vs the peer payload.
     let bundle = load_identity(cli)?;

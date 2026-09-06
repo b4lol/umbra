@@ -131,7 +131,7 @@ fn peer_record_roundtrip() -> Result<(), Box<dyn std::error::Error + Send + Sync
     let bundle = umbra_crypto::keys::IdentityBundle::generate();
     let payload = umbra_cli::pairing::payload_for(&bundle)?;
 
-    peers::save_peer(&dir, "colleague", &payload, None, None)?;
+    peers::save_peer(&dir, "colleague", &payload, None, None, None)?;
     let peer = peers::load_peer(&dir, "colleague")?;
     assert_eq!(peer.ik_arr, bundle.x25519.public_bytes());
     assert!(peer.onion.is_none());
@@ -139,15 +139,15 @@ fn peer_record_roundtrip() -> Result<(), Box<dyn std::error::Error + Send + Sync
 
     // Onion address roundtrip (validated BEFORE the record is written).
     let addr = "5vzwalpq2cyjrhm5lvzhcjn6mbnwbv42xakxiqhunwpgz6hr32f7gxad";
-    peers::save_peer(&dir, "colleague", &payload, Some(addr), None)?;
+    peers::save_peer(&dir, "colleague", &payload, Some(addr), None, None)?;
     let peer = peers::load_peer(&dir, "colleague")?;
     assert_eq!(peer.onion.as_deref(), Some(addr));
 
     // Invalid onion addresses are rejected before touching the record.
-    assert!(peers::save_peer(&dir, "colleague", &payload, Some("not-onion"), None).is_err());
+    assert!(peers::save_peer(&dir, "colleague", &payload, Some("not-onion"), None, None).is_err());
 
     // Invalid names are rejected before touching the filesystem.
-    assert!(peers::save_peer(&dir, "../evil", &payload, None, None).is_err());
+    assert!(peers::save_peer(&dir, "../evil", &payload, None, None, None).is_err());
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }
@@ -161,12 +161,19 @@ fn peer_record_mesh_addr_roundtrip() -> Result<(), Box<dyn std::error::Error + S
     let bundle = umbra_crypto::keys::IdentityBundle::generate();
     let payload = umbra_cli::pairing::payload_for(&bundle)?;
 
-    peers::save_peer(&dir, "colleague", &payload, None, Some("aa:bb:cc:dd:ee:ff"))?;
+    peers::save_peer(
+        &dir,
+        "colleague",
+        &payload,
+        None,
+        Some("aa:bb:cc:dd:ee:ff"),
+        None,
+    )?;
     let peer = peers::load_peer(&dir, "colleague")?;
     assert_eq!(peer.mesh_addr.as_deref(), Some("aa:bb:cc:dd:ee:ff"));
 
     // Invalid mesh addresses are rejected before touching the record.
-    assert!(peers::save_peer(&dir, "colleague", &payload, None, Some("not-a-mac")).is_err());
+    assert!(peers::save_peer(&dir, "colleague", &payload, None, Some("not-a-mac"), None).is_err());
 
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
@@ -189,6 +196,7 @@ fn peer_record_carries_both_onion_and_mesh() -> Result<(), Box<dyn std::error::E
         &payload,
         Some(onion),
         Some("aa:bb:cc:dd:ee:ff"),
+        None,
     )?;
     let peer = peers::load_peer(&dir, "colleague")?;
     assert_eq!(peer.onion.as_deref(), Some(onion));
@@ -196,6 +204,61 @@ fn peer_record_carries_both_onion_and_mesh() -> Result<(), Box<dyn std::error::E
 
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
+}
+
+/// Nym address roundtrip and validation — mirrors the mesh coverage in
+/// `peer_record_mesh_addr_roundtrip` above.
+#[test]
+fn peer_record_nym_addr_roundtrip() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use umbra_cli::peers;
+    let dir = temp_keystore("peers-nym");
+    let bundle = umbra_crypto::keys::IdentityBundle::generate();
+    let payload = umbra_cli::pairing::payload_for(&bundle)?;
+    let nym_addr = "7pMTeMufMBB18YfNoc7xVoTB3wKfCLJb2vTNCe8SS41o.\
+                     DVtDdmXn5x1kNz5UBUgFCzKMBcaXqbo3Xu5NBAgTaG7B\
+                     @ANtrunnKF7CE6XSJmGqxCMdb2P8dVv7HGwiUUxRb4a3g";
+
+    peers::save_peer(&dir, "colleague", &payload, None, None, Some(nym_addr))?;
+    let peer = peers::load_peer(&dir, "colleague")?;
+    assert_eq!(peer.nym_addr.as_deref(), Some(nym_addr));
+
+    // Invalid nym addresses are rejected before touching the record.
+    assert!(
+        peers::save_peer(
+            &dir,
+            "colleague",
+            &payload,
+            None,
+            None,
+            Some("not-a-nym-addr")
+        )
+        .is_err()
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// `validate_nym_addr` accepts a syntactically valid
+/// `identity.encryption@gateway` address and rejects malformed or
+/// empty-segment strings.
+#[test]
+fn validate_nym_addr_format_check() {
+    assert!(
+        umbra_cli::peers::validate_nym_addr(
+            "7pMTeMufMBB18YfNoc7xVoTB3wKfCLJb2vTNCe8SS41o.\
+         DVtDdmXn5x1kNz5UBUgFCzKMBcaXqbo3Xu5NBAgTaG7B\
+         @ANtrunnKF7CE6XSJmGqxCMdb2P8dVv7HGwiUUxRb4a3g"
+        )
+        .is_ok()
+    );
+
+    assert!(umbra_cli::peers::validate_nym_addr("").is_err());
+    assert!(umbra_cli::peers::validate_nym_addr("no-at-sign.here").is_err());
+    assert!(umbra_cli::peers::validate_nym_addr("no-dot@gateway").is_err());
+    assert!(umbra_cli::peers::validate_nym_addr(".empty-first@gateway").is_err());
+    assert!(umbra_cli::peers::validate_nym_addr("first.@gateway").is_err());
+    assert!(umbra_cli::peers::validate_nym_addr("first.second@").is_err());
 }
 
 /// `list_names` is the pre-sandbox peer loader for the interactive TUI:

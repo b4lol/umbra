@@ -93,15 +93,43 @@ pub fn validate_mesh_addr(address: &str) -> Result<(), CliError> {
         })
 }
 
+/// Lightweight format check for a Nym mixnet address
+/// (`identity.encryption@gateway`, three non-empty segments) — NOT the
+/// authoritative parse (that lives in the separate `umbra-nym-cli`
+/// crate, which alone depends on `nym-sdk`; see
+/// docs/superpowers/specs/2026-09-06-nym-mixnet-design.md). Mirrors
+/// [`validate_mesh_addr`].
+///
+/// # Errors
+///
+/// Returns [`CliError::Io`] for a string that doesn't have the
+/// `<non-empty>.<non-empty>@<non-empty>` shape.
+pub fn validate_nym_addr(addr: &str) -> Result<(), CliError> {
+    let invalid = || {
+        CliError::Io(std::io::Error::other(
+            "invalid nym address (identity.encryption@gateway expected)",
+        ))
+    };
+    let (identity_and_encryption, gateway) = addr.split_once('@').ok_or_else(invalid)?;
+    let (identity, encryption) = identity_and_encryption
+        .split_once('.')
+        .ok_or_else(invalid)?;
+    if identity.is_empty() || encryption.is_empty() || gateway.is_empty() {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 /// Saves (or overwrites) a peer's pairing payload under `name`, with an
-/// optional `.onion` service address and/or an optional Wi-Fi Direct
-/// mesh address. The payload is parsed (SPK signature verified) and
-/// both addresses are validated BEFORE anything touches disk, so a typo
-/// fails here instead of at first use.
+/// optional `.onion` service address, an optional Wi-Fi Direct mesh
+/// address, and/or an optional Nym mixnet address. The payload is
+/// parsed (SPK signature verified) and all addresses are validated
+/// BEFORE anything touches disk, so a typo fails here instead of at
+/// first use.
 ///
 /// Record file format: line 1 = base64url payload, optional further
-/// lines = `onion <address>` and/or `mesh <address>` (either order,
-/// either or both present).
+/// lines = `onion <address>`, `mesh <address>`, and/or `nym <address>`
+/// (any order, any subset present).
 ///
 /// # Errors
 ///
@@ -113,6 +141,7 @@ pub fn save_peer(
     payload_b64: &str,
     onion: Option<&str>,
     mesh_addr: Option<&str>,
+    nym_addr: Option<&str>,
 ) -> Result<(), CliError> {
     parse_payload(payload_b64)?;
     let mut contents = format!("{payload_b64}\n");
@@ -123,6 +152,10 @@ pub fn save_peer(
     if let Some(address) = mesh_addr {
         validate_mesh_addr(address)?;
         contents.push_str(&format!("mesh {address}\n"));
+    }
+    if let Some(address) = nym_addr {
+        validate_nym_addr(address)?;
+        contents.push_str(&format!("nym {address}\n"));
     }
     let path = record_path(peers_dir, name)?;
     fs::create_dir_all(peers_dir)
@@ -159,6 +192,10 @@ pub fn load_peer(peers_dir: &Path, name: &str) -> Result<crate::pairing::PeerIde
             let address = address.trim();
             validate_mesh_addr(address)?;
             identity.mesh_addr = Some(address.to_string());
+        } else if let Some(address) = address_line.strip_prefix("nym ") {
+            let address = address.trim();
+            validate_nym_addr(address)?;
+            identity.nym_addr = Some(address.to_string());
         } else {
             return Err(CliError::Keystore(format!(
                 "unknown peer-record line: {address_line}"
