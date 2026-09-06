@@ -97,6 +97,7 @@ pub fn parse_payload(encoded: &str) -> Result<PeerIdentity, CliError> {
         dsa,
         onion: None,
         mesh_addr: None,
+        nym_addr: None,
     })
 }
 
@@ -122,6 +123,12 @@ pub struct PeerIdentity {
     /// recorded one (`umbra pair --mesh-addr`); absent for
     /// pipe/onion-only records.
     pub mesh_addr: Option<String>,
+    /// The peer's Nym mixnet address, when the operator recorded one
+    /// (`umbra pair --nym-addr`); absent for payload-only records.
+    /// Validated only for basic shape here — the authoritative parse
+    /// happens in the separate `umbra-nym-cli` crate at send/serve
+    /// time (see docs/superpowers/specs/2026-09-06-nym-mixnet-design.md).
+    pub nym_addr: Option<String>,
 }
 
 /// Derives the shared 6-digit SAS code from BOTH pairing payloads
