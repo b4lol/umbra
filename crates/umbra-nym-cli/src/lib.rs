@@ -3,5 +3,6 @@
 //! (`main.rs`) and integration tests both depend on this.
 
 pub mod addr;
+pub mod client;
 pub mod nym_network;
 pub mod transport;
