@@ -41,20 +41,29 @@ impl fmt::Display for NymPeerAddr {
     }
 }
 
+/// Test-only fixtures shared across this crate's `#[cfg(test)]` modules.
+///
+/// Kept as a plain `pub(crate)` module (rather than nesting it inside
+/// `mod tests` below) so other modules' own `#[cfg(test)]` code — e.g.
+/// `crate::transport`'s tests — can reach `SAMPLE_VALID_ADDRESS` too.
 #[cfg(test)]
-mod tests {
-    use super::NymPeerAddr;
-
+pub(crate) mod tests_support {
     // A real, SDK-generated address string: three locally generated
     // ed25519/x25519 keypairs (no network needed) fed into
     // `Recipient::new`, then printed via its `Display` impl. Not a real
     // routable identity — no corresponding gateway exists — used only
     // as a shape/checksum fixture for `Recipient::from_str`
     // round-tripping.
-    const VALID: &str = "\
+    pub(crate) const SAMPLE_VALID_ADDRESS: &str = "\
 GYNv1juVSbsNWKAkwar45rui1HkiPckX5S36PfF2zixf.\
 3TFDuq9F4vjS52DLj3ANjpgFhFsRzM9ozcNCDQpkYRY9\
 @4Nn9dSb2uKzb8qtaE5ioHrb7zCy7JqgExZaiHDCVRAz8";
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tests_support::SAMPLE_VALID_ADDRESS as VALID;
+    use super::NymPeerAddr;
 
     #[test]
     fn parses_valid_address() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
