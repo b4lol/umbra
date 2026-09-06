@@ -12,8 +12,15 @@
 //!
 //! - a running `wpa_supplicant` with a P2P-capable interface, its
 //!   `ctrl_interface` socket path in `WPA_CTRL_PATH`;
-//! - a second device already running `umbra serve-mesh` (or otherwise
-//!   listening for this one's `P2P_FIND`/`P2P_CONNECT`);
+//! - a second device listening for this one's `P2P_FIND`/`P2P_CONNECT`
+//!   and running a PLAIN TCP ECHO LISTENER on the mesh port
+//!   (`umbra_net::mesh::MESH_PORT`) on its group interface once the P2P
+//!   group forms — e.g. `socat TCP-LISTEN:7420,fork EXEC:cat`. This
+//!   test exercises the mesh transport/negotiation layer in isolation;
+//!   it deliberately does NOT run `umbra serve-mesh`, which performs a
+//!   real PQXDH handshake (already exhaustively tested elsewhere, see
+//!   `crates/umbra-net/tests/messenger.rs`) rather than echoing raw
+//!   bytes;
 //! - that peer's P2P Device Address in `MESH_PEER_ADDR`.
 //!
 //! ```sh
@@ -62,5 +69,6 @@ async fn connects_to_a_real_peer_and_echoes() -> Result<(), Box<dyn std::error::
     );
 
     let _ = std::fs::remove_file(&own_path);
+    let _ = std::fs::remove_file(WpaCtrl::monitor_path(&own_path));
     Ok(())
 }

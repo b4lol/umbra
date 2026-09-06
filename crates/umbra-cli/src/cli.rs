@@ -83,16 +83,21 @@ pub enum Command {
         /// peer record. Transport switches from pipe to embedded Tor.
         #[arg(long)]
         onion: Option<String>,
-        /// Peer's Wi-Fi Direct P2P Device Address; overrides the value
-        /// stored with the peer record. Mutually exclusive with
-        /// `--onion` — mesh mode has NO onion routing (THREAT_MODEL.md,
-        /// "Off-Grid Mesh"). Requires the `mesh` build feature.
+        /// Use the Wi-Fi Direct mesh transport (must be explicit — mesh
+        /// mode has NO onion routing, THREAT_MODEL.md "Off-Grid Mesh";
+        /// a stored peer-record mesh address is never used unless this
+        /// flag is passed). Mutually exclusive with `--onion`. Requires
+        /// the `mesh` build feature.
         #[cfg(feature = "mesh")]
         #[arg(long, conflicts_with = "onion")]
-        mesh: Option<String>,
+        mesh: bool,
+        /// Overrides the peer record's stored mesh address. Only
+        /// meaningful with `--mesh`.
+        #[cfg(feature = "mesh")]
+        #[arg(long, requires = "mesh")]
+        mesh_addr: Option<String>,
         /// Path to `wpa_supplicant`'s P2P `ctrl_interface` socket.
-        /// Required when `--mesh` (or a peer record's stored mesh
-        /// address) selects the mesh transport.
+        /// Required when `--mesh` selects the mesh transport.
         #[cfg(feature = "mesh")]
         #[arg(long)]
         wpa_ctrl: Option<std::path::PathBuf>,
@@ -273,6 +278,8 @@ pub fn run() -> Result<(), CliError> {
             #[cfg(feature = "mesh")]
             ref mesh,
             #[cfg(feature = "mesh")]
+            ref mesh_addr,
+            #[cfg(feature = "mesh")]
             ref wpa_ctrl,
             #[cfg(feature = "tor")]
             ref pt,
@@ -283,7 +290,16 @@ pub fn run() -> Result<(), CliError> {
             // its initiator is per-session ephemeral by design).
             let peer_record = load_peer_record(&cli, peer)?;
             #[cfg(feature = "mesh")]
-            if let Some(address) = mesh.as_deref().or(peer_record.mesh_addr.as_deref()) {
+            if *mesh {
+                let address = mesh_addr
+                    .as_deref()
+                    .or(peer_record.mesh_addr.as_deref())
+                    .ok_or_else(|| {
+                        CliError::Keystore(
+                            "--mesh requires either --mesh-addr or a stored peer mesh address"
+                                .into(),
+                        )
+                    })?;
                 let ctrl_path = wpa_ctrl
                     .as_ref()
                     .ok_or_else(|| CliError::Keystore("--mesh requires --wpa-ctrl PATH".into()))?;

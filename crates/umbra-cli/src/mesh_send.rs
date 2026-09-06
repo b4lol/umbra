@@ -111,7 +111,10 @@ pub fn run(
         .enable_all()
         .build()
         .map_err(|e| CliError::Io(std::io::Error::other(format!("tokio runtime: {e}"))))?;
-    runtime.block_on(async move {
+    // Cloned so the cleanup below can still reach it after the `async
+    // move` block below takes ownership of its own copy.
+    let cleanup_path = own_ctrl_path.clone();
+    let result = runtime.block_on(async move {
         let ctrl = WpaCtrl::connect(&own_ctrl_path, wpa_ctrl_path)
             .await
             .map_err(|e| CliError::Io(std::io::Error::other(format!("mesh transport: {e}"))))?;
@@ -134,5 +137,11 @@ pub fn run(
             "sent",
             &[("bytes", bytes.to_string()), ("frames", frames.to_string())],
         )
-    })
+    });
+    // Best-effort cleanup on every path (success or failure): a PID
+    // reuse would otherwise make a later run's bind fail permanently
+    // with EADDRINUSE. Never let a cleanup failure mask the real result.
+    let _ = std::fs::remove_file(&cleanup_path);
+    let _ = std::fs::remove_file(WpaCtrl::monitor_path(&cleanup_path));
+    result
 }

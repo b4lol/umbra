@@ -223,7 +223,9 @@ impl WpaCtrl {
         match std::str::from_utf8(received).map(str::trim) {
             Ok("OK") => Ok(()),
             Ok(other) => Err(TransportError::Mesh(format!("ATTACH failed: {other}"))),
-            Err(_e) => Err(TransportError::Mesh("ATTACH reply was not valid UTF-8".into())),
+            Err(_e) => Err(TransportError::Mesh(
+                "ATTACH reply was not valid UTF-8".into(),
+            )),
         }
     }
 
