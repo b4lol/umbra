@@ -41,7 +41,7 @@ arti-client = { version = "0.45.0", default-features = false, features = [
 ], optional = true }
 tor-rtcompat = { version = "0.45.0", features = ["tokio", "rustls"], optional = true }
 tor-cell = { version = "0.45.0", optional = true }
-tor-hsservice = { version = "0.45.0", optional = true, features = ["hs-pow-full"] }
+tor-hsservice = { version = "0.46.0", optional = true, features = ["hs-pow-full"] }
 tor-guardmgr = { version = "0.45.0", optional = true }
 tor-config = { version = "0.45.0", optional = true }
 # PT protocol names for unmanaged transports (ADR-030; pure Rust).
