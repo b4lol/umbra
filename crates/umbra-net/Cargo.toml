@@ -25,7 +25,7 @@ thiserror.workspace = true
 # the Tokio-based PreferredRuntime. NOTE: the Tor stack transitively
 # contains C (ring asm, bundled SQLite) — a recorded deviation from the
 # no-C language policy, see ADR-028.
-arti-client = { version = "0.45.0", default-features = false, features = [
+arti-client = { version = "0.46.0", default-features = false, features = [
     "rustls",
     "static",
     "tokio",
