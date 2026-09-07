@@ -19,7 +19,7 @@ members = [
     "crates/umbra-gui",
     "crates/umbra-hardware",
 ]
-exclude = ["components/fuzz"]
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "1.0.0-alpha.3"

@@ -20,9 +20,9 @@ scan:
 mutants:
     cargo mutants --no-shuffle
 
-# 6. Fuzzing mutation testing for parsers (cargo-fuzz; see components/fuzz/).
+# 6. Fuzzing mutation testing for parsers (cargo-fuzz; see fuzz/).
 fuzz target="fuzz_packet_parser" seconds="60":
-    cd components/fuzz && cargo fuzz run {{target}} -- -max_total_time={{seconds}}
+    cargo fuzz run {{target}} -- -max_total_time={{seconds}}
 
 # 5. LIVE-NETWORK identity-persistence test (TODO A.2 residual): run on
 # a machine with real Tor connectivity; NOT part of the hermetic CI set.

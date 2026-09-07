@@ -1,7 +1,7 @@
 /target
-components/fuzz/target
-components/fuzz/artifacts
-components/fuzz/coverage
+fuzz/target
+fuzz/artifacts
+fuzz/coverage
 mutants.out*/
 *.profraw
 

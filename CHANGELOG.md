@@ -11,12 +11,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Changed
 - **Repository layout**: topical documentation (ARCHITECTURE,
   CRYPTOGRAPHY, DECISIONS, TODO, THREAT_MODEL, …) now lives under
-  `docs/`; the C pluggable-transport proxy and the cargo-fuzz scaffold
-  moved to `components/pt-proxy/` and `components/fuzz/`. The root
-  keeps only the GitHub-convention files (README, LICENSE, CHANGELOG,
-  CONTRIBUTING, SECURITY) plus build configuration. All in-repo
-  references, the CI fuzz job, the `just fuzz` recipe and the workspace
-  `exclude`/`.gitignore` entries were updated accordingly.
+  `docs/`; the C pluggable-transport proxy moved to
+  `components/pt-proxy/`. The root keeps only the GitHub-convention
+  files (README, LICENSE, CHANGELOG, CONTRIBUTING, SECURITY) plus build
+  configuration — and `fuzz/`, which stays at the root because
+  cargo-fuzz hardcodes the `<project>/fuzz/` location. All in-repo
+  references and the workspace `exclude`/`.gitignore` entries were
+  updated accordingly.
 
 ### Added
 - **Unmanaged pluggable-transport support** (TODO B.1, ADR-030):
