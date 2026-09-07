@@ -1,4 +1,4 @@
-//! Socialist Millionaire Protocol tests (TODO A.3, CRYPTOGRAPHY.md §5).
+//! Socialist Millionaire Protocol tests (TODO A.3, docs/CRYPTOGRAPHY.md §5).
 //!
 //! Hermetic: pure math, no network/filesystem. Full protocol runs take
 //! ~a second (several 1536-bit modexps per message).

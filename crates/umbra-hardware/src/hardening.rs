@@ -1,5 +1,5 @@
 //! Best-effort CPU register scrubbing (ADR-025 revision note, TODO A.4;
-//! `LIMITATIONS_PLAN.md` item 1).
+//! `docs/LIMITATIONS_PLAN.md` item 1).
 //!
 //! rustc removed the `zero-call-used-regs` flag upstream (nightly 1.100.0
 //! — neither the `-C` nor the `-Z` form survives; it was never

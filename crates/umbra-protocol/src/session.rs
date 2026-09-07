@@ -1,4 +1,4 @@
-//! Typestate session state machine (SPECIFICATION.md §2, ADR-021).
+//! Typestate session state machine (docs/SPECIFICATION.md §2, ADR-021).
 //!
 //! Data-channel multiplexer: every ratchet plaintext carries a 1-byte tag
 //! (`0x00` user text, `0x01` SMP carriage). SMP payloads larger than the
@@ -250,7 +250,7 @@ impl Session<Unauthenticated> {
     /// Accepts an incoming PQXDH handshake blob (responder side).
     ///
     /// Verifies nothing yet — authentication is completed out of band via
-    /// SAS/SMP (CRYPTOGRAPHY.md §5); this derives the shared root key and
+    /// SAS/SMP (docs/CRYPTOGRAPHY.md §5); this derives the shared root key and
     /// arms the responder role.
     ///
     /// # Errors
@@ -560,7 +560,7 @@ impl Session<EstablishedSession> {
     /// Unseals a wire packet and decrypts its content.
     ///
     /// Cover-traffic packets ([`PacketType::DummyCover`]) are destroyed
-    /// silently and yield `None` (SPECIFICATION.md opcode 0x04). Data
+    /// silently and yield `None` (docs/SPECIFICATION.md opcode 0x04). Data
     /// messages decrypt to a tagged payload: user text yields
     /// [`InboundPayload::Text`]; SMP carriage chunks accumulate and yield
     /// [`InboundPayload::Smp`] once the transfer completes.
@@ -570,7 +570,7 @@ impl Session<EstablishedSession> {
     /// established state — ratchet chains, message keys, packet key — is
     /// zeroized and dropped, and [`InboundPayload::Terminate`] is
     /// returned. Subsequent sends/receives yield
-    /// [`ProtocolError::StateViolation`] (SPECIFICATION.md opcode 0x09).
+    /// [`ProtocolError::StateViolation`] (docs/SPECIFICATION.md opcode 0x09).
     ///
     /// Delivery semantics: the Double Ratchet tolerates bounded
     /// out-of-order delivery (skipped-key store; replay and
@@ -631,7 +631,7 @@ impl Session<EstablishedSession> {
         }
     }
 
-    /// Seals a SESSION_TERMINATE signal (SPECIFICATION.md opcode `0x09`)
+    /// Seals a SESSION_TERMINATE signal (docs/SPECIFICATION.md opcode `0x09`)
     /// and immediately wipes the local established state (ratchet chains,
     /// message keys, packet key). The caller transmits the returned
     /// packet; afterwards every send/receive yields

@@ -16,7 +16,7 @@ produce the `umbra-nym` binary. This is not an oversight: `nym-sdk`'s
 mandatory bandwidth-fetcher dependency chain conflicts with the
 already-shipped Tor feature's SQLite chain via Cargo's `links = "sqlite3"`
 uniqueness rule, so the only way to keep both working is full Cargo-graph
-isolation. See **ADR-032** in the top-level `DECISIONS.md` for the full
+isolation. See **ADR-032** in the top-level `docs/DECISIONS.md` for the full
 rationale (exact crate/version chains, the `blake3` pin move this required,
 and why no ADR-011 C-language exception was needed).
 
@@ -37,13 +37,13 @@ as an ordinary, independent Cargo workspace once you're inside it.)
 
 - `umbra-nym send-nym` — send one message over the Nym mixnet (Sandbox
   testnet by default; pass `--mainnet` to use Nym mainnet instead — see
-  the Nym-mode honest-scope note in the top-level `THREAT_MODEL.md` before
+  the Nym-mode honest-scope note in the top-level `docs/THREAT_MODEL.md` before
   doing so).
 - `umbra-nym serve-nym` — receive messages over the Nym mixnet.
 
 Both subcommands reuse the main project's process-hardening conventions
 (Seccomp/Landlock sandboxing, `mlockall` memory locking per ADR-025). See
-the top-level `README.md` and `CLIENT_SECURITY.md` for what that hardening
+the top-level `README.md` and `docs/CLIENT_SECURITY.md` for what that hardening
 requires of the host environment — it is not duplicated here. In
 particular, both subcommands **fail closed** if `RLIMIT_MEMLOCK` is not
 raised (e.g. systemd `LimitMEMLOCK=infinity` or an equivalent raised

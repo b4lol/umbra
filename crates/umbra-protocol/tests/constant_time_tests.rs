@@ -1,4 +1,4 @@
-//! Constant-time analysis suite (TODO A.5, CRYPTOGRAPHY.md §1: "verified
+//! Constant-time analysis suite (TODO A.5, docs/CRYPTOGRAPHY.md §1: "verified
 //! with the `dudect` Welch t-test").
 //!
 //! Implements the dudect methodology (Reparaz, Balasch, Tufryeri —

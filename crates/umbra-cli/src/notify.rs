@@ -3,7 +3,7 @@
 //! The OS (and anything listening on the notification bus) is NEVER told
 //! the message text, the sender identity, or even that a message exists:
 //! the adapter emits a fixed allowlist of generic system strings
-//! ("System Update"), nothing else (SPECIFICATION.md opcode 0x04 notes,
+//! ("System Update"), nothing else (docs/SPECIFICATION.md opcode 0x04 notes,
 //! ADR-018 "Sıfır Bilgili Bildirimler"). The real message is painted from
 //! `mlock` RAM only after biometric/passphrase unlock.
 //!

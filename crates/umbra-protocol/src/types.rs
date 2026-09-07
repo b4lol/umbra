@@ -1,6 +1,6 @@
-//! Wire-format constants and the packet-type opcode table (SPECIFICATION.md §1).
+//! Wire-format constants and the packet-type opcode table (docs/SPECIFICATION.md §1).
 
-/// Fixed wire size of every packet, regardless of type (SPECIFICATION.md §1).
+/// Fixed wire size of every packet, regardless of type (docs/SPECIFICATION.md §1).
 pub const PACKET_LEN: usize = 1024;
 
 /// Protocol magic bytes: `"UM"` (0x55, 0x4D).
@@ -16,12 +16,12 @@ pub const HEADER_LEN: usize = 18;
 /// Length of the encrypted payload region (ciphertext without the
 /// Poly1305 tag) in bytes.
 ///
-/// SPECIFICATION.md's offset table implies an `ENCRYPTED_DATA` region of
+/// docs/SPECIFICATION.md's offset table implies an `ENCRYPTED_DATA` region of
 /// 992 bytes starting at 0x012 plus a 16-byte tag at 0x3F2, which totals
 /// 1026 bytes — 2 bytes beyond the mandated 1024-byte packet. This
 /// implementation resolves the inconsistency arithmetically:
 /// `HEADER_LEN (18) + BODY_LEN (990) + TAG_LEN (16) == PACKET_LEN (1024)`.
-/// The table in SPECIFICATION.md should be corrected accordingly.
+/// The table in docs/SPECIFICATION.md should be corrected accordingly.
 pub const BODY_LEN: usize = PACKET_LEN - HEADER_LEN - TAG_LEN;
 
 /// Poly1305 tag length in bytes.
@@ -32,7 +32,7 @@ pub const TAG_LEN: usize = 16;
 /// of tag.
 pub const PAYLOAD_MAX: usize = BODY_LEN;
 
-/// Wire opcodes (SPECIFICATION.md §1 "Packet Types").
+/// Wire opcodes (docs/SPECIFICATION.md §1 "Packet Types").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PacketType {
     /// PQXDH initiation packet from Alice to Bob.
@@ -56,7 +56,7 @@ pub enum PacketType {
 }
 
 impl PacketType {
-    /// Maps the opcode to its wire byte (SPECIFICATION.md §1).
+    /// Maps the opcode to its wire byte (docs/SPECIFICATION.md §1).
     #[must_use]
     pub fn as_u8(self) -> u8 {
         match self {

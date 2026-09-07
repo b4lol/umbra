@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Changed
+- **Repository layout**: topical documentation (ARCHITECTURE,
+  CRYPTOGRAPHY, DECISIONS, TODO, THREAT_MODEL, …) now lives under
+  `docs/`; the C pluggable-transport proxy moved to
+  `components/pt-proxy/`. The root keeps only the GitHub-convention
+  files (README, LICENSE, CHANGELOG, CONTRIBUTING, SECURITY) plus build
+  configuration — and `fuzz/`, which stays at the root because
+  cargo-fuzz hardcodes the `<project>/fuzz/` location. All in-repo
+  references and the workspace `exclude`/`.gitignore` entries were
+  updated accordingly.
+
 ### Added
 - **Unmanaged pluggable-transport support** (TODO B.1, ADR-030):
   `umbra serve` / `send --onion` / `tui` accept `--pt-socks
@@ -16,12 +27,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   (loopback SOCKS5) transports — Umbra never spawns or links PT
   binaries; non-loopback endpoints and half-configured setups fail
   closed. PT protocol names are derived from the bridge lines.
-- **`pt-proxy/` skeleton**: a standalone, loopback-only SOCKS5 proxy
+- **`components/pt-proxy/` skeleton**: a standalone, loopback-only SOCKS5 proxy
   component in C under ADR-030's scoped, owner-granted language
   exception (process-isolated, hardening-flag build, ASan/UBSan gate
   target). The SOCKS5 front-end (RFC 1928, no-auth CONNECT, bounded
   parsing, exact reply codes, deadline-guarded upstream dial) is
-  implemented and integration-tested (`pt-proxy/tests/socks5.sh`, also
+  implemented and integration-tested (`components/pt-proxy/tests/socks5.sh`, also
   clean under ASan/UBSan).
 - **`pt-proxy` obfs4 client handshake** (roadmap step 3): ntor variant
   + Elligator 2 representatives, implemented in C against the Go
@@ -29,7 +40,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   X25519/HMAC-SHA256/HKDF-SHA256/SHA-512/CSPRNG, vendored Monocypher
   4.0.3 for Elligator 2 only. Verified BYTE-EXACT against fixtures
   dumped from the Go reference (`make vectors`, normal + ASan/UBSan
-  builds; regeneration recipe in `pt-proxy/tests/govectors/`).
+  builds; regeneration recipe in `components/pt-proxy/tests/govectors/`).
 - **`pt-proxy` obfs4 framing + packet layer + relay** (roadmap step 4):
   XSalsa20-Poly1305 frames with SipHash-2-4-DRBG length obfuscation
   (in-house streaming SipHash, cross-checked against libsodium's
@@ -69,7 +80,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   CLI/bridges-file plumbing tests (umbra-cli).
 <<<<<<< HEAD
 - **`pt-proxy` live interop + fuzz harness** (roadmap step 6, the last
-  open `pt-proxy` roadmap item): `pt-proxy/tests/interop/` drives
+  open `pt-proxy` roadmap item): `components/pt-proxy/tests/interop/` drives
   `umbra-pt-proxy` through the actual, unmodified upstream lyrebird
   obfs4 server (`obfs4.Transport.ServerFactory` + `WrapConn`, pinned to
   the same commit `tests/govectors/` already uses for the byte-exact
@@ -77,13 +88,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   bridge" gap a shared client/mock bug could previously hide behind.
   `make interop-test` passes 1 KB/5 KB/100 KB echo round-trips in all
   three iat-modes under both the normal and ASan/UBSan proxy builds.
-  Two libFuzzer targets (`pt-proxy/fuzz/`, clang-only — GCC has no
+  Two libFuzzer targets (`components/pt-proxy/fuzz/`, clang-only — GCC has no
   `-fsanitize=fuzzer`) cover `obfs4_cert_parse` (fully reachable by
   mutation) and `obfs4_client_finish`, the handshake-response parser,
   against a fixed deterministic client state (`fixtures.h`) plus a
   genuinely valid seed response generated once via the same
   `server_ntor` construction `tests/mockbridge.c` already implements.
-  Honest scope note carried into `fuzz/README.md`: mutation cannot
+  Honest scope note carried into `components/fuzz/README.md`: mutation cannot
   forge a valid MAC_S/AUTH, so the harness's real coverage is the
   pre-authentication surface (tail mark/MAC scan, length/offset
   handling) every bridge response passes through regardless of
@@ -206,7 +217,7 @@ resolved (two in code, one live-verified).
 
 ## [1.0.0-alpha.1] — 2026-08-31
 
-Section A (MVP) scope of TODO.md: 39/40 tasks complete (one blocked upstream).
+Section A (MVP) scope of docs/TODO.md: 39/40 tasks complete (one blocked upstream).
 First tagged release: cryptographic core complete and CI-verified; interactive
 product surface and live-network field testing deferred.
 
@@ -237,7 +248,7 @@ product surface and live-network field testing deferred.
   overlapping and nothing consumed them. Ratchet sessions tolerate bounded
   out-of-order delivery (transactional rollback on failure); SMP carriage
   restarts reassembly on a fresh `index == 0` chunk, so abandoned transfers
-  no longer wedge a session. Pipe framing documented in SPECIFICATION.md.
+  no longer wedge a session. Pipe framing documented in docs/SPECIFICATION.md.
 - Hardening order refined (ADR-025): memory locks apply BEFORE keystore
   reads; Landlock zero-FS + Seccomp apply after them.
 - Claim-sweep: absolute anonymity statements in the release documents were
@@ -246,7 +257,7 @@ product surface and live-network field testing deferred.
 - **ADR-026:** C-based `pqcrypto-*` (PQClean) wrappers were rejected for
   post-quantum algorithms; the pure-Rust RustCrypto `ml-kem`, `ml-dsa`, and
   `slh-dsa` crates are now mandatory.
-- **ADR-027:** Scope was split into MVP (v1.0) and v2+; `TODO.md` was
+- **ADR-027:** Scope was split into MVP (v1.0) and v2+; `docs/TODO.md` was
   restructured into Sections A/B.
 - Absolute security claims in the documents ("100%", "unbreakable",
   "impossible") were replaced with measurable targets (e.g., constant-time

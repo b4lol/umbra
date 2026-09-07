@@ -4,7 +4,7 @@
 
 `Umbra` is an end-to-end encrypted communication protocol and client designed for journalists, government officials, and intelligence professionals operating in high-threat environments. It is serverless (no central server) and built on zero-metadata principles. Under its Tor transport the goal is no IP or identity trace — burst-level cover traffic is wired and both directions of the Tor flows are live-verified, while idle-gap cover is still pending (see the honest-scope table), so treat every absolute anonymity claim as a design goal, not a measured property.
 
-> **Release status — `v1.0.0-alpha.3`:** the Section A (MVP) scope of [TODO.md](TODO.md) is implemented and CI-verified; onion-identity persistence AND a full outbound+inbound self-send round trip are LIVE-VERIFIED on the real Tor network (`just live-test`, `tui_live`). This is an **alpha**: the cryptographic core is complete and continuously tested, while parts of the interactive product surface (GUI, Android) are not yet done. Every claim in this README is scoped to what is on disk; the honest-scope notes are authoritative over any marketing language inherited from the specification documents.
+> **Release status — `v1.0.0-alpha.3`:** the Section A (MVP) scope of [docs/TODO.md](docs/TODO.md) is implemented and CI-verified; onion-identity persistence AND a full outbound+inbound self-send round trip are LIVE-VERIFIED on the real Tor network (`just live-test`, `tui_live`). This is an **alpha**: the cryptographic core is complete and continuously tested, while parts of the interactive product surface (GUI, Android) are not yet done. Every claim in this README is scoped to what is on disk; the honest-scope notes are authoritative over any marketing language inherited from the specification documents.
 
 ---
 
@@ -51,10 +51,10 @@
 | CPU register zeroing (`zero-call-used-regs`) | Best-effort `asm!` scrub of caller-saved registers at sensitive boundaries (`umbra-hardware::hardening`); the upstream rustc flag remains removed, vector registers are a documented residual |
 | Live-network field testing of the Tor paths | DONE (2026-09): inbound identity persistence (`just live-test`) and an outbound+inbound self-send round trip (`tui_live`) both PASSED on the real network — the latter caught the missing `onion-service-client` feature that made alpha.2 outbound connects impossible |
 | SMP in the product surface | Library-only (drivers + tests); no CLI command runs SMP yet — the pipe layer runs none |
-| Pluggable transports (obfs4-class) | Unmanaged-proxy support LANDED (ADR-030): `--pt-socks` + `--bridge` on serve/send/tui configure arti for a loopback SOCKS5 PT proxy; Umbra never spawns/links PT code. The PT proxy itself is external (a standalone C skeleton lives in `pt-proxy/`, obfs4 NOT yet implemented); live censorship-path testing pending. Snowflake: blocked (no Rust/C client) |
+| Pluggable transports (obfs4-class) | Unmanaged-proxy support LANDED (ADR-030): `--pt-socks` + `--bridge` on serve/send/tui configure arti for a loopback SOCKS5 PT proxy; Umbra never spawns/links PT code. The PT proxy itself is external (a standalone C skeleton lives in `components/pt-proxy/`, obfs4 NOT yet implemented); live censorship-path testing pending. Snowflake: blocked (no Rust/C client) |
 | PQ-MLS TreeKEM, mixnets | v2 (Section B) |
 
-The authoritative status list is [TODO.md](TODO.md); claim arbitration lives in [DECISIONS.md](DECISIONS.md) (ADR-001…ADR-030).
+The authoritative status list is [docs/TODO.md](docs/TODO.md); claim arbitration lives in [docs/DECISIONS.md](docs/DECISIONS.md) (ADR-001…ADR-030).
 
 ---
 
@@ -127,22 +127,22 @@ All commands honor the **Rule of Silence** (data on `stdout`, diagnostics prefix
 
 | Document | Description |
 |---|---|
-| [`PROJECT.md`](PROJECT.md) | Project mission, vision, target-audience analysis, language policy, and technical scope. |
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | System architecture, data-flow diagrams, sandbox layer, and module designs. |
-| [`SPECIFICATION.md`](SPECIFICATION.md) | 1024-byte binary packet format, byte offsets, state machine, pipe transport, and FFI interface specification. |
-| [`THREAT_MODEL.md`](THREAT_MODEL.md) | Nation-state-level threat model, Pegasus analysis, and defense mechanisms. |
-| [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md) | PQXDH, Double Ratchet delivery semantics, SMP binding, and the primitives table. |
-| [`NETWORK_PROTOCOL.md`](NETWORK_PROTOCOL.md) | Fixed packet structure, Tor v3 P2P communication protocol, and transport notes. |
-| [`CLIENT_SECURITY.md`](CLIENT_SECURITY.md) | Linux process isolation: Landlock, Seccomp kill-switch, mlock, register-zeroing status. |
-| [`TARGETED_DEFENSES.md`](TARGETED_DEFENSES.md) | Defenses against zero-click, side-channel, and metadata-analysis attacks. |
-| [`TODO.md`](TODO.md) | Step-by-step implementation checklist (the authoritative scope list). |
-| [`DECISIONS.md`](DECISIONS.md) | Architecture Decision Records (ADR-001…ADR-029). |
-| [`ZERO_DATA_LEAKS.md`](ZERO_DATA_LEAKS.md) | Zero data leakage and anti-exfiltration defense specification. |
-| [`CODE_MANIFESTO.md`](CODE_MANIFESTO.md) | Manifesto on code quality and engineering doctrine. |
+| [`docs/PROJECT.md`](docs/PROJECT.md) | Project mission, vision, target-audience analysis, language policy, and technical scope. |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System architecture, data-flow diagrams, sandbox layer, and module designs. |
+| [`docs/SPECIFICATION.md`](docs/SPECIFICATION.md) | 1024-byte binary packet format, byte offsets, state machine, pipe transport, and FFI interface specification. |
+| [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) | Nation-state-level threat model, Pegasus analysis, and defense mechanisms. |
+| [`docs/CRYPTOGRAPHY.md`](docs/CRYPTOGRAPHY.md) | PQXDH, Double Ratchet delivery semantics, SMP binding, and the primitives table. |
+| [`docs/NETWORK_PROTOCOL.md`](docs/NETWORK_PROTOCOL.md) | Fixed packet structure, Tor v3 P2P communication protocol, and transport notes. |
+| [`docs/CLIENT_SECURITY.md`](docs/CLIENT_SECURITY.md) | Linux process isolation: Landlock, Seccomp kill-switch, mlock, register-zeroing status. |
+| [`docs/TARGETED_DEFENSES.md`](docs/TARGETED_DEFENSES.md) | Defenses against zero-click, side-channel, and metadata-analysis attacks. |
+| [`docs/TODO.md`](docs/TODO.md) | Step-by-step implementation checklist (the authoritative scope list). |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | Architecture Decision Records (ADR-001…ADR-029). |
+| [`docs/ZERO_DATA_LEAKS.md`](docs/ZERO_DATA_LEAKS.md) | Zero data leakage and anti-exfiltration defense specification. |
+| [`docs/CODE_MANIFESTO.md`](docs/CODE_MANIFESTO.md) | Manifesto on code quality and engineering doctrine. |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Developer guide, build environment, and contribution rules. |
 | [`SECURITY.md`](SECURITY.md) | Security policy and responsible vulnerability disclosure. |
 | [`CHANGELOG.md`](CHANGELOG.md) | Release history and change records. |
-| [`GLOSSARY.md`](GLOSSARY.md) | Glossary of technical, cryptographic, network, and security terms. |
+| [`docs/GLOSSARY.md`](docs/GLOSSARY.md) | Glossary of technical, cryptographic, network, and security terms. |
 
 ---
 

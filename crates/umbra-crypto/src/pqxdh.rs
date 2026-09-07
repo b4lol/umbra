@@ -1,4 +1,4 @@
-//! PQXDH hybrid handshake (CRYPTOGRAPHY.md §2).
+//! PQXDH hybrid handshake (docs/CRYPTOGRAPHY.md §2).
 //!
 //! `SK = HKDF-SHA512(DH1 || DH2 || DH3 || SS_ML-KEM, ROOT_SALT, ROOT_INFO)`
 //! where
@@ -24,7 +24,7 @@ pub const HANDSHAKE_BLOB_LEN: usize = X25519_PK_LEN + X25519_PK_LEN + KEM_CT_LEN
 
 /// The initiator's first-flight handshake material.
 ///
-/// SPECIFICATION.md packs `HANDSHAKE_INIT` into a single 1024-byte packet,
+/// docs/SPECIFICATION.md packs `HANDSHAKE_INIT` into a single 1024-byte packet,
 /// which cannot hold 1152 bytes of handshake blob alongside headers; the
 /// blob is therefore chunked by the transport layer (see `umbra-net`).
 pub struct InitialHandshake {

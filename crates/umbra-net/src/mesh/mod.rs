@@ -1,6 +1,6 @@
 //! Off-grid mesh transport: Wi-Fi Direct client-to-client, single-hop,
 //! paired-peers-only (TODO B.1). See
-//! ADR-031 in DECISIONS.md.
+//! ADR-031 in docs/DECISIONS.md.
 //!
 //! Honest scope: [`wpactrl`] (the `wpa_supplicant` control-socket
 //! protocol) and [`linklocal`] (IPv6 link-local address resolution) are
@@ -12,7 +12,7 @@
 //!
 //! Unlike the Tor transport, mesh mode has NO onion routing: anyone in
 //! radio range can observe the P2P device address and the fact that two
-//! Umbra devices are communicating (THREAT_MODEL.md, "Off-Grid Mesh").
+//! Umbra devices are communicating (docs/THREAT_MODEL.md, "Off-Grid Mesh").
 
 pub mod linklocal;
 pub mod wpactrl;

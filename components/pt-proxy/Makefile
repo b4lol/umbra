@@ -1,5 +1,5 @@
 # umbra-pt-proxy build — hardening flags are mandatory (ADR-030 gate):
-# any weakening of CFLAGS/LDFLAGS must come with a DECISIONS.md entry.
+# any weakening of CFLAGS/LDFLAGS must come with a docs/DECISIONS.md entry.
 
 CC      ?= cc
 CFLAGS  ?= -O2

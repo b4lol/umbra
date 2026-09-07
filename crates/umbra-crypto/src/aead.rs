@@ -1,4 +1,4 @@
-//! ChaCha20-Poly1305 AEAD wrapper (CRYPTOGRAPHY.md §1, RFC 8439).
+//! ChaCha20-Poly1305 AEAD wrapper (docs/CRYPTOGRAPHY.md §1, RFC 8439).
 //!
 //! Nonces are single-use and drawn from the OS entropy source on every seal;
 //! message keys in the Double Ratchet are single-use by construction.

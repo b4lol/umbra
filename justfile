@@ -56,6 +56,6 @@ audit-nym:
 # 10. LIVE-NETWORK Nym Sandbox two-process interop test — NOT part of the
 #     hermetic CI set; requires RLIMIT_MEMLOCK raised above this project's
 #     default expectations for harden_process() to succeed (see ADR-025,
-#     TODO.md B.1's Nym residual).
+#     docs/TODO.md B.1's Nym residual).
 live-test-nym:
     cargo test --manifest-path crates/umbra-nym-cli/Cargo.toml --test nym_live -- --ignored --nocapture

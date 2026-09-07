@@ -1,7 +1,7 @@
-//! 1024-byte fixed-block packet framing (SPECIFICATION.md §1, ADR-005).
+//! 1024-byte fixed-block packet framing (docs/SPECIFICATION.md §1, ADR-005).
 //!
 //! Wire layout (this implementation resolves the offset-table arithmetic of
-//! SPECIFICATION.md to sum exactly to 1024 bytes — see [`crate::types`]):
+//! docs/SPECIFICATION.md to sum exactly to 1024 bytes — see [`crate::types`]):
 //!
 //! ```text
 //! [0..18)    header: MAGIC(2) VER(1) TYPE(1) PAYLOAD_LEN(2) NONCE(12)
@@ -87,7 +87,7 @@ pub struct UnsealedPacket {
 /// Seals a payload into a fixed-size packet.
 ///
 /// The payload is padded with cryptographic random bytes to the fixed
-/// region size (SPECIFICATION.md §1), the nonce is single-use random, and
+/// region size (docs/SPECIFICATION.md §1), the nonce is single-use random, and
 /// the full header is bound as AAD.
 ///
 /// # Errors

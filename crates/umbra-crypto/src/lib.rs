@@ -1,7 +1,7 @@
 //! # Umbra Cryptography Core
 //!
 //! Post-quantum hybrid cryptography for the Umbra protocol. Implements the
-//! primitives table of `CRYPTOGRAPHY.md` §1 with pure-Rust RustCrypto crates
+//! primitives table of `docs/CRYPTOGRAPHY.md` §1 with pure-Rust RustCrypto crates
 //! only (ADR-026):
 //!
 //! - **PQXDH** hybrid handshake: X25519 (DH1..DH3) + ML-KEM-768, combined

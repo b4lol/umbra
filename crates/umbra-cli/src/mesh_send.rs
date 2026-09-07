@@ -9,7 +9,7 @@
 //! keystore identity is NOT read here. Unlike Tor, there is no onion
 //! routing: anyone in radio range can observe the P2P device address
 //! and the fact that two Umbra devices are communicating
-//! (THREAT_MODEL.md, "Off-Grid Mesh").
+//! (docs/THREAT_MODEL.md, "Off-Grid Mesh").
 
 use std::io::Read;
 use std::path::Path;

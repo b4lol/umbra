@@ -1,6 +1,6 @@
 [package]
 name = "umbra-ffi"
-description = "UniFFI bridge surface between the Umbra Rust core and Kotlin/Compose (SPECIFICATION.md §3)"
+description = "UniFFI bridge surface between the Umbra Rust core and Kotlin/Compose (docs/SPECIFICATION.md §3)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
