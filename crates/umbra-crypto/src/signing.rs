@@ -1,4 +1,4 @@
-//! ML-DSA-65 post-quantum signatures (CRYPTOGRAPHY.md §1, NIST FIPS 204).
+//! ML-DSA-65 post-quantum signatures (docs/CRYPTOGRAPHY.md §1, NIST FIPS 204).
 //!
 //! Used for identity attestation; SLH-DSA (FIPS 205) lands as the hash-based
 //! fallback with the A.1 hardening pass.

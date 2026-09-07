@@ -2,7 +2,7 @@
 
 [package]
 name = "umbra-nym-cli"
-description = "Umbra Nym Mixnet adapter: a standalone CLI reusing Umbra's PQXDH session and peer-record infrastructure over Nym's mixnet (TODO B.1). Kept as its own Cargo workspace deliberately — nym-sdk's SQLite dependency chain conflicts with the main workspace's Tor feature via Cargo's `links` uniqueness rule; see ADR-032 in DECISIONS.md."
+description = "Umbra Nym Mixnet adapter: a standalone CLI reusing Umbra's PQXDH session and peer-record infrastructure over Nym's mixnet (TODO B.1). Kept as its own Cargo workspace deliberately — nym-sdk's SQLite dependency chain conflicts with the main workspace's Tor feature via Cargo's `links` uniqueness rule; see ADR-032 in docs/DECISIONS.md."
 version = "1.0.0-alpha.3"
 edition = "2021"
 rust-version = "1.87.0"

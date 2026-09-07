@@ -47,7 +47,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: fuzz
+          workspaces: components/fuzz
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
@@ -55,8 +55,10 @@ jobs:
         # Explicit gnu target: cargo-fuzz's default musl target builds a
         # statically linked libc that is incompatible with ASan.
         run: cargo fuzz run fuzz_packet_parser --target x86_64-unknown-linux-gnu -- -max_total_time=60
+        working-directory: components/fuzz
       - name: Fuzz the media sterilizer (60s smoke)
         run: cargo fuzz run fuzz_media_sterilizer --target x86_64-unknown-linux-gnu -- -max_total_time=60
+        working-directory: components/fuzz
 
   sanitizers:
     name: ASan (nightly)

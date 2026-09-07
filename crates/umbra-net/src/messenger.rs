@@ -373,7 +373,7 @@ fn session_engine_secret(material: &[u8; 32], ssid: &[u8; 32]) -> BigUint {
 }
 
 /// Runs the INITIATOR side of SMP verification over an established
-/// session (CRYPTOGRAPHY.md §5): sends SMP1, processes SMP2, sends SMP3,
+/// session (docs/CRYPTOGRAPHY.md §5): sends SMP1, processes SMP2, sends SMP3,
 /// processes SMP4, and returns whether the shared secret matches.
 ///
 /// `secret` is the PAIRING-level material

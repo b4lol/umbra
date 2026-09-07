@@ -1,4 +1,4 @@
-//! Key derivation functions (CRYPTOGRAPHY.md §1: HKDF-SHA512 + BLAKE3).
+//! Key derivation functions (docs/CRYPTOGRAPHY.md §1: HKDF-SHA512 + BLAKE3).
 //!
 //! - [`derive_root_key`]: PQXDH hybrid root key,
 //!   `SK = HKDF-SHA512(DH1 || DH2 || DH3 || SS_KEM, salt, info)`.
@@ -12,10 +12,10 @@ use zeroize::Zeroizing;
 
 use crate::error::CryptoError;
 
-/// HKDF salt for the PQXDH root derivation (CRYPTOGRAPHY.md §2 ContextInfo).
+/// HKDF salt for the PQXDH root derivation (docs/CRYPTOGRAPHY.md §2 ContextInfo).
 pub const ROOT_SALT: &[u8] = b"Umbra PQXDH v1 root salt";
 
-/// HKDF info string for the PQXDH root derivation (CRYPTOGRAPHY.md §2).
+/// HKDF info string for the PQXDH root derivation (docs/CRYPTOGRAPHY.md §2).
 pub const ROOT_INFO: &[u8] = b"Umbra session root key";
 
 /// Info string for the Double Ratchet root-key ratchet step.
@@ -50,7 +50,7 @@ impl RootKey {
 
 /// Derives the PQXDH hybrid root key from the concatenated shared secrets.
 ///
-/// Input layout (CRYPTOGRAPHY.md §2): `DH1 || DH2 || DH3 || SS_ML-KEM`
+/// Input layout (docs/CRYPTOGRAPHY.md §2): `DH1 || DH2 || DH3 || SS_ML-KEM`
 /// (4 x 32 bytes = 128 bytes).
 ///
 /// # Errors
@@ -101,7 +101,7 @@ pub fn advance_chain(chain_key: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
     (next_chain, message_key)
 }
 
-/// Keyed BLAKE3 digest (CRYPTOGRAPHY.md §1).
+/// Keyed BLAKE3 digest (docs/CRYPTOGRAPHY.md §1).
 #[must_use]
 pub fn keyed_digest(key: &[u8; 32], data: &[u8]) -> [u8; 32] {
     *blake3::keyed_hash(key, data).as_bytes()

@@ -1,4 +1,4 @@
-//! Safe driver surface for hardware security keys (HARDWARE_SECURITY.md §6,
+//! Safe driver surface for hardware security keys (docs/HARDWARE_SECURITY.md §6,
 //! ADR-009: FIDO2 / YubiKey CC EAL6+ dual-hardware token binding).
 
 use thiserror::Error;

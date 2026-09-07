@@ -1,4 +1,4 @@
-//! MEDIA_CHUNK framing for sterilized media (TODO A.3, SPECIFICATION.md
+//! MEDIA_CHUNK framing for sterilized media (TODO A.3, docs/SPECIFICATION.md
 //! opcode `0x06`).
 //!
 //! A sterilized PNG generally exceeds one packet's 990-byte payload, so it

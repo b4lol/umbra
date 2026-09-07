@@ -3,7 +3,7 @@
 //! Verifies TODO B.1's mesh transport against a REAL `wpa_supplicant`
 //! and a REAL second Wi-Fi Direct peer device — neither exists in CI or
 //! this development environment. See
-//! ADR-031 in DECISIONS.md for the
+//! ADR-031 in docs/DECISIONS.md for the
 //! honest-scope rationale: `umbra_net::mesh::wpactrl` and
 //! `umbra_net::mesh::linklocal` are hermetically unit-tested (protocol
 //! parsing needs no hardware, see `crates/umbra-net/src/mesh/`); THIS
@@ -36,7 +36,7 @@
 //! device was available in any environment this feature was developed
 //! in. This is the honestly-documented residual (mirrors `pt-proxy`'s
 //! "live interop against a real censorship-path bridge" item in
-//! `pt-proxy/README.md`).
+//! `components/pt-proxy/README.md`).
 //!
 //! Known gap to watch for on a live run: `connect()` does not yet wait
 //! for a `P2P-DEVICE-FOUND` event before issuing `P2P_CONNECT`, so a

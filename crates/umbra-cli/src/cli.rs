@@ -84,7 +84,7 @@ pub enum Command {
         #[arg(long)]
         onion: Option<String>,
         /// Use the Wi-Fi Direct mesh transport (must be explicit — mesh
-        /// mode has NO onion routing, THREAT_MODEL.md "Off-Grid Mesh";
+        /// mode has NO onion routing, docs/THREAT_MODEL.md "Off-Grid Mesh";
         /// a stored peer-record mesh address is never used unless this
         /// flag is passed). Mutually exclusive with `--onion`. Requires
         /// the `mesh` build feature.
@@ -186,7 +186,7 @@ pub enum Command {
     },
     /// Waits for an incoming Wi-Fi Direct connection from ANY paired
     /// peer (mesh has no onion identity to publish — see
-    /// THREAT_MODEL.md "Off-Grid Mesh") and decrypts one message.
+    /// docs/THREAT_MODEL.md "Off-Grid Mesh") and decrypts one message.
     /// Requires the `mesh` build feature.
     #[cfg(feature = "mesh")]
     ServeMesh {

@@ -3,7 +3,7 @@
 //! An identity bundle's secret seeds are serialized and encrypted at rest
 //! with a passphrase-derived key:
 //!
-//! - **KDF**: Argon2id per CRYPTOGRAPHY.md §1 (`t=4, m=2^18, p=4`,
+//! - **KDF**: Argon2id per docs/CRYPTOGRAPHY.md §1 (`t=4, m=2^18, p=4`,
 //!   RFC 9106) — memory-hard against ASIC/GPU brute force.
 //! - **AEAD**: ChaCha20-Poly1305 with a random per-envelope salt (16 B)
 //!   and nonce (12 B); the blob is `[salt][nonce][ciphertext+tag]`.
@@ -19,13 +19,13 @@ use crate::{aead, rng};
 /// Salt length for the Argon2id derivation.
 pub const KS_SALT_LEN: usize = 16;
 
-/// Production KDF memory cost in KiB (CRYPTOGRAPHY.md §1: m = 2^18).
+/// Production KDF memory cost in KiB (docs/CRYPTOGRAPHY.md §1: m = 2^18).
 pub const ARGON2_M_KIB: u32 = 1 << 18;
 
-/// Production KDF time cost (CRYPTOGRAPHY.md §1: t = 4).
+/// Production KDF time cost (docs/CRYPTOGRAPHY.md §1: t = 4).
 pub const ARGON2_T_COST: u32 = 4;
 
-/// Production KDF parallelism (CRYPTOGRAPHY.md §1: p = 4).
+/// Production KDF parallelism (docs/CRYPTOGRAPHY.md §1: p = 4).
 pub const ARGON2_P_COST: u32 = 4;
 
 /// Derives a 32-byte keystore key with the production Argon2id

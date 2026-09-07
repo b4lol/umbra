@@ -47,7 +47,7 @@ pub enum CryptoError {
     InvalidSignature,
 
     /// A feature is structurally defined but not yet wired (integration
-    /// points are documented per TODO.md Section A/B).
+    /// points are documented per docs/TODO.md Section A/B).
     #[error("not yet implemented: {0}")]
     Unsupported(&'static str),
 }

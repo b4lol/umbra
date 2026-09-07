@@ -26,7 +26,7 @@
 //! Identity note: a Tor v3 onion service cannot know the connecting peer's
 //! address — that is the anonymity property. [`Transport::recv`] therefore
 //! returns packets without a source; peer identity comes from the pairing
-//! layer (CRYPTOGRAPHY.md §5).
+//! layer (docs/CRYPTOGRAPHY.md §5).
 //!
 //! State handling: Tor directory cache and persistent state are pointed at
 //! an ephemeral per-run temp directory — no Umbra-owned residue under the
@@ -86,7 +86,7 @@ fn inbound_service_config(
 
 /// Provisional Umbra P2P port for peer onion services.
 ///
-/// SPECIFICATION.md does not yet fix a port; this constant is the single
+/// docs/SPECIFICATION.md does not yet fix a port; this constant is the single
 /// source of truth until the spec revision lands.
 pub const PROVISIONAL_PEER_PORT: u16 = 39_441;
 

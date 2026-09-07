@@ -1,4 +1,4 @@
-//! SAS (Short Authentication String) derivation (CRYPTOGRAPHY.md §5).
+//! SAS (Short Authentication String) derivation (docs/CRYPTOGRAPHY.md §5).
 //!
 //! Out-of-band verification against MITM: both parties derive the same
 //! 6-digit code from the shared secret and compare it visually or over a

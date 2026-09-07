@@ -1,6 +1,6 @@
 # Umbra — Cargo Workspace
 #
-# Layout and scope follow `TODO.md` Section A (ADR-027) and the crate policy in
+# Layout and scope follow `docs/TODO.md` Section A (ADR-027) and the crate policy in
 # `CONTRIBUTING.md`: business logic, crypto, network, and protocol crates are
 # `#![forbid(unsafe_code)]`; `unsafe` exists only in `crates/umbra-hardware`.
 #
@@ -19,7 +19,7 @@ members = [
     "crates/umbra-gui",
     "crates/umbra-hardware",
 ]
-exclude = ["fuzz"]
+exclude = ["components/fuzz"]
 
 [workspace.package]
 version = "1.0.0-alpha.3"
@@ -61,7 +61,7 @@ chacha20poly1305 = { version = "0.11.0", features = ["alloc", "rand_core"] }
 # Shared RustCrypto trait/type vocabulary (Key, KeyInit, KeySizeUser)
 crypto-common = "0.2.2"
 
-# Hashing / KDF (CRYPTOGRAPHY.md §1)
+# Hashing / KDF (docs/CRYPTOGRAPHY.md §1)
 hkdf = "0.13.0"
 sha2 = "0.11.0"
 blake3 = "1.8.3"
@@ -107,7 +107,7 @@ crossterm = "0.29.0"
 # Property-based testing (TODO A.5)
 proptest = "1.11.0"
 
-# OS_OPTIMIZATIONS.md §3: minimal binary, fat LTO, no unwinding tables.
+# docs/OS_OPTIMIZATIONS.md §3: minimal binary, fat LTO, no unwinding tables.
 [profile.release]
 opt-level = "z"
 lto = "fat"
@@ -116,6 +116,6 @@ panic = "abort"
 strip = true
 
 # Cryptography is latency-critical: speed-optimized while everything else
-# is size-optimized (OS_OPTIMIZATIONS.md §3).
+# is size-optimized (docs/OS_OPTIMIZATIONS.md §3).
 [profile.release.package.umbra-crypto]
 opt-level = 3

@@ -1,4 +1,4 @@
-//! MEDIA_CHUNK transfer tests (TODO A.3, SPECIFICATION.md opcode `0x06`).
+//! MEDIA_CHUNK transfer tests (TODO A.3, docs/SPECIFICATION.md opcode `0x06`).
 //!
 //! Hermetic: no network, no filesystem.
 

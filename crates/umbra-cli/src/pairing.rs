@@ -1,5 +1,5 @@
 //! Out-of-band pairing payload and SAS derivation (TODO A.3,
-//! CRYPTOGRAPHY.md §5).
+//! docs/CRYPTOGRAPHY.md §5).
 //!
 //! The pairing payload carries the full public identity of one side
 //! (X25519 IK + SPK + SPK signature + ML-KEM EK + ML-DSA VK) and is
@@ -127,7 +127,7 @@ pub struct PeerIdentity {
     /// (`umbra pair --nym-addr`); absent for payload-only records.
     /// Validated only for basic shape here — the authoritative parse
     /// happens in the separate `umbra-nym-cli` crate at send/serve
-    /// time (see ADR-032 in DECISIONS.md).
+    /// time (see ADR-032 in docs/DECISIONS.md).
     pub nym_addr: Option<String>,
 }
 

@@ -83,6 +83,6 @@ just mutants
 
 1. Create a new feature branch from the `main` branch (`git checkout -b feature/guvenlik-iyilestirmesi`).
 2. Write your code and its accompanying hermetic tests.
-3. Make sure you fully comply with the principles in [`CODE_MANIFESTO.md`](CODE_MANIFESTO.md) and the checklist in [`CODE_REVIEW.md`](CODE_REVIEW.md).
+3. Make sure you fully comply with the principles in [`docs/CODE_MANIFESTO.md`](docs/CODE_MANIFESTO.md) and the checklist in [`docs/CODE_REVIEW.md`](docs/CODE_REVIEW.md).
 4. Verify that `just check`, `just scan`, and `just mutants` return zero errors.
 5. Open a PR with a clear, well-reasoned commit message.

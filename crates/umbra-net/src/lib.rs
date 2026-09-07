@@ -1,6 +1,6 @@
 //! # Umbra Network & Transport
 //!
-//! Dynamic network and transport router (ARCHITECTURE.md "Network Router"):
+//! Dynamic network and transport router (docs/ARCHITECTURE.md "Network Router"):
 //!
 //! - [`OnionAddr`]: validated Tor v3 onion service addresses.
 //! - [`Transport`]: async transport abstraction with a hermetic

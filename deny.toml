@@ -1,5 +1,5 @@
 # cargo-deny configuration: license, ban, and source policy for Umbra.
-# GPL-3.0-or-later is the project license (PROJECT.md); dependencies must be
+# GPL-3.0-or-later is the project license (docs/PROJECT.md); dependencies must be
 # permissively licensed or GPL-compatible.
 
 [graph]

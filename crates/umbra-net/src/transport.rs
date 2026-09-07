@@ -1,4 +1,4 @@
-//! Async transport abstraction (ARCHITECTURE.md "Network Router").
+//! Async transport abstraction (docs/ARCHITECTURE.md "Network Router").
 //!
 //! [`LoopbackPair`] provides a fully hermetic in-memory transport pair for
 //! deterministic tests (CONTRIBUTING §"Hermetic and Deterministic Tests");
@@ -8,7 +8,7 @@
 //! Identity note: [`Transport::recv`] deliberately returns **no source
 //! address** — a Tor v3 onion service cannot know the connecting peer's
 //! address (that is the anonymity property). Peer identity is established
-//! at the pairing/session layer (CRYPTOGRAPHY.md §5), not per packet.
+//! at the pairing/session layer (docs/CRYPTOGRAPHY.md §5), not per packet.
 
 use tokio::sync::Mutex;
 use tokio::sync::mpsc::{self, Receiver, Sender};

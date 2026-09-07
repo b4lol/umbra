@@ -20,9 +20,9 @@ scan:
 mutants:
     cargo mutants --no-shuffle
 
-# 6. Fuzzing mutation testing for parsers (cargo-fuzz; see fuzz/).
+# 6. Fuzzing mutation testing for parsers (cargo-fuzz; see components/fuzz/).
 fuzz target="fuzz_packet_parser" seconds="60":
-    cargo fuzz run {{target}} -- -max_total_time={{seconds}}
+    cd components/fuzz && cargo fuzz run {{target}} -- -max_total_time={{seconds}}
 
 # 5. LIVE-NETWORK identity-persistence test (TODO A.2 residual): run on
 # a machine with real Tor connectivity; NOT part of the hermetic CI set.
@@ -56,6 +56,6 @@ audit-nym:
 # 10. LIVE-NETWORK Nym Sandbox two-process interop test — NOT part of the
 #     hermetic CI set; requires RLIMIT_MEMLOCK raised above this project's
 #     default expectations for harden_process() to succeed (see ADR-025,
-#     TODO.md B.1's Nym residual).
+#     docs/TODO.md B.1's Nym residual).
 live-test-nym:
     cargo test --manifest-path crates/umbra-nym-cli/Cargo.toml --test nym_live -- --ignored --nocapture

@@ -1,4 +1,4 @@
-//! `UmbraCoreController` trait (SPECIFICATION.md §3, FFI Specification).
+//! `UmbraCoreController` trait (docs/SPECIFICATION.md §3, FFI Specification).
 //!
 //! Method signatures take `&self` so the trait stays object-safe for
 //! UniFFI; the SPECIFICATION sketch omitted receivers for brevity.
@@ -31,7 +31,7 @@ pub enum CoreControllerError {
     Unsupported(&'static str),
 }
 
-/// The controller interface consumed by the Android UI (SPECIFICATION.md §3).
+/// The controller interface consumed by the Android UI (docs/SPECIFICATION.md §3).
 pub trait UmbraCoreController: Send + Sync {
     /// Generates a new ephemeral identity and a Tor v3 Onion endpoint.
     ///

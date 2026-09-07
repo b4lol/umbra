@@ -1,5 +1,5 @@
 //! Guard-page-protected, RAM-locked key storage (TODO A.1, ADR-025,
-//! HARDWARE_SECURITY.md §4).
+//! docs/HARDWARE_SECURITY.md §4).
 //!
 //! [`GuardedBuffer`] places a value on its own anonymous, `mlock`ed page
 //! surrounded by `PROT_NONE` guard pages:

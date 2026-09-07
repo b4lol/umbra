@@ -1,4 +1,4 @@
-//! Tor v3 onion service address validation (NETWORK_PROTOCOL.md §2).
+//! Tor v3 onion service address validation (docs/NETWORK_PROTOCOL.md §2).
 
 use core::fmt;
 

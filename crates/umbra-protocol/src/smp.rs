@@ -1,4 +1,4 @@
-//! Socialist Millionaire Protocol engine (TODO A.3, CRYPTOGRAPHY.md §5).
+//! Socialist Millionaire Protocol engine (TODO A.3, docs/CRYPTOGRAPHY.md §5).
 //!
 //! Faithful implementation of the OTR version 3 SMP
 //! (Protocol-v3-4.1.1, "Socialist Millionaires' Protocol"), which is

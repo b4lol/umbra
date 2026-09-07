@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 libfuzzer-sys = "0.4"
-umbra-protocol = { path = "../crates/umbra-protocol" }
+umbra-protocol = { path = "../../crates/umbra-protocol" }
 
 [[bin]]
 name = "fuzz_packet_parser"
