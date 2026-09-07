@@ -499,6 +499,7 @@ mod tests {
                         dsa: Vec::new(),
                         onion: None,
                         mesh_addr: None,
+                        nym_addr: None,
                     },
                 )
             })

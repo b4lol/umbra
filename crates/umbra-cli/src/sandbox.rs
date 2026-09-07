@@ -243,8 +243,13 @@ pub fn restrict_filesystem_for_mesh(
 /// process exit paths. Filesystem syscalls remain listed because Landlock
 /// already denies the content access; defence in depth keeps the process
 /// functional while both layers gate.
+///
+/// `pub` (TODO B.1) so the standalone `umbra-nym-cli` crate can reuse
+/// this exact base list — the single source of truth for it — rather
+/// than maintaining its own copy; see that crate's `sandbox.rs` for the
+/// three extra syscalls its Nym-specific profile appends on top.
 #[must_use]
-fn allowed_syscalls() -> Vec<i64> {
+pub fn allowed_syscalls() -> Vec<i64> {
     const SYSCALLS: &[i64] = &[
         // Memory management.
         libc::SYS_mmap,
@@ -364,7 +369,7 @@ fn allowed_syscalls() -> Vec<i64> {
 /// [`restrict_syscalls`] (IPv4/UNIX STREAM only) and
 /// [`restrict_syscalls_mesh`] (adds IPv6 STREAM + UNIX DGRAM) so the
 /// masked-comparison logic is defined exactly once.
-fn install_filter(socket_rules: Vec<seccompiler::SeccompRule>) -> Result<(), CliError> {
+pub fn install_filter(socket_rules: Vec<seccompiler::SeccompRule>) -> Result<(), CliError> {
     use seccompiler::{SeccompAction, SeccompFilter, TargetArch, apply_filter};
 
     #[cfg(target_arch = "x86_64")]
@@ -396,7 +401,7 @@ fn install_filter(socket_rules: Vec<seccompiler::SeccompRule>) -> Result<(), Cli
 
 /// Builds one masked `(domain, type)` socket rule (shared by both
 /// profiles — see [`install_filter`]).
-fn socket_rule(domain: i32, sock_type: i32) -> Result<seccompiler::SeccompRule, CliError> {
+pub fn socket_rule(domain: i32, sock_type: i32) -> Result<seccompiler::SeccompRule, CliError> {
     const SOCK_TYPE_MASK: u64 = 0x000F;
     let domain64 =
         u64::try_from(domain).map_err(|_e| CliError::Seccomp("negative socket domain".into()))?;

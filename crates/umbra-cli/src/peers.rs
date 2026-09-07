@@ -93,15 +93,72 @@ pub fn validate_mesh_addr(address: &str) -> Result<(), CliError> {
         })
 }
 
+/// True when every byte of `segment` is in Bitcoin's base58 alphabet
+/// (`123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz` — no
+/// `0`, `O`, `I` or `l`), and `segment` is non-empty. Each of a Nym
+/// address's three segments is a base58-encoded key/identity, so this
+/// is the exact admissible alphabet — nothing else, and in particular
+/// no whitespace, newline, `@` or `.`, can pass.
+fn is_base58_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment.bytes().all(|byte| {
+            matches!(byte,
+                b'1'..=b'9'
+                | b'A'..=b'H' | b'J'..=b'N' | b'P'..=b'Z'
+                | b'a'..=b'k' | b'm'..=b'z')
+        })
+}
+
+/// Lightweight format check for a Nym mixnet address
+/// (`identity.encryption@gateway`, three non-empty base58 segments) —
+/// NOT the authoritative parse (that lives in the separate
+/// `umbra-nym-cli` crate, which alone depends on `nym-sdk`; see
+/// ADR-032 in DECISIONS.md). Mirrors
+/// [`validate_mesh_addr`]'s rigor: that one delegates to a parser which
+/// cannot admit anything but hex digits and colons, and this one admits
+/// nothing but the base58 alphabet and the two structural separators.
+///
+/// The character-class restriction is load-bearing, not cosmetic:
+/// [`save_peer`] writes an accepted address verbatim as a `nym
+/// {address}\n` line into the peer record, so a value carrying an
+/// embedded newline (`aaa.bbb@ccc\nonion <attacker-address>`) would
+/// inject a SECOND, forged record line that [`load_peer`] would then
+/// parse as a legitimately stored `.onion` address for that peer — a
+/// later `umbra send --onion <peer>` would dial the attacker's hidden
+/// service. Restricting every segment to base58 makes a newline (and
+/// any other separator or control byte) categorically impossible.
+///
+/// # Errors
+///
+/// Returns [`CliError::Io`] for a string that doesn't have the
+/// `<base58>.<base58>@<base58>` shape.
+pub fn validate_nym_addr(addr: &str) -> Result<(), CliError> {
+    let invalid = || {
+        CliError::Io(std::io::Error::other(
+            "invalid nym address (identity.encryption@gateway expected)",
+        ))
+    };
+    let (identity_and_encryption, gateway) = addr.split_once('@').ok_or_else(invalid)?;
+    let (identity, encryption) = identity_and_encryption
+        .split_once('.')
+        .ok_or_else(invalid)?;
+    if !is_base58_segment(identity) || !is_base58_segment(encryption) || !is_base58_segment(gateway)
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 /// Saves (or overwrites) a peer's pairing payload under `name`, with an
-/// optional `.onion` service address and/or an optional Wi-Fi Direct
-/// mesh address. The payload is parsed (SPK signature verified) and
-/// both addresses are validated BEFORE anything touches disk, so a typo
-/// fails here instead of at first use.
+/// optional `.onion` service address, an optional Wi-Fi Direct mesh
+/// address, and/or an optional Nym mixnet address. The payload is
+/// parsed (SPK signature verified) and all addresses are validated
+/// BEFORE anything touches disk, so a typo fails here instead of at
+/// first use.
 ///
 /// Record file format: line 1 = base64url payload, optional further
-/// lines = `onion <address>` and/or `mesh <address>` (either order,
-/// either or both present).
+/// lines = `onion <address>`, `mesh <address>`, and/or `nym <address>`
+/// (any order, any subset present).
 ///
 /// # Errors
 ///
@@ -113,6 +170,7 @@ pub fn save_peer(
     payload_b64: &str,
     onion: Option<&str>,
     mesh_addr: Option<&str>,
+    nym_addr: Option<&str>,
 ) -> Result<(), CliError> {
     parse_payload(payload_b64)?;
     let mut contents = format!("{payload_b64}\n");
@@ -123,6 +181,10 @@ pub fn save_peer(
     if let Some(address) = mesh_addr {
         validate_mesh_addr(address)?;
         contents.push_str(&format!("mesh {address}\n"));
+    }
+    if let Some(address) = nym_addr {
+        validate_nym_addr(address)?;
+        contents.push_str(&format!("nym {address}\n"));
     }
     let path = record_path(peers_dir, name)?;
     fs::create_dir_all(peers_dir)
@@ -159,6 +221,10 @@ pub fn load_peer(peers_dir: &Path, name: &str) -> Result<crate::pairing::PeerIde
             let address = address.trim();
             validate_mesh_addr(address)?;
             identity.mesh_addr = Some(address.to_string());
+        } else if let Some(address) = address_line.strip_prefix("nym ") {
+            let address = address.trim();
+            validate_nym_addr(address)?;
+            identity.nym_addr = Some(address.to_string());
         } else {
             return Err(CliError::Keystore(format!(
                 "unknown peer-record line: {address_line}"
