@@ -40,7 +40,7 @@ umbra-net.workspace = true
 tokio = { workspace = true, optional = true }
 umbra-hardware = { path = "../umbra-hardware" }
 zeroize.workspace = true
-base64 = "0.22.1"
+base64 = "0.23.1"
 clap.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
