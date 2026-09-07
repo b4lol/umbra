@@ -1,6 +1,6 @@
 //! Off-grid mesh transport: Wi-Fi Direct client-to-client, single-hop,
 //! paired-peers-only (TODO B.1). See
-//! `docs/superpowers/specs/2026-09-05-mesh-transport-design.md`.
+//! ADR-031 in DECISIONS.md.
 //!
 //! Honest scope: [`wpactrl`] (the `wpa_supplicant` control-socket
 //! protocol) and [`linklocal`] (IPv6 link-local address resolution) are

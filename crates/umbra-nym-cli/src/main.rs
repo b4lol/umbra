@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 //! `umbra-nym`: standalone CLI for Umbra's Nym Mixnet adapter (TODO B.1).
-//! See `docs/superpowers/specs/2026-09-06-nym-mixnet-design.md`.
+//! See ADR-032 in DECISIONS.md.
 
 use clap::Parser as _;
 use umbra_nym_cli::cli::{Cli, Command};

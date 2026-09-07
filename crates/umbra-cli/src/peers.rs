@@ -113,7 +113,7 @@ fn is_base58_segment(segment: &str) -> bool {
 /// (`identity.encryption@gateway`, three non-empty base58 segments) —
 /// NOT the authoritative parse (that lives in the separate
 /// `umbra-nym-cli` crate, which alone depends on `nym-sdk`; see
-/// docs/superpowers/specs/2026-09-06-nym-mixnet-design.md). Mirrors
+/// ADR-032 in DECISIONS.md). Mirrors
 /// [`validate_mesh_addr`]'s rigor: that one delegates to a parser which
 /// cannot admit anything but hex digits and colons, and this one admits
 /// nothing but the base58 alphabet and the two structural separators.

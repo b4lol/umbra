@@ -127,7 +127,7 @@ pub struct PeerIdentity {
     /// (`umbra pair --nym-addr`); absent for payload-only records.
     /// Validated only for basic shape here — the authoritative parse
     /// happens in the separate `umbra-nym-cli` crate at send/serve
-    /// time (see docs/superpowers/specs/2026-09-06-nym-mixnet-design.md).
+    /// time (see ADR-032 in DECISIONS.md).
     pub nym_addr: Option<String>,
 }
 

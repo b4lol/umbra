@@ -3,7 +3,7 @@
 //! Verifies TODO B.1's mesh transport against a REAL `wpa_supplicant`
 //! and a REAL second Wi-Fi Direct peer device — neither exists in CI or
 //! this development environment. See
-//! `docs/superpowers/specs/2026-09-05-mesh-transport-design.md` for the
+//! ADR-031 in DECISIONS.md for the
 //! honest-scope rationale: `umbra_net::mesh::wpactrl` and
 //! `umbra_net::mesh::linklocal` are hermetically unit-tested (protocol
 //! parsing needs no hardware, see `crates/umbra-net/src/mesh/`); THIS
