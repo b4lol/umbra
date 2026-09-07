@@ -222,8 +222,22 @@ pub async fn inbound_loop(
                 let tx = session_tx.clone();
                 tokio::spawn(async move {
                     let _permit = permit; // held for the whole session
-                    let result =
-                        umbra_net::messenger::receive_message(bundle, &mut stream).await;
+                    // Leading connection-type marker (TODO B.2 groundwork):
+                    // no group path exists yet, so anything other than a
+                    // PQXDH handshake is treated as a session failure.
+                    let result = match umbra_net::messenger::peek_connection_type(&mut stream)
+                        .await
+                    {
+                        Ok(umbra_net::messenger::ConnectionType::PqxdhHandshake) => {
+                            umbra_net::messenger::receive_message(bundle, &mut stream).await
+                        }
+                        Ok(umbra_net::messenger::ConnectionType::GroupFrame) => {
+                            Err(umbra_net::TransportError::Unsupported(
+                                "group frames are not yet handled by the inbound loop",
+                            ))
+                        }
+                        Err(error) => Err(error),
+                    };
                     let _ = tx.send(result).await;
                 });
             }
