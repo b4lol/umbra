@@ -18,6 +18,7 @@ members = [
     "crates/umbra-ffi",
     "crates/umbra-gui",
     "crates/umbra-hardware",
+    "crates/umbra-group",
 ]
 exclude = ["fuzz"]
 
@@ -51,6 +52,45 @@ undocumented_unsafe_blocks = "deny"
 umbra-crypto = { path = "crates/umbra-crypto", version = "1.0.0-alpha.3" }
 umbra-protocol = { path = "crates/umbra-protocol", version = "1.0.0-alpha.3" }
 umbra-net = { path = "crates/umbra-net", version = "1.0.0-alpha.3" }
+
+# PQ-MLS group ("cell") encryption (TODO B.2): OpenMLS with the X-Wing
+# hybrid (X25519 + ML-KEM-768) ciphersuite via the pure-Rust libcrux
+# crypto provider. NEVER enable the "sqlite-provider" feature — it pulls
+# in a native SQLite dependency; "libcrux-provider" is pure Rust.
+#
+# Deliberately do NOT enable `openmls`'s own "draft-ietf-mls-pq-ciphersuites"
+# feature: its definition contains a Cargo "weak dependency feature" edge
+# (`openmls_sqlite_storage?/draft-ietf-mls-pq-ciphersuites`) that forces
+# Cargo's resolver to version-resolve the optional `openmls_sqlite_storage`
+# dependency (pulling in `rusqlite`) purely to validate that feature
+# forward, even though `sqlite-provider` itself is never activated. That
+# collides via the `links = "sqlite3"` uniqueness rule with `umbra-net`'s
+# already-active `arti-client`/`tor-dirmgr` -> `rusqlite` chain (verified:
+# `cargo check` fails with "failed to select a version for
+# `libsqlite3-sys`" as soon as this feature is added to `openmls` itself).
+#
+# Instead, the X-Wing `Ciphersuite` enum variant is unlocked by enabling
+# "draft-ietf-mls-pq-ciphersuites" on `openmls_libcrux_crypto` below, whose
+# OWN feature definition forwards it (via ordinary, non-weak
+# `pkg/feature` edges with no sqlite reference) to `openmls_traits` and
+# `openmls_memory_storage`; Cargo's feature unification then applies it to
+# the same `openmls_traits` instance `openmls` itself depends on and
+# re-exports via its prelude. `openmls`'s own internal
+# `#[cfg(feature = "draft-ietf-mls-pq-ciphersuites")]` gates (verified:
+# only `default_ciphersuites()` in
+# `treesync/node/leaf_node/capabilities.rs`, plus openmls's own test
+# suite) are consequently NOT compiled in; the crate's public
+# `Capabilities::for_provider(provider.crypto())` constructor is the
+# documented, intended way to advertise exactly what the crypto provider
+# actually supports instead of relying on that hardcoded default list.
+openmls = { version = "0.9.0", default-features = false, features = [
+    "libcrux-provider",
+] }
+openmls_basic_credential = "0.6.0"
+openmls_memory_storage = "0.6.0"
+# Not re-exported through `openmls::`; needed directly to construct the
+# libcrux-backed `Provider` (verified against the installed source).
+openmls_libcrux_crypto = { version = "0.4.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
 
 # Post-quantum cryptography (RustCrypto, pure Rust — ADR-026)
 ml-kem = { version = "0.3.2", features = ["zeroize"] }

@@ -1,0 +1,21 @@
+[package]
+name = "umbra-group"
+description = "PQ-MLS (OpenMLS + X-Wing hybrid ciphersuite) group encryption for Umbra 'cells' (TODO B.2)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+umbra-crypto.workspace = true
+umbra-net.workspace = true
+openmls.workspace = true
+openmls_basic_credential.workspace = true
+openmls_memory_storage.workspace = true
+openmls_libcrux_crypto.workspace = true
+zeroize.workspace = true
+thiserror.workspace = true
