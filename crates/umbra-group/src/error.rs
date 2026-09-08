@@ -28,4 +28,21 @@ pub enum GroupError {
     /// TLS-codec (de)serialization of a signature key pair failed.
     #[error(transparent)]
     Codec(#[from] openmls::prelude::tls_codec::Error),
+
+    /// `serde_json` (de)serialization of a persisted group state
+    /// (storage snapshot + roster) failed.
+    #[error("group state (de)serialization failed: {0}")]
+    Serde(#[from] serde_json::Error),
+
+    /// An OpenMLS `MemoryStorage` operation failed while saving or
+    /// loading a group's state.
+    #[error(transparent)]
+    Storage(#[from] openmls_memory_storage::MemoryStorageError),
+
+    /// [`crate::persistence::load_group_state`] decrypted and
+    /// deserialized a persisted blob successfully, but
+    /// `MlsGroup::load` found no group matching the persisted group
+    /// id in the restored storage.
+    #[error("no MLS group found in persisted storage for the stored group id")]
+    GroupNotFound,
 }

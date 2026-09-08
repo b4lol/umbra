@@ -19,3 +19,5 @@ openmls_memory_storage.workspace = true
 openmls_libcrux_crypto.workspace = true
 zeroize.workspace = true
 thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true

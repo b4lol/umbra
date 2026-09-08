@@ -7477,6 +7477,8 @@ dependencies = [
  "openmls_basic_credential",
  "openmls_libcrux_crypto",
  "openmls_memory_storage",
+ "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "umbra-crypto",
  "umbra-net",
