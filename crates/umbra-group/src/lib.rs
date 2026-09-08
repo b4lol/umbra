@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod create;
+pub mod delivery;
 pub mod error;
 pub mod identity;
 pub mod keypackage;

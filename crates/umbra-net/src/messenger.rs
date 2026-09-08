@@ -67,8 +67,10 @@ pub const MAX_COVER_PER_SEND: u64 = 64;
 const CONNECTION_TYPE_PQXDH: u8 = 0x00;
 
 /// Leading marker byte for a group (PQ-MLS) ciphertext frame (TODO
-/// B.2 — no group path exists yet; reserved).
-const CONNECTION_TYPE_GROUP: u8 = 0x01;
+/// B.2). `pub` so `umbra-group`'s fan-out delivery code can write the
+/// same byte value as this module's single source of truth, rather
+/// than duplicating the constant.
+pub const CONNECTION_TYPE_GROUP: u8 = 0x01;
 
 /// The first byte of every inbound connection, distinguishing a
 /// two-party PQXDH handshake from a group ciphertext frame (TODO B.2).
