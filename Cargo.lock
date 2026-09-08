@@ -7474,6 +7474,7 @@ dependencies = [
 name = "umbra-group"
 version = "1.0.0-alpha.3"
 dependencies = [
+ "base64 0.23.1",
  "openmls",
  "openmls_basic_credential",
  "openmls_libcrux_crypto",

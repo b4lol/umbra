@@ -55,4 +55,13 @@ pub enum GroupError {
     GroupCreation(
         #[from] openmls::prelude::NewGroupError<openmls_memory_storage::MemoryStorageError>,
     ),
+
+    /// `KeyPackageBuilder::build` itself failed while creating a new
+    /// key package (e.g. an unsupported ciphersuite, a signature-scheme
+    /// mismatch, or a storage error surfaced through OpenMLS's own
+    /// key-package-creation path — a plain, non-generic error enum,
+    /// distinct from [`Self::GroupCreation`]'s generic
+    /// `NewGroupError<StorageError>`).
+    #[error(transparent)]
+    KeyPackageCreation(#[from] openmls::prelude::KeyPackageNewError),
 }

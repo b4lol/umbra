@@ -20,6 +20,13 @@ pub enum GroupCommand {
         #[arg(long)]
         name: String,
     },
+
+    /// Generates a fresh MLS `KeyPackage` for this peer's group
+    /// identity and prints its base64-encoded wire form on `stdout`
+    /// (one line) — the group-membership analog of `umbra
+    /// export-pairing`, for out-of-band delivery to whoever will add
+    /// this peer to a group.
+    ExportKeypackage,
 }
 
 /// Dispatches a parsed `umbra group` subcommand.
@@ -36,6 +43,7 @@ pub enum GroupCommand {
 pub fn dispatch(command: &GroupCommand, cli: &Cli) -> Result<(), CliError> {
     match command {
         GroupCommand::Create { name } => create(cli, name),
+        GroupCommand::ExportKeypackage => export_keypackage(cli),
     }
 }
 
@@ -54,5 +62,15 @@ fn keystore_dir(cli: &Cli) -> PathBuf {
 fn create(cli: &Cli, name: &str) -> Result<(), CliError> {
     let passphrase = crate::cli::load_passphrase(cli)?;
     umbra_group::create::create_group(&keystore_dir(cli), &passphrase, name)?;
+    Ok(())
+}
+
+/// `umbra group export-keypackage`: prints the fresh key package's
+/// base64 blob on `stdout` (mirrors `export_pairing`'s exact style —
+/// one line, nothing else).
+fn export_keypackage(cli: &Cli) -> Result<(), CliError> {
+    let passphrase = crate::cli::load_passphrase(cli)?;
+    let blob = umbra_group::keypackage::export_keypackage(&keystore_dir(cli), &passphrase)?;
+    crate::cli::output::line(&blob);
     Ok(())
 }

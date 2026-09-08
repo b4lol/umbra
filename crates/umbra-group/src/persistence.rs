@@ -170,6 +170,19 @@ pub struct RestoredProvider {
     storage: MemoryStorage,
 }
 
+impl RestoredProvider {
+    /// Builds a [`RestoredProvider`] directly from a crypto backend and
+    /// a storage instance. `pub(crate)` so other persistence-shaped
+    /// modules in this crate (e.g. `keypackage.rs`, whose persisted
+    /// file is a `MemoryStorage` snapshot with a different plaintext
+    /// shape than [`PersistedState`] — no `MlsGroup`, no `GroupId`, no
+    /// [`GroupRoster`]) can restore a usable provider around their own
+    /// restored `MemoryStorage` without duplicating this struct.
+    pub(crate) fn from_parts(crypto: CryptoProvider, storage: MemoryStorage) -> Self {
+        Self { crypto, storage }
+    }
+}
+
 impl OpenMlsProvider for RestoredProvider {
     type CryptoProvider = CryptoProvider;
     type RandProvider = CryptoProvider;

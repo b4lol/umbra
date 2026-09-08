@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 umbra-crypto.workspace = true
 umbra-net.workspace = true
+base64 = "0.23.1"
 openmls.workspace = true
 openmls_basic_credential.workspace = true
 openmls_memory_storage.workspace = true
