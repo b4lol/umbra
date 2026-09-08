@@ -39,6 +39,7 @@ umbra-net.workspace = true
 # feature gate.
 tokio = { workspace = true, optional = true }
 umbra-hardware = { path = "../umbra-hardware" }
+umbra-group = { path = "../umbra-group" }
 zeroize.workspace = true
 base64 = "0.23.1"
 clap.workspace = true

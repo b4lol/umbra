@@ -194,6 +194,10 @@ pub enum Command {
         #[arg(long)]
         wpa_ctrl: std::path::PathBuf,
     },
+    /// PQ-MLS group ("cell") management (TODO B.2): create, and (in
+    /// later tasks of the same plan) invite/join/send/receive.
+    #[command(subcommand)]
+    Group(crate::group::GroupCommand),
 }
 
 /// Top-level CLI error.
@@ -226,6 +230,10 @@ pub enum CliError {
     /// Crypto-layer failure inside the keystore path.
     #[error(transparent)]
     Crypto(#[from] umbra_crypto::CryptoError),
+
+    /// PQ-MLS group ("cell") layer failure (TODO B.2).
+    #[error(transparent)]
+    Group(#[from] umbra_group::GroupError),
 
     /// TUI failure.
     #[cfg(feature = "tor")]
@@ -485,6 +493,7 @@ pub fn run() -> Result<(), CliError> {
             mesh_addr.as_deref(),
             nym_addr.as_deref(),
         ),
+        Command::Group(ref sub) => crate::group::dispatch(sub, &cli),
     }
 }
 
@@ -512,7 +521,7 @@ fn pipeline_mode(json: bool) -> crate::pipeline::OutputMode {
 /// Reads the keystore passphrase from `--passphrase-file` (FIRST LINE —
 /// a trailing newline from editors or `echo` is not part of the
 /// passphrase).
-fn load_passphrase(cli: &Cli) -> Result<zeroize::Zeroizing<Vec<u8>>, CliError> {
+pub(crate) fn load_passphrase(cli: &Cli) -> Result<zeroize::Zeroizing<Vec<u8>>, CliError> {
     let path = cli.passphrase_file.as_ref().ok_or_else(|| {
         CliError::Keystore(
             "missing --passphrase-file (interactive prompts land with the TUI)".into(),

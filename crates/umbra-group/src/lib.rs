@@ -2,6 +2,7 @@
 //! OpenMLS's X-Wing hybrid (X25519 + ML-KEM-768) ciphersuite.
 #![forbid(unsafe_code)]
 
+pub mod create;
 pub mod error;
 pub mod identity;
 pub mod persistence;

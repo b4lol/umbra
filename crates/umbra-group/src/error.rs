@@ -45,4 +45,14 @@ pub enum GroupError {
     /// id in the restored storage.
     #[error("no MLS group found in persisted storage for the stored group id")]
     GroupNotFound,
+
+    /// `MlsGroup::new` itself failed while creating a new group (e.g.
+    /// an unsupported ciphersuite/extension, or a storage error
+    /// surfaced through OpenMLS's own group-creation path — distinct
+    /// from [`Self::Storage`], which covers direct `MemoryStorage`
+    /// operations performed by this crate's own persistence code).
+    #[error(transparent)]
+    GroupCreation(
+        #[from] openmls::prelude::NewGroupError<openmls_memory_storage::MemoryStorageError>,
+    ),
 }
