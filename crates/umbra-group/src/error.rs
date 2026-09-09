@@ -42,7 +42,10 @@ pub enum GroupError {
     /// [`crate::persistence::load_group_state`] decrypted and
     /// deserialized a persisted blob successfully, but
     /// `MlsGroup::load` found no group matching the persisted group
-    /// id in the restored storage.
+    /// id in the restored storage. Also returned by
+    /// [`crate::inbound::process_inbound_group_frame`] when an inbound
+    /// Commit or application-message frame's group id does not match
+    /// any locally known group under `<keystore_dir>/groups/`.
     #[error("no MLS group found in persisted storage for the stored group id")]
     GroupNotFound,
 
@@ -109,4 +112,33 @@ pub enum GroupError {
     /// I/O accident.
     #[error("group already exists: {0}")]
     AlreadyExists(String),
+
+    /// `MlsGroup::process_message` itself failed while processing an
+    /// inbound Commit or application-message frame
+    /// ([`crate::inbound::process_inbound_group_frame`]).
+    #[error(transparent)]
+    MessageProcessing(
+        #[from] openmls::prelude::ProcessMessageError<openmls_memory_storage::MemoryStorageError>,
+    ),
+
+    /// `MlsGroup::merge_staged_commit` itself failed while merging an
+    /// inbound, already-processed Commit into the group's own state
+    /// ([`crate::inbound::process_inbound_group_frame`]). Distinct from
+    /// [`Self::CommitMerge`] ([`openmls::prelude::MergePendingCommitError`],
+    /// used in `add.rs` for merging a LOCALLY authored commit's own
+    /// pending commit) — this covers
+    /// [`openmls::prelude::MergeCommitError`], produced when merging a
+    /// staged (received-from-elsewhere) commit instead.
+    #[error(transparent)]
+    StagedCommitMerge(
+        #[from] openmls::prelude::MergeCommitError<openmls_memory_storage::MemoryStorageError>,
+    ),
+
+    /// `StagedWelcome::new_from_welcome`/`StagedWelcome::into_group`
+    /// itself failed while processing an inbound Welcome message
+    /// ([`crate::inbound::process_inbound_group_frame`]).
+    #[error(transparent)]
+    WelcomeProcessing(
+        #[from] openmls::prelude::WelcomeError<openmls_memory_storage::MemoryStorageError>,
+    ),
 }

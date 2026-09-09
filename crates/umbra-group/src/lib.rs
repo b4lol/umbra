@@ -7,6 +7,7 @@ pub mod create;
 pub mod delivery;
 pub mod error;
 pub mod identity;
+pub mod inbound;
 pub mod keypackage;
 pub mod persistence;
 
