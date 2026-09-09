@@ -119,6 +119,18 @@ const GROUP_IDENTITY_FILE_NAME: &str = "group-identity.enc";
 /// necessarily a directory, and granting the keystore directory itself
 /// would re-expose the two-party keystore file — so the store gets a
 /// directory of its own to be granted, exactly as `groups/` already is.
+///
+/// # No migration from the previous flat path
+///
+/// This was a flat `<keystore_dir>/keypackages.enc` until the sandbox
+/// wiring landed, and NO migration exists: a keystore written before
+/// that change keeps its old file, which is silently ignored rather
+/// than moved or read, so `export_keypackage` simply starts a fresh
+/// store and any key package exported under the old layout can no
+/// longer be consumed by an inbound `Welcome`. Deliberate — the crate
+/// is pre-release, so no real keystore depends on the old path — but if
+/// that stops being true, this is the constant to add a migration (or a
+/// loud startup error) beside.
 const KEYPACKAGES_FILE_NAME: &str = "keypackages/store.enc";
 
 /// Magic header: `"UMKP"` + version byte (Umbra group Key Package

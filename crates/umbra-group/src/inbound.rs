@@ -164,6 +164,12 @@ const GROUPS_DIR_NAME: &str = "groups";
 /// crate's existing file-name-constant duplication pattern; it lives in
 /// its own subdirectory so the sandboxed client can be granted that
 /// directory, see `keypackage.rs`'s copy for the full reasoning).
+///
+/// Note: this path changed from a flat `<keystore_dir>/keypackages.enc`
+/// and there is NO migration — a pre-existing file at the old location
+/// is silently ignored, so a `Welcome` for a key package exported under
+/// the old layout will fail to find its private material (acceptable
+/// pre-release; see `keypackage.rs`'s copy of this constant).
 const KEYPACKAGES_FILE_NAME: &str = "keypackages/store.enc";
 
 /// The outcome of successfully processing one inbound group frame.
