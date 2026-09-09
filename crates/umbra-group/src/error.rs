@@ -96,4 +96,17 @@ pub enum GroupError {
         #[from]
         openmls::prelude::MergePendingCommitError<openmls_memory_storage::MemoryStorageError>,
     ),
+
+    /// [`crate::create::create_group`] refused to create a group
+    /// because a group state file with that name already exists on
+    /// disk. Since [`crate::persistence::save_group_state_with_params`]
+    /// legitimately overwrites-in-place (required by
+    /// [`crate::add::add_member`]'s own re-save on every membership
+    /// change), `create_group` itself is the only call site that must
+    /// still refuse to clobber a pre-existing group — this variant
+    /// carries the message shown to the caller rather than a bare
+    /// `std::io::Error` so it reads as a deliberate refusal, not an
+    /// I/O accident.
+    #[error("group already exists: {0}")]
+    AlreadyExists(String),
 }

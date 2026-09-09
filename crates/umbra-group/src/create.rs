@@ -59,22 +59,39 @@ fn load_or_generate_identity(
 /// joins (spec Decision 6), so this file is NOT specific to
 /// `group_name`.
 ///
+/// Refuses to run at all if `<keystore_dir>/groups/<group_name>.enc`
+/// already exists (mirrors `load_or_generate_identity`'s own
+/// `identity_path.exists()` check above, for the same reason:
+/// [`persistence::save_group_state_with_params`] overwrites-in-place
+/// unconditionally — a deliberate change made for
+/// [`crate::add::add_member`]'s own legitimate re-saves — so this is
+/// now the ONLY place left that must still refuse to silently clobber
+/// an existing group's entire MLS tree/epoch state).
+///
 /// # Errors
 ///
-/// Returns [`GroupError`] if the group identity cannot be
-/// generated, loaded, or saved; if the `groups/` directory cannot be
-/// created; if MLS group creation itself fails; or if the resulting
+/// Returns [`GroupError::AlreadyExists`] if the group state file
+/// already exists. Returns [`GroupError`] if the group identity cannot
+/// be generated, loaded, or saved; if the `groups/` directory cannot
+/// be created; if MLS group creation itself fails; or if the resulting
 /// state cannot be persisted.
 pub fn create_group(
     keystore_dir: &Path,
     passphrase: &[u8],
     group_name: &str,
 ) -> Result<(), GroupError> {
+    let groups_dir = keystore_dir.join(GROUPS_DIR_NAME);
+    let group_state_path = groups_dir.join(format!("{group_name}.enc"));
+    if group_state_path.exists() {
+        return Err(GroupError::AlreadyExists(format!(
+            "group {group_name:?} already exists at {}",
+            group_state_path.display()
+        )));
+    }
+
     let identity = load_or_generate_identity(keystore_dir, passphrase)?;
 
-    let groups_dir = keystore_dir.join(GROUPS_DIR_NAME);
     fs::create_dir_all(&groups_dir)?;
-    let group_state_path = groups_dir.join(format!("{group_name}.enc"));
 
     let provider = Provider::new()?;
     let credential_with_key = CredentialWithKey {
@@ -133,6 +150,55 @@ mod tests {
         let group_state_path = dir.join(GROUPS_DIR_NAME).join("my-cell.enc");
         assert!(group_state_path.exists());
 
+        let (loaded_group, loaded_roster, _provider) =
+            persistence::load_group_state(&group_state_path, b"pw")?;
+        assert!(loaded_roster.members.is_empty());
+        assert_eq!(loaded_group.members().count(), 1);
+
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    /// Guards against the data-loss regression flagged in code review:
+    /// `save_group_state_with_params` was changed (for `add_member`'s
+    /// own legitimate re-save needs) from `create_new(true)` to an
+    /// unconditional overwrite-in-place, which would have made a
+    /// second `create_group` call for the same name silently destroy
+    /// the first group's entire MLS tree/epoch state. `create_group`
+    /// itself must now be the call site refusing that clobber.
+    #[test]
+    fn create_group_twice_rejects_the_second_call_and_does_not_touch_disk()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let dir = std::env::temp_dir().join(format!(
+            "umbra-group-create-test-{}-{}",
+            std::process::id(),
+            "double-create"
+        ));
+        std::fs::create_dir_all(&dir)?;
+
+        create_group(&dir, b"pw", "my-cell")?;
+        let group_state_path = dir.join(GROUPS_DIR_NAME).join("my-cell.enc");
+        let bytes_after_first_create = std::fs::read(&group_state_path)?;
+
+        // Second call, same keystore dir and group name: must be
+        // refused, not silently clobber the first group's state.
+        let second_result = create_group(&dir, b"pw", "my-cell");
+        assert!(
+            matches!(second_result, Err(GroupError::AlreadyExists(_))),
+            "expected AlreadyExists, got {second_result:?}"
+        );
+
+        // The on-disk state from the FIRST call must be byte-for-byte
+        // untouched by the rejected second call.
+        let bytes_after_second_attempt = std::fs::read(&group_state_path)?;
+        assert_eq!(
+            bytes_after_first_create, bytes_after_second_attempt,
+            "the rejected second create_group call must not modify the persisted group state"
+        );
+
+        // The first group's state is still loadable and still a
+        // single-member group (i.e. genuinely untouched, not just
+        // byte-identical by coincidence).
         let (loaded_group, loaded_roster, _provider) =
             persistence::load_group_state(&group_state_path, b"pw")?;
         assert!(loaded_roster.members.is_empty());
