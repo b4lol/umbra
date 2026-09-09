@@ -141,4 +141,20 @@ pub enum GroupError {
     WelcomeProcessing(
         #[from] openmls::prelude::WelcomeError<openmls_memory_storage::MemoryStorageError>,
     ),
+
+    /// `MlsGroup::create_message` itself failed while encrypting an
+    /// outbound application message ([`crate::send::send_group_message`]),
+    /// e.g. this peer has been evicted from the group
+    /// (`MlsGroupStateError::UseAfterEviction`) or a pending proposal
+    /// blocks sending (`MlsGroupStateError::PendingProposal`). This is
+    /// the plain, NON-generic `CreateMessageError` (no `StorageError`
+    /// type parameter) — verified against the installed
+    /// `openmls-0.9.0` source (`src/group/mls_group/errors.rs`) to be
+    /// the applicable overload since this workspace does not enable the
+    /// `virtual-clients-draft` feature (see `send.rs`'s own module
+    /// docs for the full trace); the generic
+    /// `CreateMessageError<StorageError>` form only exists behind that
+    /// feature.
+    #[error(transparent)]
+    MessageCreation(#[from] openmls::prelude::CreateMessageError),
 }

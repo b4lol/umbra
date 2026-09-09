@@ -10,5 +10,6 @@ pub mod identity;
 pub mod inbound;
 pub mod keypackage;
 pub mod persistence;
+pub mod send;
 
 pub use error::GroupError;
