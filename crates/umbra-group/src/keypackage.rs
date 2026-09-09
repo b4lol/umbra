@@ -34,8 +34,11 @@
 //!
 //! So [`export_keypackage`] persists its `MemoryStorage` (the same
 //! storage the `KeyPackage::builder()` call wrote into) across process
-//! restarts, to a NEW file: `<keystore_dir>/keypackages.enc` — deliberately
-//! separate from any group's own `groups/<name>.enc` state file (a key
+//! restarts, to a NEW file: `<keystore_dir>/keypackages/store.enc` —
+//! deliberately in its own directory (so the sandboxed client can be
+//! granted it without exposing the keystore file; see
+//! `KEYPACKAGES_FILE_NAME`), and separate from any group's own
+//! `groups/<name>.enc` state file (a key
 //! package is pre-join: it is not yet tied to any specific group, and
 //! a peer may hold several outstanding, unconsumed key packages across
 //! several different eventual groups at once).
@@ -63,7 +66,7 @@
 //! [`save_keypackage_storage`] and [`load_keypackage_storage`] are
 //! `pub(crate)` (not private to this module) specifically so
 //! `inbound.rs`'s future Welcome-processing code can call them
-//! directly: load `keypackages.enc` into a [`persistence::
+//! directly: load `keypackages/store.enc` into a [`persistence::
 //! RestoredProvider`], hand that provider to
 //! `StagedWelcome::new_from_welcome`, then (if the consumed key
 //! package should no longer be reused — check OpenMLS's own behavior
@@ -103,10 +106,20 @@ const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA
 /// the same file by design).
 const GROUP_IDENTITY_FILE_NAME: &str = "group-identity.enc";
 
-/// File name of the persisted key-package storage snapshot (this
-/// module's own file, distinct from any group's `groups/<name>.enc`
-/// state file — see the module-level docs).
-const KEYPACKAGES_FILE_NAME: &str = "keypackages.enc";
+/// Path (relative to the keystore directory) of the persisted
+/// key-package storage snapshot: this module's own file, distinct from
+/// any group's `groups/<name>.enc` state file (see the module-level
+/// docs).
+///
+/// It lives in its OWN subdirectory rather than sitting directly in the
+/// keystore directory because [`save_keypackage_storage_with_params`]
+/// persists via a same-directory temp file plus an atomic rename, which
+/// needs create/rename rights on the file's PARENT. Under the client's
+/// Landlock sandbox (`umbra serve`/`umbra tui`) the granted exception is
+/// necessarily a directory, and granting the keystore directory itself
+/// would re-expose the two-party keystore file — so the store gets a
+/// directory of its own to be granted, exactly as `groups/` already is.
+const KEYPACKAGES_FILE_NAME: &str = "keypackages/store.enc";
 
 /// Magic header: `"UMKP"` + version byte (Umbra group Key Package
 /// storage, v1).
@@ -213,6 +226,24 @@ pub(crate) fn save_keypackage_storage_with_params(
     file.extend_from_slice(&MAGIC);
     file.extend_from_slice(&salt);
     file.extend_from_slice(&envelope);
+
+    // The store lives in its own directory (`KEYPACKAGES_FILE_NAME`),
+    // created here rather than at each call site so BOTH writers —
+    // `export_keypackage` and `inbound.rs`'s Welcome processing — get it
+    // for free (mirrors `create.rs`'s `create_group`, which creates
+    // `groups_dir` before calling `save_group_state`).
+    if let Some(parent) = path.parent() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt as _;
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(parent)?;
+        }
+        #[cfg(not(unix))]
+        fs::create_dir_all(parent)?;
+    }
 
     // Overwrite-in-place: unlike group-state/identity files (created
     // once via `create_new`), this file is legitimately re-saved on
@@ -326,7 +357,8 @@ pub(crate) fn load_keypackage_storage_with_params(
 /// As a side effect (see the module-level docs for why this is
 /// required, not optional), the `KeyPackageBundle`'s private init and
 /// leaf-encryption keys are persisted to
-/// `<keystore_dir>/keypackages.enc`, merged with any previously
+/// `<keystore_dir>/keypackages/store.enc` (its directory is created on
+/// demand), merged with any previously
 /// exported (and not-yet-consumed) key packages already stored there.
 /// Only the public `KeyPackage` half is ever returned — the private
 /// bundle never leaves this function.

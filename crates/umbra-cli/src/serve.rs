@@ -9,12 +9,12 @@
 //! 2. `harden_memory()` before any secret touches RAM (ADR-025);
 //! 3. Landlock zero-FS with the sanctioned exceptions — the Tor
 //!    storage dir (read+write: Arti's guard state + native keystore
-//!    keeping the `.onion` identity stable), the group-state directory
-//!    `<keystore dir>/groups` (read+write: an inbound group frame is
-//!    decrypted and re-persisted post-sandbox, TODO B.2 — deliberately
-//!    that path ONLY, never the keystore file itself; see
-//!    `prepare_group_paths` for why `keypackages.enc`, which an inbound
-//!    Welcome needs, is NOT granted), read-only `/etc` (the libc resolver may
+//!    keeping the `.onion` identity stable), the group-state directories
+//!    `<keystore dir>/groups` and `<keystore dir>/keypackages`
+//!    (read+write: an inbound group frame is decrypted and re-persisted
+//!    post-sandbox, and an inbound Welcome consumes a stored key
+//!    package, TODO B.2 — deliberately those two directories ONLY, never
+//!    the keystore file itself), read-only `/etc` (the libc resolver may
 //!    open `resolv.conf`-family files during bootstrap; all public
 //!    content), and `/dev/tty` — plus the full Seccomp allowlist;
 //! 4. `TorTransport::bootstrap_persistent` + `spawn_inbound` (Vanguards-
@@ -56,6 +56,16 @@ const INBOUND_RESULT_QUEUE: usize = 32;
 /// `inbound.rs`), duplicated here for the same reason they duplicate it
 /// among themselves: the constant is private to each module.
 const GROUPS_DIR_NAME: &str = "groups";
+
+/// Subdirectory (under the keystore directory) holding this peer's
+/// persisted key-package storage (`keypackages/store.enc`), which an
+/// inbound `Welcome` reads and re-saves. Mirrors the directory half of
+/// `umbra-group`'s own private `KEYPACKAGES_FILE_NAME`
+/// (`keypackage.rs`/`inbound.rs`) — only the DIRECTORY is named here,
+/// because that is what the sandbox grants (the store is written via a
+/// same-directory temp file plus a rename, which needs rights on the
+/// parent).
+const KEYPACKAGES_DIR_NAME: &str = "keypackages";
 
 /// Upper bound on EITHER length-prefixed field of one inbound group
 /// frame (`group_id` and the MLS message). These lengths arrive from an
@@ -102,17 +112,17 @@ pub enum InboundEvent {
 /// The keystore material the inbound loop's group branch needs AFTER
 /// the sandbox is installed: `process_inbound_group_frame` does its own
 /// file I/O against `<keystore_dir>/groups/*.enc` and
-/// `<keystore_dir>/keypackages.enc`, both of which are decrypted with
-/// the keystore passphrase.
+/// `<keystore_dir>/keypackages/store.enc`, both of which are decrypted
+/// with the keystore passphrase.
 ///
 /// The passphrase therefore stays resident for the daemon's lifetime —
 /// which it already did (`serve`/`tui` never return, and their caller
 /// owns it for the whole run) — under `harden_process`'s memory locks,
 /// wrapped in `Zeroizing` so it is wiped when the process tears down.
 /// The keystore FILE itself is still never reopened: only `groups/` and
-/// `keypackages.enc` are granted post-sandbox.
+/// `keypackages/` are granted post-sandbox.
 pub struct GroupInboundContext {
-    /// Directory holding `groups/` and `keypackages.enc` (the keystore
+    /// Directory holding `groups/` and `keypackages/` (the keystore
     /// file's parent).
     pub keystore_dir: PathBuf,
     /// Keystore passphrase, used to decrypt group state files.
@@ -160,55 +170,54 @@ pub fn group_context_from_keystore(
     })
 }
 
-/// Ensures the group-state directory the inbound group branch writes to
-/// EXISTS (`<keystore parent>/groups`, `0o700`) and returns it, for
+/// Ensures the two directories the inbound group branch writes to EXIST
+/// (`<keystore parent>/groups` and `<keystore parent>/keypackages`,
+/// both `0o700`) and returns them, in the order they are handed to
 /// [`crate::sandbox::restrict_filesystem_with_exceptions`]'s
 /// `read_write` list.
 ///
-/// It must exist before the ruleset is built — Landlock's `PathFd` is
+/// They must exist before the ruleset is built — Landlock's `PathFd` is
 /// an `O_PATH` open at rule-add time, so a missing path fails the whole
 /// sandbox call closed (exactly why `tor_base` is already created
 /// first). A peer may legitimately run `serve`/`tui` before ever
-/// creating or joining a group, hence the create-if-missing.
+/// creating or joining a group, hence the create-if-missing; an empty
+/// directory is a normal state and, unlike an empty store FILE, cannot
+/// be mistaken for a malformed store by anything that later writes one.
 ///
-/// # `keypackages.enc` is deliberately NOT granted (open question)
+/// # Why DIRECTORIES, never the store file itself
 ///
-/// An inbound `Welcome` also needs `<keystore parent>/keypackages.enc`
-/// (read, then re-save after the joined key package is consumed). That
-/// grant is NOT installed here, because neither shape of it works:
-///
-/// - As a rule in this same `read_write` list, Landlock REJECTS it at
-///   ruleset-build time — the list's right-set is directory-shaped
-///   (`ReadDir|MakeDir|MakeReg|RemoveDir|RemoveFile|Refer`) and those
-///   rights are invalid on a regular file; under this crate's
-///   `CompatLevel::HardRequirement` that is a hard error, i.e. `serve`
-///   and `tui` would refuse to start at all.
-/// - With a file-shaped right-set (`ReadFile|WriteFile|Truncate`) the
-///   ruleset does build and the file is readable/writable in place, but
-///   `keypackage::save_keypackage_storage` persists via a SIBLING temp
-///   file (`keypackages.enc.tmp`) plus a rename — both operations on
-///   the keystore DIRECTORY, which stays denied (granting it would also
-///   expose the two-party keystore file, explicitly out of bounds).
-///
-/// Consequence, until that is resolved: inbound Commits and application
-/// messages work fully (they only touch `groups/`), while an inbound
-/// `Welcome` fails with a clean per-session `GroupError` (denied read)
-/// instead of joining. Nothing is corrupted — `process_welcome` fails
-/// before writing anything.
+/// Both writers persist through a same-directory temp file plus an
+/// atomic rename (`persistence::save_group_state`,
+/// `keypackage::save_keypackage_storage`), so the create/rename rights
+/// are needed on the PARENT. A regular file cannot stand in for that:
+/// this exception list's right-set is directory-shaped
+/// (`ReadDir|MakeDir|MakeReg|RemoveDir|RemoveFile|Refer`), which
+/// Landlock rejects on a non-directory — and under this crate's
+/// `CompatLevel::HardRequirement` that is a hard error, i.e. `serve`
+/// and `tui` would refuse to start (pinned by
+/// `tests/sandbox_landlock.rs::file_exception_path_fails_closed`).
+/// Granting the keystore directory instead would re-expose the
+/// two-party keystore file, so the key-package store lives in its own
+/// grantable directory (`umbra-group`'s `KEYPACKAGES_FILE_NAME` is
+/// `keypackages/store.enc` for exactly this reason).
 ///
 /// # Errors
 ///
 /// Returns [`CliError::Keystore`] if the keystore path has no parent
-/// and [`CliError::Io`] if the directory cannot be created.
-pub fn prepare_group_paths(keystore: &Path) -> Result<PathBuf, CliError> {
-    let groups_dir = keystore_parent(keystore)?.join(GROUPS_DIR_NAME);
+/// and [`CliError::Io`] if either directory cannot be created.
+pub fn prepare_group_paths(keystore: &Path) -> Result<(PathBuf, PathBuf), CliError> {
+    let base = keystore_parent(keystore)?;
+    let groups_dir = base.join(GROUPS_DIR_NAME);
+    let keypackages_dir = base.join(KEYPACKAGES_DIR_NAME);
     use std::os::unix::fs::DirBuilderExt as _;
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&groups_dir)
-        .map_err(CliError::Io)?;
-    Ok(groups_dir)
+    for dir in [&groups_dir, &keypackages_dir] {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+            .map_err(CliError::Io)?;
+    }
+    Ok((groups_dir, keypackages_dir))
 }
 
 /// Emits one NDJSON event line for the `serve` stream (the only requested
@@ -304,7 +313,7 @@ pub fn run(
         std::sync::Arc::new(crate::keystore::load_seeds(keystore, passphrase)?);
 
     // 2b. Group state material (TODO B.2): the inbound group branch
-    //     decrypts `groups/*.enc` and `keypackages.enc` AFTER the
+    //     decrypts `groups/*.enc` and `keypackages/store.enc` AFTER the
     //     sandbox, so the passphrase is captured here, pre-sandbox.
     let group = std::sync::Arc::new(group_context_from_keystore(keystore, passphrase)?);
 
@@ -320,16 +329,20 @@ pub fn run(
             .create(&tor_base)
             .map_err(CliError::Io)?;
     }
-    let groups_dir = prepare_group_paths(keystore)?;
+    let (groups_dir, keypackages_dir) = prepare_group_paths(keystore)?;
 
-    // 4. Sandbox: zero-FS + [tor tree, groups/, /etc read] exceptions,
-    //    then the Seccomp allowlist (LAST; network family included for
-    //    Arti). The grant stays NARROW on purpose: the keystore file
-    //    itself is deliberately NOT reachable, so the "identity seeds
-    //    are never re-read post-sandbox" invariant above still holds.
-    //    `keypackages.enc` is NOT granted — see `prepare_group_paths`.
+    // 4. Sandbox: zero-FS + [tor tree, groups/, keypackages/, /etc
+    //    read] exceptions, then the Seccomp allowlist (LAST; network
+    //    family included for Arti). The grant stays NARROW on purpose:
+    //    the keystore file itself is deliberately NOT reachable, so the
+    //    "identity seeds are never re-read post-sandbox" invariant above
+    //    still holds.
     crate::sandbox::restrict_filesystem_with_exceptions(
-        &[tor_base.as_path(), groups_dir.as_path()],
+        &[
+            tor_base.as_path(),
+            groups_dir.as_path(),
+            keypackages_dir.as_path(),
+        ],
         // /etc is READ-ONLY: public resolver/config content only.
         &[std::path::Path::new("/etc")],
     )?;
@@ -653,6 +666,17 @@ mod tests {
         }
     }
 
+    /// Sorted names of the direct entries of `dir` (used to prove that
+    /// a code path wrote nothing new at the keystore-directory level).
+    fn entries(dir: &Path) -> TestResult2<Vec<String>> {
+        let mut names = Vec::new();
+        for entry in std::fs::read_dir(dir)? {
+            names.push(entry?.file_name().to_string_lossy().to_string());
+        }
+        names.sort();
+        Ok(names)
+    }
+
     /// Fresh temp dir, unique per test/label pair.
     fn temp_dir(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -918,28 +942,84 @@ mod tests {
         );
     }
 
-    /// The sandbox exception directory is created if missing (Landlock's
-    /// `PathFd` requires it to exist) and reported back for the
-    /// `read_write` list — and NOTHING else is created next to it (an
-    /// empty `keypackages.enc` would make every later `umbra group
-    /// export-keypackage` fail: `export_keypackage` branches on that
-    /// file's mere existence and then rejects it as malformed).
+    /// Both sandbox exception DIRECTORIES are created if missing
+    /// (Landlock's `PathFd` requires them to exist) and reported back
+    /// for the `read_write` list — and no store FILE is pre-created:
+    /// `export_keypackage` branches on the store file's mere existence
+    /// and would reject an empty one as malformed, so an empty
+    /// directory (not an empty file) is the correct "nothing here yet"
+    /// state.
     #[test]
-    fn prepare_group_paths_creates_the_groups_dir_only() -> TestResult {
+    fn prepare_group_paths_creates_both_directories() -> TestResult {
         let dir = temp_dir("sandbox-paths");
         std::fs::create_dir_all(&dir)?;
         let keystore = dir.join("keystore.enc");
 
-        let groups_dir = prepare_group_paths(&keystore)?;
+        let (groups_dir, keypackages_dir) = prepare_group_paths(&keystore)?;
         assert_eq!(groups_dir, dir.join("groups"));
+        assert_eq!(keypackages_dir, dir.join("keypackages"));
         assert!(groups_dir.is_dir());
-        assert!(!dir.join("keypackages.enc").exists());
+        assert!(keypackages_dir.is_dir());
+        assert!(!keypackages_dir.join("store.enc").exists());
 
-        // Idempotent on an existing directory.
+        // Idempotent on existing directories.
         let again = prepare_group_paths(&keystore)?;
-        assert_eq!(again, groups_dir);
+        assert_eq!(again, (groups_dir, keypackages_dir));
 
         std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    /// The Welcome path writes ONLY inside the two granted directories:
+    /// after a real inbound Welcome, the keystore directory contains
+    /// nothing new beside `groups/` and `keypackages/` (plus the group
+    /// identity this peer already wrote when it exported its key
+    /// package, pre-sandbox). This is what makes the sandbox exception
+    /// set sufficient rather than merely plausible.
+    #[tokio::test]
+    async fn welcome_path_writes_only_inside_the_granted_directories() -> TestResult {
+        let alice_dir = temp_dir("granted-alice");
+        let bob_dir = temp_dir("granted-bob");
+        std::fs::create_dir_all(&alice_dir)?;
+        std::fs::create_dir_all(&bob_dir)?;
+        let (alice_pw, bob_pw) = (b"alice-pw".as_slice(), b"bob-pw".as_slice());
+
+        let welcome = welcome_frame_for_bob(&alice_dir, alice_pw, &bob_dir, bob_pw).await?;
+        // Exactly what `serve`/`tui` do before sandboxing: both granted
+        // directories exist up front (`process_welcome`'s own
+        // `create_dir_all(groups/)` is then a no-op, which is what makes
+        // it survive the sandbox — pinned separately in
+        // `tests/sandbox_landlock.rs`).
+        let _prepared = prepare_group_paths(&bob_dir.join("keystore.enc"))?;
+        // Snapshot AFTER that and after the pre-sandbox
+        // `export_keypackage`, so only what the Welcome itself writes is
+        // compared.
+        let before = entries(&bob_dir)?;
+
+        let mut connection = {
+            let mut bytes = vec![umbra_net::messenger::CONNECTION_TYPE_GROUP];
+            bytes.extend_from_slice(&welcome);
+            connection_carrying(bytes)
+        };
+        let group = GroupInboundContext {
+            keystore_dir: bob_dir.clone(),
+            passphrase: zeroize::Zeroizing::new(bob_pw.to_vec()),
+        };
+        let InboundEvent::GroupJoined { .. } = route_connection(&mut connection, &group).await?
+        else {
+            return Err("expected a GroupJoined event".into());
+        };
+
+        assert_eq!(
+            entries(&bob_dir)?,
+            before,
+            "the Welcome path must not create anything directly in the keystore \
+             directory: everything it writes belongs under groups/ or keypackages/"
+        );
+        assert!(bob_dir.join("keypackages").join("store.enc").is_file());
+
+        std::fs::remove_dir_all(&alice_dir)?;
+        std::fs::remove_dir_all(&bob_dir)?;
         Ok(())
     }
 }

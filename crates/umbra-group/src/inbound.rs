@@ -157,12 +157,14 @@ use crate::persistence::{self, GroupRoster, RestoredProvider};
 /// pattern, not something to fix here).
 const GROUPS_DIR_NAME: &str = "groups";
 
-/// File name of the persisted key-package storage snapshot (mirrors
-/// `keypackage.rs`'s own private `KEYPACKAGES_FILE_NAME` — that
-/// constant is private to its module, so it is duplicated here rather
-/// than imported, consistent with this crate's existing file-name-
-/// constant duplication pattern).
-const KEYPACKAGES_FILE_NAME: &str = "keypackages.enc";
+/// Path (relative to the keystore directory) of the persisted
+/// key-package storage snapshot (mirrors `keypackage.rs`'s own private
+/// `KEYPACKAGES_FILE_NAME` — that constant is private to its module, so
+/// it is duplicated here rather than imported, consistent with this
+/// crate's existing file-name-constant duplication pattern; it lives in
+/// its own subdirectory so the sandboxed client can be granted that
+/// directory, see `keypackage.rs`'s copy for the full reasoning).
+const KEYPACKAGES_FILE_NAME: &str = "keypackages/store.enc";
 
 /// The outcome of successfully processing one inbound group frame.
 #[derive(Debug, Clone, PartialEq, Eq)]

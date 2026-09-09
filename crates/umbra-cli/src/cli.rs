@@ -410,7 +410,7 @@ pub fn run() -> Result<(), CliError> {
             }
             // Group state material (TODO B.2): the shared accept loop's
             // group branch decrypts `groups/*.enc` and
-            // `keypackages.enc` AFTER the sandbox, so the passphrase is
+            // `keypackages/store.enc` AFTER the sandbox, so the passphrase is
             // captured here — pre-sandbox, mirroring `serve::run`.
             let group = std::sync::Arc::new(crate::serve::group_context_from_keystore(
                 &keystore,
@@ -425,15 +425,19 @@ pub fn run() -> Result<(), CliError> {
                     .create(&tor_base)
                     .map_err(CliError::Io)?;
             }
-            // The group-state directory must EXIST before the ruleset
-            // pins it (Landlock's PathFd opens each path at rule-add
-            // time), same as `tor_base` above. The grant stays narrow:
-            // the keystore FILE itself is still unreachable
-            // post-sandbox, and `keypackages.enc` is NOT granted (see
+            // The two group-state directories must EXIST before the
+            // ruleset pins them (Landlock's PathFd opens each path at
+            // rule-add time), same as `tor_base` above. The grant stays
+            // narrow: directories only, and the keystore FILE itself is
+            // still unreachable post-sandbox (see
             // `serve::prepare_group_paths`).
-            let groups_dir = crate::serve::prepare_group_paths(&keystore)?;
+            let (groups_dir, keypackages_dir) = crate::serve::prepare_group_paths(&keystore)?;
             crate::sandbox::restrict_filesystem_with_exceptions(
-                &[tor_base.as_path(), groups_dir.as_path()],
+                &[
+                    tor_base.as_path(),
+                    groups_dir.as_path(),
+                    keypackages_dir.as_path(),
+                ],
                 &[std::path::Path::new("/etc")],
             )?;
             crate::sandbox::restrict_syscalls()?;
