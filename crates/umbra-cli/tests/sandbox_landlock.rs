@@ -129,3 +129,83 @@ fn nonexistent_exception_path_fails_closed() -> Result<(), Box<dyn std::error::E
     let _ = std::fs::remove_dir_all(&base);
     Ok(())
 }
+
+/// The exact exception set `serve`/`tui` install (Tor tree + the group
+/// state directory, plus read-only `/etc`) actually enforces, and the
+/// group directory supports `save_group_state`'s temp-file + rename
+/// persistence — the hermetic inbound-loop tests run WITHOUT a sandbox,
+/// so only this test can catch a grant that the kernel rejects.
+#[test]
+fn serve_exception_set_installs_and_grants_group_state()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let base = temp_dir("serve-set");
+    let tor_base = base.join("tor");
+    let groups = base.join("groups");
+    let keystore = base.join("keystore.enc");
+    std::fs::create_dir_all(&tor_base)?;
+    std::fs::create_dir_all(&groups)?;
+    std::fs::write(&keystore, b"keystore")?;
+
+    let handle = std::thread::spawn(
+        move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            restrict_filesystem_with_exceptions(
+                &[tor_base.as_path(), groups.as_path()],
+                &[std::path::Path::new("/etc")],
+            )?;
+            // `save_group_state` writes a same-dir temp file and renames
+            // it over the target; both must be permitted.
+            let tmp = groups.join("cell.enc.tmp");
+            std::fs::write(&tmp, b"state")?;
+            std::fs::rename(&tmp, groups.join("cell.enc"))?;
+            assert_eq!(std::fs::read(groups.join("cell.enc"))?, b"state".to_vec());
+            // The keystore file itself stays unreachable (the invariant
+            // the narrow grant exists to preserve).
+            assert!(
+                std::fs::read(&keystore).is_err(),
+                "the keystore file must stay denied post-sandbox"
+            );
+            Ok(())
+        },
+    );
+    let result = match handle.join() {
+        Ok(result) => result,
+        Err(_panic) => return Err("worker thread panicked".into()),
+    };
+    result?;
+
+    let _ = std::fs::remove_dir_all(&base);
+    Ok(())
+}
+
+/// A REGULAR FILE cannot be an exception path here: the grant's
+/// right-set is directory-shaped (`ReadDir`/`MakeReg`/`Refer`/…), which
+/// Landlock rejects on a non-directory, and `CompatLevel::
+/// HardRequirement` turns that into a hard failure — i.e. `serve`/`tui`
+/// would refuse to start. This is why `keypackages.enc` is NOT in the
+/// exception set (see `serve::prepare_group_paths`); this test pins the
+/// constraint so it is not rediscovered in production.
+#[test]
+fn file_exception_path_fails_closed() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let base = temp_dir("file-exception");
+    std::fs::create_dir_all(&base)?;
+    let file = base.join("keypackages.enc");
+    std::fs::write(&file, b"stored")?;
+
+    let handle = std::thread::spawn(
+        move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            assert!(
+                restrict_filesystem_with_exceptions(&[file.as_path()], &[]).is_err(),
+                "a regular-file exception path must fail the ruleset closed"
+            );
+            Ok(())
+        },
+    );
+    let result = match handle.join() {
+        Ok(result) => result,
+        Err(_panic) => return Err("worker thread panicked".into()),
+    };
+    result?;
+
+    let _ = std::fs::remove_dir_all(&base);
+    Ok(())
+}
