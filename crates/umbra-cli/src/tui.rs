@@ -22,12 +22,12 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use umbra_crypto::keys::IdentitySeeds;
-use umbra_net::TransportError;
 use umbra_net::tor::{PtProxyConfig, TorTransport};
 use zeroize::Zeroizing;
 
 use crate::cli::CliError;
 use crate::pairing::PeerIdentity;
+use crate::serve::InboundEvent;
 
 use thiserror::Error;
 
@@ -58,6 +58,10 @@ pub struct TuiConfig {
     /// Optional unmanaged PT proxy configuration (ADR-030); `None` is a
     /// direct guard connection.
     pub pt: Option<PtProxyConfig>,
+    /// Keystore material the shared accept loop's group branch needs
+    /// (TODO B.2): the keystore directory plus its passphrase, loaded
+    /// pre-sandbox by the caller and Arc-shared with the accept loop.
+    pub group: Arc<crate::serve::GroupInboundContext>,
 }
 
 /// Events flowing from the background runtime to the UI loop.
@@ -66,8 +70,25 @@ enum UiEvent {
     Bootstrapping,
     /// Descriptor published: the (redacted) own address.
     Ready(String),
-    /// Inbound plaintext from a peer session.
+    /// Inbound plaintext from a two-party peer session.
     Inbound(Vec<u8>),
+    /// Inbound plaintext from a group application message (TODO B.2).
+    GroupText {
+        /// Local name of the group it was decrypted for.
+        group_name: String,
+        /// The decrypted plaintext.
+        plaintext: Vec<u8>,
+    },
+    /// This device joined a group via an inbound `Welcome`.
+    GroupJoined {
+        /// Local name minted for the newly joined group.
+        group_name: String,
+    },
+    /// A known group's membership advanced via an inbound Commit.
+    GroupUpdated {
+        /// Local name of the updated group.
+        group_name: String,
+    },
     /// A peer session failed (contained to its connection).
     SessionError(String),
     /// An outbound send was accepted by Arti's stream (NOT an
@@ -186,6 +207,19 @@ impl UiState {
             UiEvent::Inbound(plaintext) => {
                 let text = String::from_utf8_lossy(&plaintext).to_string();
                 self.push(format!("◀ {text}"));
+            }
+            UiEvent::GroupText {
+                group_name,
+                plaintext,
+            } => {
+                let text = String::from_utf8_lossy(&plaintext).to_string();
+                self.push(format!("◀ [{group_name}] {text}"));
+            }
+            UiEvent::GroupJoined { group_name } => {
+                self.push(format!("[✓] joined group {group_name}"));
+            }
+            UiEvent::GroupUpdated { group_name } => {
+                self.push(format!("[✓] group {group_name}: membership updated"));
             }
             UiEvent::SessionError(error) => {
                 self.push(format!("[!] inbound session failed: {error}"));
@@ -400,10 +434,11 @@ async fn background(
     let _ = event_tx.send(UiEvent::Ready(address));
 
     let (session_tx, mut session_rx) =
-        tokio::sync::mpsc::channel::<Result<Vec<u8>, TransportError>>(SESSION_QUEUE);
+        tokio::sync::mpsc::channel::<Result<InboundEvent, String>>(SESSION_QUEUE);
     tokio::spawn(crate::serve::inbound_loop(
         transport.clone(),
         cfg.seeds.clone(),
+        cfg.group.clone(),
         session_tx,
         SESSION_QUEUE,
     ));
@@ -447,12 +482,25 @@ async fn background(
                 None => break,
             },
             result = session_rx.recv() => match result {
-                Some(Ok(plaintext)) => {
+                Some(Ok(InboundEvent::Text(plaintext))) => {
                     let plaintext = Zeroizing::new(plaintext);
                     let _ = event_tx.send(UiEvent::Inbound(plaintext.to_vec()));
                 }
+                Some(Ok(InboundEvent::GroupText { group_name, plaintext })) => {
+                    let plaintext = Zeroizing::new(plaintext);
+                    let _ = event_tx.send(UiEvent::GroupText {
+                        group_name,
+                        plaintext: plaintext.to_vec(),
+                    });
+                }
+                Some(Ok(InboundEvent::GroupJoined { group_name })) => {
+                    let _ = event_tx.send(UiEvent::GroupJoined { group_name });
+                }
+                Some(Ok(InboundEvent::GroupUpdated { group_name })) => {
+                    let _ = event_tx.send(UiEvent::GroupUpdated { group_name });
+                }
                 Some(Err(error)) => {
-                    let _ = event_tx.send(UiEvent::SessionError(error.to_string()));
+                    let _ = event_tx.send(UiEvent::SessionError(error));
                 }
                 None => {
                     let _ = event_tx.send(UiEvent::Fatal(

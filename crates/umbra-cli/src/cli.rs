@@ -408,6 +408,14 @@ pub fn run() -> Result<(), CliError> {
                 let identity = crate::peers::load_peer(&peers_dir, &name)?;
                 peers.push((name, identity));
             }
+            // Group state material (TODO B.2): the shared accept loop's
+            // group branch decrypts `groups/*.enc` and
+            // `keypackages.enc` AFTER the sandbox, so the passphrase is
+            // captured here — pre-sandbox, mirroring `serve::run`.
+            let group = std::sync::Arc::new(crate::serve::group_context_from_keystore(
+                &keystore,
+                &passphrase,
+            )?);
             let tor_base = crate::serve::tor_base_from_keystore(&keystore)?;
             {
                 use std::os::unix::fs::DirBuilderExt as _;
@@ -417,8 +425,17 @@ pub fn run() -> Result<(), CliError> {
                     .create(&tor_base)
                     .map_err(CliError::Io)?;
             }
+            // Both group paths must EXIST before the ruleset pins them
+            // (Landlock's PathFd opens each path at rule-add time), same
+            // as `tor_base` above. The grant stays narrow: the keystore
+            // FILE itself is still unreachable post-sandbox.
+            let (groups_dir, keypackages_path) = crate::serve::prepare_group_paths(&keystore)?;
             crate::sandbox::restrict_filesystem_with_exceptions(
-                &[tor_base.as_path()],
+                &[
+                    tor_base.as_path(),
+                    groups_dir.as_path(),
+                    keypackages_path.as_path(),
+                ],
                 &[std::path::Path::new("/etc")],
             )?;
             crate::sandbox::restrict_syscalls()?;
@@ -428,6 +445,7 @@ pub fn run() -> Result<(), CliError> {
                 tor_base,
                 nickname: nickname.clone(),
                 pt: pt_config,
+                group,
             })
         }
         #[cfg(feature = "tor")]
