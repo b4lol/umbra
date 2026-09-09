@@ -282,23 +282,33 @@ pub fn save_group_state_with_params(
     file.extend_from_slice(&salt);
     file.extend_from_slice(&envelope);
 
-    // 0600 on Unix: create with restrictive permissions up front.
+    // Overwrite-in-place via a same-dir temp file + atomic rename —
+    // NOT `create_new(true)` (this was Task 4's original choice, sound
+    // for its own `create_group`-only call site at the time, but a real
+    // gap surfaced by Task 8's `add_member`: a group's state file is
+    // legitimately re-saved on every membership change/commit, not
+    // written once and left alone — mirrors `keypackage.rs`'s own
+    // `save_keypackage_storage`, which already established this exact
+    // crash-safe pattern for the same "legitimately re-saved" reason).
+    let tmp_path = path.with_extension("enc.tmp");
     #[cfg(unix)]
     let options = {
         use std::os::unix::fs::OpenOptionsExt as _;
         let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true).mode(0o600);
+        options.write(true).create(true).truncate(true).mode(0o600);
         options
     };
     #[cfg(not(unix))]
     let options = {
         let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
+        options.write(true).create(true).truncate(true);
         options
     };
-    let mut handle = options.open(path)?;
+    let mut handle = options.open(&tmp_path)?;
     handle.write_all(&file)?;
     handle.sync_all()?;
+    drop(handle);
+    fs::rename(&tmp_path, path)?;
     Ok(())
 }
 

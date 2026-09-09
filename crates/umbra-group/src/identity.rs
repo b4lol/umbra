@@ -34,6 +34,20 @@ use crate::error::GroupError;
 /// Magic header: `"UMGI"` + version byte (Umbra Group Identity, v1).
 const MAGIC: [u8; 5] = *b"UMGI\x01";
 
+/// File name of the single, per-peer group-identity keystore, shared
+/// across every group a peer creates or joins (spec Decision 6 — this
+/// identity is per-peer, not per-group).
+///
+/// Extracted here (rather than duplicated a third time) now that
+/// `add.rs` is a third call site needing this exact path fragment —
+/// `create.rs` and `keypackage.rs` each still carry their own private,
+/// textually-identical `GROUP_IDENTITY_FILE_NAME` const from before this
+/// extraction (Task 5/6, reviewed and merged); they were not touched by
+/// this task to keep its diff scoped to membership addition, but new
+/// callers should prefer this one, and a future pass could migrate the
+/// other two without behavior change (same literal value either way).
+pub(crate) const GROUP_IDENTITY_FILE_NAME: &str = "group-identity.enc";
+
 /// A group-identity Ed25519 signing keypair, plus its MLS `BasicCredential`.
 pub struct GroupIdentity {
     /// The Ed25519 signing keypair used for MLS leaf-node signatures.

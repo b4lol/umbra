@@ -64,4 +64,36 @@ pub enum GroupError {
     /// `NewGroupError<StorageError>`).
     #[error(transparent)]
     KeyPackageCreation(#[from] openmls::prelude::KeyPackageNewError),
+
+    /// Base64 decoding of an externally-supplied blob (e.g. an
+    /// `Add`-command `KeyPackage` argument) failed. Distinct from
+    /// [`Self::Codec`] (TLS-codec parsing of already-decoded bytes) —
+    /// this covers the base64 *text* layer.
+    #[error(transparent)]
+    Base64(#[from] base64::DecodeError),
+
+    /// `KeyPackageIn::validate` rejected an externally-supplied,
+    /// untrusted key package (bad leaf-node signature, unsupported
+    /// protocol version, or identical init/encryption keys — see
+    /// `add.rs` for why this validation step is mandatory rather than
+    /// using the unchecked `KeyPackageIn -> KeyPackage` conversion).
+    #[error(transparent)]
+    KeyPackageValidation(#[from] openmls::prelude::KeyPackageVerifyError),
+
+    /// `MlsGroup::add_members` itself failed while committing a new
+    /// member's addition (e.g. a pending commit already exists, or a
+    /// storage error surfaced through OpenMLS's own commit-creation
+    /// path).
+    #[error(transparent)]
+    MembershipAddition(
+        #[from] openmls::prelude::AddMembersError<openmls_memory_storage::MemoryStorageError>,
+    ),
+
+    /// `MlsGroup::merge_pending_commit` itself failed while merging a
+    /// just-created Add commit into the group's own state.
+    #[error(transparent)]
+    CommitMerge(
+        #[from]
+        openmls::prelude::MergePendingCommitError<openmls_memory_storage::MemoryStorageError>,
+    ),
 }
