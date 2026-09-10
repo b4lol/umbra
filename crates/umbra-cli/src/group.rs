@@ -122,6 +122,16 @@ pub enum GroupCommand {
 ///
 /// Returns [`CliError`] on failure.
 pub fn dispatch(command: &GroupCommand, cli: &Cli) -> Result<(), CliError> {
+    // The operator must see group mode's privacy/trust profile BEFORE
+    // anything else happens (always-on safety notice, stderr — see
+    // `crate::privacy`'s module docs). Group mode carries the
+    // partial-PQ ciphersuite caveat (ADR-033) and the B.2.1 roster
+    // gap — this notice is the load-bearing warning.
+    crate::privacy::print_notice(
+        &crate::privacy::profile(crate::privacy::TransportKind::Group),
+        "umbra",
+    );
+
     match command {
         GroupCommand::Create { name } => create(cli, name),
         GroupCommand::ExportKeypackage => export_keypackage(cli),

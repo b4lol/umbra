@@ -17,7 +17,9 @@
 
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use umbra_crypto::keys::IdentityBundle;
-use umbra_net::messenger::{ConnectionType, peek_connection_type, receive_message, send_text_stream};
+use umbra_net::messenger::{
+    peek_connection_type, receive_message, send_text_stream, ConnectionType,
+};
 use umbra_net::{PeerPqxdhKeys, TransportError};
 
 use crate::addr::NymPeerAddr;
