@@ -68,12 +68,18 @@ cargo test --test property_tests
 
 # 8. Hermetic Unit Tests
 cargo test --all-targets
+
+# 9. Secret Scanning (no credential may ever reach the repository;
+#    gitleaks binary — CI pins the exact release, see
+#    .github/workflows/secret-scan.yml)
+gitleaks git . --redact --exit-code 1
 ```
 
 Or, briefly:
 ```bash
 just check
 just scan
+just secrets
 just mutants
 ```
 

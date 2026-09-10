@@ -16,6 +16,12 @@ scan:
     cargo deny check
     cargo audit
 
+# 9. Secret scanning (CONTRIBUTING.md step 9): no credential may ever reach
+# the repository. Requires the gitleaks binary; CI pins the exact release
+# and verifies its SHA256 (.github/workflows/secret-scan.yml).
+secrets:
+    gitleaks git . --redact --exit-code 1
+
 # 7. Logic and mutation testing.
 mutants:
     cargo mutants --no-shuffle
