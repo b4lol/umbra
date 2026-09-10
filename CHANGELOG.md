@@ -24,6 +24,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   previously told a `umbra-nym` user they were on the Sandbox TESTNET.
   `umbra group` subcommands print the group profile, which carries the
   partial-PQ ciphersuite caveat (ADR-033) and the B.2.1 roster gap.
+- **Secret-scanning CI** (`.github/workflows/secret-scan.yml`,
+  `.gitleaks.toml`, SECURITY.md "Secret Leakage Prevention and
+  Response"): every push and pull request is scanned with gitleaks
+  over the FULL git history (pinned, SHA256-verified binary; findings
+  redacted from logs), plus a weekly scheduled re-scan as detection
+  rules evolve; a failing scan blocks the merge. GitHub-side secret
+  scanning with push protection complements it at push time. Local
+  pre-push equivalent: `just secrets` (CONTRIBUTING.md verification
+  chain step 9).
 
 ### Changed
 - **Repository layout**: topical documentation (ARCHITECTURE,

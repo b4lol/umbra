@@ -1,0 +1,18 @@
+title = "Umbra gitleaks configuration"
+
+# Extends the default gitleaks ruleset (AWS/GitHub/Telegram tokens, private
+# keys, generic API keys, …) unchanged.
+[extend]
+useDefault = true
+
+# Cargo lockfiles are generated artifacts: they contain only crate names and
+# registry checksums, never secrets. The default `generic-api-key` rule
+# false-positives on the 64-hex checksum following a crate named
+# `libcrux-secrets` (verified 2026-09-10: the only three findings in the
+# repository's entire history, all of them this pattern). Anything ELSE in a
+# lockfile would still be caught by the non-path-allowlisted rules.
+[allowlist]
+description = "Generated lockfiles: checksums are not secrets"
+paths = [
+    '''(^|/)Cargo\.lock$''',
+]
