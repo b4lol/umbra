@@ -92,7 +92,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   up to whole milliseconds.
 - Hermetic tests: PT config validation + builder tests (umbra-net),
   CLI/bridges-file plumbing tests (umbra-cli).
-<<<<<<< HEAD
 - **`pt-proxy` live interop + fuzz harness** (roadmap step 6, the last
   open `pt-proxy` roadmap item): `components/pt-proxy/tests/interop/` drives
   `umbra-pt-proxy` through the actual, unmodified upstream lyrebird
