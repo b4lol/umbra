@@ -83,6 +83,14 @@ pub fn run(
     nickname: &str,
     pt_args: &crate::pt::PtArgs,
 ) -> Result<(), CliError> {
+    // The operator must see the transport's privacy/trust profile
+    // BEFORE anything else happens (always-on safety notice, stderr —
+    // see `crate::privacy`'s module docs).
+    crate::privacy::print_notice(
+        &crate::privacy::profile(crate::privacy::TransportKind::Tor),
+        "umbra",
+    );
+
     // 1. Memory hardening BEFORE secrets exist (ADR-025 ordering).
     umbra_hardware::process::harden_process()?;
 

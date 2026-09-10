@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Added
+- **Per-transport privacy/trust profiles, shown at runtime**
+  (`crates/umbra-cli/src/privacy.rs`, THREAT_MODEL.md "Per-transport
+  privacy/trust profiles"): every transport (Tor, Wi-Fi Direct mesh,
+  Nym Sandbox/mainnet) carries a fixed three-dimension rating —
+  anonymity/metadata protection, content confidentiality, network
+  maturity — on a closed STRONG / MODERATE / LIMITED / NONE scale,
+  deliberately not collapsed into a single score so the operator sees
+  the nuances and makes the transport decision themselves. Printed on
+  stderr by every send/serve command before sandboxing (always on, no
+  opt-out; stdout's NDJSON contract untouched) and shown persistently
+  in the TUI footer. Closes a real information gap: nothing at runtime
+  previously told a `umbra-nym` user they were on the Sandbox TESTNET.
+
 ### Changed
 - **Repository layout**: topical documentation (ARCHITECTURE,
   CRYPTOGRAPHY, DECISIONS, TODO, THREAT_MODEL, …) now lives under
