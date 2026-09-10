@@ -48,7 +48,17 @@ yanked = "warn"
 # - RUSTSEC-2023-0071 (rsa): Marvin timing attack in the `rsa` crate, pulled
 #   by Tor's protocol-mandated RSA-1024 identity keys; Umbra never uses RSA
 #   for its own cryptography. Revisit on every dependabot arti bump.
-ignore = ["RUSTSEC-2024-0436", "RUSTSEC-2023-0071"]
+# Transitive through `umbra-group` (TODO B.2, ADR-033):
+# - RUSTSEC-2026-0173 (proc-macro-error2): unmaintained (an unmaintained
+#   advisory, not a vulnerability), pulled by Cryspen's `hax-lib-macros`
+#   ← `libcrux-intrinsics` ← the libcrux family ← `openmls_libcrux_crypto`
+#   ← `openmls` — the formally-verified pure-Rust crypto provider ADR-033
+#   selected. No replacement exists upstream (`hax-lib-macros` 0.3.7 is the
+#   latest semver-compatible release and still depends on it; dropping it
+#   would mean dropping libcrux/OpenMLS entirely). Build-time proc-macro
+#   only, never present in Umbra's runtime code paths. Revisit on every
+#   openmls/libcrux bump.
+ignore = ["RUSTSEC-2024-0436", "RUSTSEC-2023-0071", "RUSTSEC-2026-0173"]
 
 [sources]
 unknown-registry = "warn"
