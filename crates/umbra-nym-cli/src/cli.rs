@@ -211,6 +211,20 @@ pub fn run_send_nym(
     mainnet: bool,
     input: &mut impl std::io::Read,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // The operator must see the transport's privacy/trust profile
+    // BEFORE anything else happens (always-on safety notice, stderr —
+    // see `umbra_cli::privacy`'s module docs). For Nym this is
+    // load-bearing: nothing else at runtime tells the user whether
+    // they are on the Sandbox TESTNET or mainnet.
+    umbra_cli::privacy::print_notice(
+        &umbra_cli::privacy::profile(if mainnet {
+            umbra_cli::privacy::TransportKind::NymMainnet
+        } else {
+            umbra_cli::privacy::TransportKind::NymSandbox
+        }),
+        "umbra-nym",
+    );
+
     // Memory hardening FIRST (ADR-025): mirrors `tor_send.rs`/`mesh_send.rs`/
     // `serve.rs`, all of which call this as their literal first step, before
     // any secret (here: the peer's PQXDH keys, the plaintext) touches RAM.
@@ -314,6 +328,20 @@ pub fn run_serve_nym(
     nym_config: &Path,
     mainnet: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // The operator must see the transport's privacy/trust profile
+    // BEFORE anything else happens (always-on safety notice, stderr —
+    // see `umbra_cli::privacy`'s module docs). For Nym this is
+    // load-bearing: nothing else at runtime tells the user whether
+    // they are on the Sandbox TESTNET or mainnet.
+    umbra_cli::privacy::print_notice(
+        &umbra_cli::privacy::profile(if mainnet {
+            umbra_cli::privacy::TransportKind::NymMainnet
+        } else {
+            umbra_cli::privacy::TransportKind::NymSandbox
+        }),
+        "umbra-nym",
+    );
+
     // Memory hardening FIRST (ADR-025), before the passphrase or the
     // identity seeds it decrypts ever touch RAM — mirrors `serve.rs::run`'s
     // own ordering exactly (its step 1, before the keystore is even opened).
