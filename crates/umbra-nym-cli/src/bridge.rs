@@ -17,7 +17,9 @@
 
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use umbra_crypto::keys::IdentityBundle;
-use umbra_net::messenger::{receive_message, send_text_stream};
+use umbra_net::messenger::{
+    peek_connection_type, receive_message, send_text_stream, ConnectionType,
+};
 use umbra_net::{PeerPqxdhKeys, TransportError};
 
 use crate::addr::NymPeerAddr;
@@ -33,6 +35,8 @@ use crate::transport::NymTransport;
 /// forever on a reader that isn't polling yet. So this must cover the
 /// true worst case for a single call, not just a typical one:
 ///
+/// - Connection-type marker: 1 B (TODO B.2 groundwork,
+///   `umbra_net::messenger::send_text_stream`'s leading byte).
 /// - Handshake blob: `HANDSHAKE_BLOB_LEN` = 1152 B (`umbra_crypto::pqxdh`).
 /// - Data frames: a plaintext at the messenger's own reassembly ceiling
 ///   (`MAX_TEXT_MESSAGE` = 64 KiB = 65,536 B, `umbra_net::messenger`) is
@@ -48,7 +52,7 @@ use crate::transport::NymTransport;
 ///   64 * 1024 = 65,536 B.
 /// - Termination frame: one more `PACKET_LEN` = 1024 B.
 ///
-/// Worst case total: 1152 + 72,704 + 65,536 + 1024 = 140,416 B. 256 KiB
+/// Worst case total: 1 + 1152 + 72,704 + 65,536 + 1024 = 140,417 B. 256 KiB
 /// (262,144 B) is used here for round-number headroom (~1.87x) above
 /// that figure.
 const DUPLEX_BUF: usize = 256 * 1024;
@@ -123,6 +127,17 @@ pub async fn receive_via_nym<T: NymTransport>(
         .shutdown()
         .await
         .map_err(|e| TransportError::Nym(format!("duplex shutdown: {e}")))?;
+    // Leading connection-type marker (TODO B.2 groundwork): no group
+    // path exists yet, so anything other than a PQXDH handshake is
+    // treated as a receive failure.
+    match peek_connection_type(&mut reader).await? {
+        ConnectionType::PqxdhHandshake => {}
+        ConnectionType::GroupFrame => {
+            return Err(TransportError::Nym(
+                "group frames are not yet handled by the Nym bridge".into(),
+            ));
+        }
+    }
     receive_message(identity, &mut reader).await
 }
 

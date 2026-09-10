@@ -22,23 +22,30 @@ path = "src/main.rs"
 default = []
 # `serve`: inbound Tor onion-service flow (production call site for the
 # persistent-identity + sandbox-exception mechanisms, TODO A.2).
-tor = ["umbra-net/tor", "dep:tokio"]
+tor = ["umbra-net/tor"]
 # Wi-Fi Direct off-grid mesh transport (TODO B.1): the Landlock/Seccomp
 # sandbox exceptions for the mesh control sockets used by the mesh
-# `send`/`serve` flows, plus `dep:tokio` for their own Tokio runtime
-# (mirroring the `tor` feature above). No new CLI-crate dependencies
-# beyond that (landlock is already a hard dependency of this crate).
-mesh = ["umbra-net/mesh", "dep:tokio"]
+# `send`/`serve` flows (mirroring the `tor` feature above). No new
+# CLI-crate dependencies beyond that (landlock is already a hard
+# dependency of this crate).
+mesh = ["umbra-net/mesh"]
 
 [dependencies]
 umbra-crypto.workspace = true
 umbra-protocol.workspace = true
 umbra-net.workspace = true
-# Optional under the `tor` feature (`serve`) and the `mesh` feature
-# (`send --mesh`/`serve-mesh`); a non-optional tokio would defeat the
-# feature gate.
-tokio = { workspace = true, optional = true }
+# Was optional (gated behind `tor`/`mesh`) until Task 8 (`umbra group
+# add`): `umbra_group::add::add_member` is `pub async fn` (delivers
+# Commit/Welcome frames over a caller-supplied async `connect` closure,
+# per Task 7's design), so driving it from this crate's synchronous CLI
+# dispatch needs a Tokio runtime UNCONDITIONALLY, not only under
+# `tor`/`mesh` — `umbra-group` and `umbra-net` already pull tokio into
+# the build graph as a hard dependency regardless of these features, so
+# this stops gating an already-unconditionally-present crate rather
+# than adding a new one.
+tokio.workspace = true
 umbra-hardware = { path = "../umbra-hardware" }
+umbra-group = { path = "../umbra-group" }
 zeroize.workspace = true
 base64 = "0.23.1"
 clap.workspace = true

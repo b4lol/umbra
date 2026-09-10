@@ -61,7 +61,12 @@ jobs:
   sanitizers:
     name: ASan (nightly)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 30 min proved borderline once the PQ-MLS group increment added the
+    # OpenMLS/libcrux tree to the ASan-instrumented build + full test run
+    # (two consecutive cancellations at exactly 30m on the group branch;
+    # the same suite passes in ~28-29 min when the cache is warm). 60
+    # gives real headroom for dependency growth.
+    timeout-minutes: 60
     env:
       # Override the pinned rust-toolchain.toml (stable) — `-Zsanitizer`
       # requires the nightly compiler.

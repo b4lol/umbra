@@ -4,7 +4,9 @@
 use tokio::io::{AsyncWriteExt, DuplexStream};
 use umbra_crypto::keys::IdentityBundle;
 use umbra_net::OnionAddr;
-use umbra_net::messenger::{PeerPqxdhKeys, receive_message, send_message};
+use umbra_net::messenger::{
+    ConnectionType, PeerPqxdhKeys, peek_connection_type, receive_message, send_message,
+};
 
 /// Fixture: Alice's keystore identity (responder) + Bob's pairing payload
 /// (initiator ephemeral session).
@@ -31,10 +33,36 @@ async fn messenger_e2e_text() -> Result<(), Box<dyn std::error::Error>> {
         let mut stream: DuplexStream = alice_side;
         send_message(&mut stream, &peer_keys, b"meet at midnight").await
     });
+    let connection_type = peek_connection_type(&mut bob_side).await?;
+    assert_eq!(connection_type, ConnectionType::PqxdhHandshake);
     let received = receive_message(alice_identity, &mut bob_side).await?;
 
     assert_eq!(received, b"meet at midnight".to_vec());
     sender.await??;
+    Ok(())
+}
+
+/// `send_text_stream` writes a leading connection-type marker byte
+/// ahead of the handshake blob (TODO B.2 groundwork): the caller must
+/// consume it via `peek_connection_type` before `receive_message`.
+#[tokio::test]
+async fn send_text_stream_prepends_pqxdh_handshake_marker()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use umbra_net::messenger::send_text_stream;
+
+    let (alice_identity, peer_keys) = fixtures()
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
+    let (mut a_side, mut b_side) = tokio::io::duplex(4096);
+
+    let send_task =
+        tokio::spawn(async move { send_text_stream(&mut a_side, &peer_keys, b"hello").await });
+
+    let connection_type = peek_connection_type(&mut b_side).await?;
+    assert_eq!(connection_type, ConnectionType::PqxdhHandshake);
+
+    let plaintext = receive_message(alice_identity, &mut b_side).await?;
+    assert_eq!(plaintext, b"hello");
+    send_task.await??;
     Ok(())
 }
 
@@ -482,7 +510,10 @@ async fn send_text_stream_multi_chunk_roundtrip()
     let sender =
         tokio::spawn(async move { send_text_stream(&mut a_side, &peer_keys, &plaintext).await });
 
-    // Manual receiver: complete the handshake, collect Text payloads.
+    // Manual receiver: consume the leading connection-type marker byte,
+    // then complete the handshake and collect Text payloads.
+    let connection_type = peek_connection_type(&mut b_side).await?;
+    assert_eq!(connection_type, ConnectionType::PqxdhHandshake);
     let mut blob = vec![0u8; umbra_crypto::pqxdh::HANDSHAKE_BLOB_LEN];
     b_side.read_exact(&mut blob).await?;
     let mut session = Session::with_identity(bob_bundle)
@@ -534,6 +565,11 @@ async fn receive_reassembly_bounded() -> Result<(), Box<dyn std::error::Error + 
     let (mut a_side, mut b_side) = tokio::io::duplex(4096);
     let sender =
         tokio::spawn(async move { send_text_stream(&mut a_side, &peer_keys, &oversized).await });
+
+    // Consume the leading connection-type marker byte first, exactly as
+    // a real caller (e.g. `serve.rs`) does, before `receive_message`.
+    let connection_type = peek_connection_type(&mut b_side).await?;
+    assert_eq!(connection_type, ConnectionType::PqxdhHandshake);
 
     // `peer_keys` holds only PUBLIC bytes; `bob_bundle` still owns the
     // secrets, so it can be consumed by the receiver directly.

@@ -101,9 +101,17 @@ async fn self_send_once(base: &Path) -> Result<(), Box<dyn std::error::Error + S
     peer.onion = Some(address.clone());
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(SESSION_QUEUE);
+    // The group branch is never exercised by this two-party self-send;
+    // the context just has to exist (its keystore dir is this run's own
+    // throwaway storage root).
+    let group = Arc::new(umbra_cli::serve::GroupInboundContext {
+        keystore_dir: base.to_path_buf(),
+        passphrase: zeroize::Zeroizing::new(b"live-test".to_vec()),
+    });
     let loop_handle = tokio::spawn(umbra_cli::serve::inbound_loop(
         transport.clone(),
         seeds,
+        group,
         tx,
         SESSION_QUEUE,
     ));
@@ -114,11 +122,14 @@ async fn self_send_once(base: &Path) -> Result<(), Box<dyn std::error::Error + S
         .map_err(|e| format!("send_over: {e}"))?;
     println!("sent {frames} frames / {bytes} bytes; waiting for inbound delivery…");
 
-    let delivered = tokio::time::timeout(DELIVERY_WAIT, rx.recv())
+    let event = tokio::time::timeout(DELIVERY_WAIT, rx.recv())
         .await
         .map_err(|_elapsed| "inbound delivery timed out")?
         .ok_or("inbound channel closed before delivery")?
         .map_err(|e| format!("inbound session: {e}"))?;
+    let umbra_cli::serve::InboundEvent::Text(delivered) = event else {
+        return Err("expected a two-party text event from the self-send".into());
+    };
     loop_handle.abort();
     assert_eq!(delivered, message, "the self-send must round-trip intact");
     println!("round-trip OK ({} bytes)", delivered.len());

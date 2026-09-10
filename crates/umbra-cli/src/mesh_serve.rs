@@ -89,6 +89,20 @@ pub fn run(wpa_ctrl_path: &std::path::Path, identity: IdentityBundle) -> Result<
         let mut stream = listen(&ctrl)
             .await
             .map_err(|e| CliError::Io(std::io::Error::other(format!("mesh transport: {e}"))))?;
+        // Leading connection-type marker (TODO B.2 groundwork): no group
+        // path exists yet, so anything other than a PQXDH handshake is
+        // treated as a session failure.
+        match umbra_net::messenger::peek_connection_type(&mut stream)
+            .await
+            .map_err(|e| CliError::Io(std::io::Error::other(format!("mesh transport: {e}"))))?
+        {
+            umbra_net::messenger::ConnectionType::PqxdhHandshake => {}
+            umbra_net::messenger::ConnectionType::GroupFrame => {
+                return Err(CliError::Io(std::io::Error::other(
+                    "mesh transport: group frames are not yet handled",
+                )));
+            }
+        }
         let plaintext = umbra_net::messenger::receive_message(identity, &mut stream)
             .await
             .map_err(|e| CliError::Io(std::io::Error::other(format!("mesh transport: {e}"))))?;

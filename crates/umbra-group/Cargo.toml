@@ -1,0 +1,33 @@
+[package]
+name = "umbra-group"
+description = "PQ-MLS (OpenMLS + X-Wing hybrid ciphersuite) group encryption for Umbra 'cells' (TODO B.2)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+umbra-crypto.workspace = true
+umbra-net.workspace = true
+base64 = "0.23.1"
+openmls.workspace = true
+openmls_basic_credential.workspace = true
+openmls_memory_storage.workspace = true
+openmls_libcrux_crypto.workspace = true
+zeroize.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# `delivery.rs`'s public API (the `connect` closure's `Box<dyn
+# tokio::io::AsyncWrite + Unpin + Send>` return type, and
+# `deliver_to_members`/`deliver_to_one`'s own `AsyncWriteExt::write_all`
+# calls) uses `tokio::io` types directly outside of `#[cfg(test)]`, so
+# this must be a regular dependency (not `[dev-dependencies]`) — mirrors
+# `umbra-net`'s own `tokio.workspace = true` under `[dependencies]`,
+# which is in the same position for the same reason (`messenger.rs`'s
+# `peek_connection_type` takes `impl tokio::io::AsyncRead`).
+tokio.workspace = true

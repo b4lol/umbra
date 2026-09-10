@@ -6,12 +6,17 @@
 //! in hermetic tests):
 //!
 //! - **Initiator**: `Session::new` (fresh ephemeral identity per send —
-//!   deniability) → `begin_handshake(peer public keys)` → write the
-//!   handshake blob (1152 B) → `complete_handshake` → `send_data` →
-//!   write packet → `send_termination` → write packet.
-//! - **Responder**: `accept_handshake(blob)` on the keystore identity →
-//!   `complete_handshake_incoming` → read packets until Terminate,
-//!   yielding the text payload.
+//!   deniability) → `begin_handshake(peer public keys)` → write a
+//!   leading connection-type marker byte (TODO B.2 groundwork, see
+//!   [`ConnectionType`]) → write the handshake blob (1152 B) →
+//!   `complete_handshake` → `send_data` → write packet →
+//!   `send_termination` → write packet.
+//! - **Responder**: the caller consumes the leading marker byte via
+//!   [`peek_connection_type`] BEFORE calling `receive_message` — this
+//!   module's `receive_message` itself starts by reading the handshake
+//!   blob and has no knowledge of the marker. `accept_handshake(blob)`
+//!   on the keystore identity → `complete_handshake_incoming` → read
+//!   packets until Terminate, yielding the text payload.
 //!
 //! The responder's long-term keys come from the keystore; the initiator
 //! holds the peer's public keys from the pairing payload.
@@ -55,6 +60,58 @@ pub const COVER_PROBABILITY: f64 = 0.5;
 /// Hard cap on cover frames per send burst (doctrine: bounded memory
 /// and bounded amplification, whatever the draw sequence).
 pub const MAX_COVER_PER_SEND: u64 = 64;
+
+/// Leading marker byte for a two-party PQXDH handshake (TODO B.2
+/// groundwork: distinguishes it from a group ciphertext frame on the
+/// same accept loop).
+const CONNECTION_TYPE_PQXDH: u8 = 0x00;
+
+/// Leading marker byte for a group (PQ-MLS) ciphertext frame (TODO
+/// B.2). `pub` so `umbra-group`'s fan-out delivery code can write the
+/// same byte value as this module's single source of truth, rather
+/// than duplicating the constant.
+pub const CONNECTION_TYPE_GROUP: u8 = 0x01;
+
+/// The first byte of every inbound connection, distinguishing a
+/// two-party PQXDH handshake from a group ciphertext frame (TODO B.2).
+/// [`receive_message`] itself is unchanged and assumes this byte has
+/// ALREADY been consumed by the caller via [`peek_connection_type`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionType {
+    /// A PQXDH handshake blob follows — the existing two-party path.
+    PqxdhHandshake,
+    /// A group (PQ-MLS) ciphertext frame follows.
+    GroupFrame,
+}
+
+/// Reads exactly one byte from `stream` and classifies the connection.
+/// Callers (e.g. `serve.rs`'s inbound loop) must call this BEFORE
+/// [`receive_message`] and branch on the result; `receive_message`'s
+/// own body starts reading the handshake blob immediately and does
+/// NOT expect this byte to still be on the wire.
+///
+/// # Errors
+///
+/// Returns [`TransportError::Io`] on I/O failure and
+/// [`TransportError::Unsupported`] for an unrecognized marker byte.
+pub async fn peek_connection_type<S>(stream: &mut S) -> Result<ConnectionType, TransportError>
+where
+    S: tokio::io::AsyncRead + Unpin + Send,
+{
+    use tokio::io::AsyncReadExt;
+    let mut marker = [0u8; 1];
+    stream
+        .read_exact(&mut marker)
+        .await
+        .map_err(TransportError::Io)?;
+    match marker[0] {
+        CONNECTION_TYPE_PQXDH => Ok(ConnectionType::PqxdhHandshake),
+        CONNECTION_TYPE_GROUP => Ok(ConnectionType::GroupFrame),
+        _other => Err(TransportError::Unsupported(
+            "unrecognized connection-type marker byte",
+        )),
+    }
+}
 
 /// Draws the number of cover frames that follow one data frame (0, 1
 /// or 2 — a stochastically bounded amplification, hard-capped by
@@ -158,6 +215,13 @@ where
         &peer.dsa_public,
         &peer.kem,
     )?;
+    // Leading connection-type marker (TODO B.2 groundwork): every
+    // caller of `receive_message` must consume this via
+    // `peek_connection_type` first — see the module docs.
+    stream
+        .write_all(&[CONNECTION_TYPE_PQXDH])
+        .await
+        .map_err(TransportError::Io)?;
     stream.write_all(&blob).await.map_err(TransportError::Io)?;
     let mut session = handshake_session.complete_handshake()?;
 

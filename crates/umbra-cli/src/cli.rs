@@ -194,6 +194,10 @@ pub enum Command {
         #[arg(long)]
         wpa_ctrl: std::path::PathBuf,
     },
+    /// PQ-MLS group ("cell") management (TODO B.2): create, and (in
+    /// later tasks of the same plan) invite/join/send/receive.
+    #[command(subcommand)]
+    Group(crate::group::GroupCommand),
 }
 
 /// Top-level CLI error.
@@ -226,6 +230,10 @@ pub enum CliError {
     /// Crypto-layer failure inside the keystore path.
     #[error(transparent)]
     Crypto(#[from] umbra_crypto::CryptoError),
+
+    /// PQ-MLS group ("cell") layer failure (TODO B.2).
+    #[error(transparent)]
+    Group(#[from] umbra_group::GroupError),
 
     /// TUI failure.
     #[cfg(feature = "tor")]
@@ -400,6 +408,14 @@ pub fn run() -> Result<(), CliError> {
                 let identity = crate::peers::load_peer(&peers_dir, &name)?;
                 peers.push((name, identity));
             }
+            // Group state material (TODO B.2): the shared accept loop's
+            // group branch decrypts `groups/*.enc` and
+            // `keypackages/store.enc` AFTER the sandbox, so the passphrase is
+            // captured here — pre-sandbox, mirroring `serve::run`.
+            let group = std::sync::Arc::new(crate::serve::group_context_from_keystore(
+                &keystore,
+                &passphrase,
+            )?);
             let tor_base = crate::serve::tor_base_from_keystore(&keystore)?;
             {
                 use std::os::unix::fs::DirBuilderExt as _;
@@ -409,8 +425,19 @@ pub fn run() -> Result<(), CliError> {
                     .create(&tor_base)
                     .map_err(CliError::Io)?;
             }
+            // The two group-state directories must EXIST before the
+            // ruleset pins them (Landlock's PathFd opens each path at
+            // rule-add time), same as `tor_base` above. The grant stays
+            // narrow: directories only, and the keystore FILE itself is
+            // still unreachable post-sandbox (see
+            // `serve::prepare_group_paths`).
+            let (groups_dir, keypackages_dir) = crate::serve::prepare_group_paths(&keystore)?;
             crate::sandbox::restrict_filesystem_with_exceptions(
-                &[tor_base.as_path()],
+                &[
+                    tor_base.as_path(),
+                    groups_dir.as_path(),
+                    keypackages_dir.as_path(),
+                ],
                 &[std::path::Path::new("/etc")],
             )?;
             crate::sandbox::restrict_syscalls()?;
@@ -420,6 +447,7 @@ pub fn run() -> Result<(), CliError> {
                 tor_base,
                 nickname: nickname.clone(),
                 pt: pt_config,
+                group,
             })
         }
         #[cfg(feature = "tor")]
@@ -485,6 +513,7 @@ pub fn run() -> Result<(), CliError> {
             mesh_addr.as_deref(),
             nym_addr.as_deref(),
         ),
+        Command::Group(ref sub) => crate::group::dispatch(sub, &cli),
     }
 }
 
@@ -512,7 +541,7 @@ fn pipeline_mode(json: bool) -> crate::pipeline::OutputMode {
 /// Reads the keystore passphrase from `--passphrase-file` (FIRST LINE —
 /// a trailing newline from editors or `echo` is not part of the
 /// passphrase).
-fn load_passphrase(cli: &Cli) -> Result<zeroize::Zeroizing<Vec<u8>>, CliError> {
+pub(crate) fn load_passphrase(cli: &Cli) -> Result<zeroize::Zeroizing<Vec<u8>>, CliError> {
     let path = cli.passphrase_file.as_ref().ok_or_else(|| {
         CliError::Keystore(
             "missing --passphrase-file (interactive prompts land with the TUI)".into(),
