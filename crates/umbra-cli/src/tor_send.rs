@@ -69,6 +69,14 @@ pub fn run(
     input: &mut impl Read,
     pt_args: &crate::pt::PtArgs,
 ) -> Result<(), CliError> {
+    // The operator must see the transport's privacy/trust profile
+    // BEFORE anything else happens (always-on safety notice, stderr —
+    // see `crate::privacy`'s module docs).
+    crate::privacy::print_notice(
+        &crate::privacy::profile(crate::privacy::TransportKind::Tor),
+        "umbra",
+    );
+
     // Memory hardening FIRST: the bounded stdin read below lands in
     // locked, non-dumpable RAM (mlockall/MCL_FUTURE).
     umbra_hardware::process::harden_process()?;

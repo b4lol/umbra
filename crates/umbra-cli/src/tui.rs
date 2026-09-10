@@ -143,12 +143,22 @@ struct UiState {
 impl UiState {
     /// Builds the state for `peers` (sorted by the caller).
     fn new(peers: Vec<(String, PeerIdentity)>) -> Self {
-        Self {
+        let mut state = Self {
             lines: Vec::new(),
             compose: String::new(),
             peer_index: 0,
             peers,
-        }
+        };
+        // The privacy/trust profile of the TUI's (Tor-only) transport
+        // is the first thing the operator sees (always-on notice —
+        // see `crate::privacy`'s module docs).
+        state.push(format!(
+            "[i] {}",
+            crate::privacy::render_brief(&crate::privacy::profile(
+                crate::privacy::TransportKind::Tor
+            ))
+        ));
+        state
     }
 
     /// Appends one log line, dropping the oldest beyond the bound.
@@ -318,7 +328,7 @@ fn event_loop(
             .draw(|frame| {
                 let area = frame.area();
                 let visible = usize::from(area.height);
-                let skip = state.lines.len().saturating_sub(visible.saturating_sub(2));
+                let skip = state.lines.len().saturating_sub(visible.saturating_sub(3));
                 let mut lines: Vec<Line> = Vec::new();
                 for line in state.lines.iter().skip(skip) {
                     lines.push(Line::from(line.clone()));
@@ -333,6 +343,12 @@ fn event_loop(
                 lines.push(Line::from(
                     "type text · Enter send · Tab peer · Backspace edit · Esc quit",
                 ));
+                // Persistent privacy/trust line: the TUI is Tor-only,
+                // so the profile is static (always-on notice — see
+                // `crate::privacy`'s module docs).
+                lines.push(Line::from(crate::privacy::render_brief(
+                    &crate::privacy::profile(crate::privacy::TransportKind::Tor),
+                )));
                 frame.render_widget(Paragraph::new(lines), area);
             })
             .map_err(|_e| CliError::Tui(TuiError::Terminal))?;

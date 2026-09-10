@@ -39,6 +39,15 @@ fn emit_event(event: &str, data: Option<&[u8]>) -> Result<(), CliError> {
 ///
 /// Returns [`CliError`] on sandbox, negotiation, or session failure.
 pub fn run(wpa_ctrl_path: &std::path::Path, identity: IdentityBundle) -> Result<(), CliError> {
+    // The operator must see the transport's privacy/trust profile
+    // BEFORE anything else happens (always-on safety notice, stderr —
+    // see `crate::privacy`'s module docs). Mesh's anonymity level is
+    // NONE — this notice is the load-bearing warning for this mode.
+    crate::privacy::print_notice(
+        &crate::privacy::profile(crate::privacy::TransportKind::Mesh),
+        "umbra",
+    );
+
     let own_ctrl_dir = wpa_ctrl_path
         .parent()
         .map_or_else(

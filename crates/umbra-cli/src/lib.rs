@@ -16,6 +16,7 @@ pub mod notify;
 pub mod pairing;
 pub mod peers;
 pub mod pipeline;
+pub mod privacy;
 #[cfg(feature = "tor")]
 pub mod pt;
 pub mod sandbox;

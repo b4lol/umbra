@@ -52,6 +52,15 @@ pub fn run(
     peer: &PeerIdentity,
     input: &mut impl Read,
 ) -> Result<(), CliError> {
+    // The operator must see the transport's privacy/trust profile
+    // BEFORE anything else happens (always-on safety notice, stderr —
+    // see `crate::privacy`'s module docs). Mesh's anonymity level is
+    // NONE — this notice is the load-bearing warning for this mode.
+    crate::privacy::print_notice(
+        &crate::privacy::profile(crate::privacy::TransportKind::Mesh),
+        "umbra",
+    );
+
     // Memory hardening FIRST: the bounded stdin read below lands in
     // locked, non-dumpable RAM (mlockall/MCL_FUTURE) — mirrors
     // tor_send::run.
