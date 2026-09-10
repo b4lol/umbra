@@ -522,14 +522,8 @@ mod tests {
         )?;
 
         assert!(
-            load_group_state_with_params(
-                &path,
-                b"wrong",
-                TEST_M_KIB,
-                TEST_T_COST,
-                TEST_P_COST
-            )
-            .is_err()
+            load_group_state_with_params(&path, b"wrong", TEST_M_KIB, TEST_T_COST, TEST_P_COST)
+                .is_err()
         );
 
         std::fs::remove_dir_all(&dir)?;

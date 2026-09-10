@@ -340,9 +340,8 @@ fn process_welcome(
         .use_ratchet_tree_extension(true)
         .build();
 
-    let staged_welcome =
-        StagedWelcome::new_from_welcome(&provider, &join_config, welcome, None)
-            .map_err(GroupError::WelcomeProcessing)?;
+    let staged_welcome = StagedWelcome::new_from_welcome(&provider, &join_config, welcome, None)
+        .map_err(GroupError::WelcomeProcessing)?;
     let group = staged_welcome
         .into_group(&provider)
         .map_err(GroupError::WelcomeProcessing)?;
@@ -449,8 +448,7 @@ fn resolve_existing_group(
             continue;
         };
 
-        let Ok((group, roster, provider)) = persistence::load_group_state(&path, passphrase)
-        else {
+        let Ok((group, roster, provider)) = persistence::load_group_state(&path, passphrase) else {
             // Not this peer's own group state (wrong passphrase, a
             // stray/corrupt file, etc.) — skip rather than abort the
             // whole scan (module docs).
@@ -490,7 +488,10 @@ mod tests {
 
     /// The future type returned by [`single_use_stream`]'s closure.
     type ConnectFuture = Pin<
-        Box<dyn std::future::Future<Output = Result<Box<dyn AsyncWrite + Unpin + Send>, GroupError>> + Send>,
+        Box<
+            dyn std::future::Future<Output = Result<Box<dyn AsyncWrite + Unpin + Send>, GroupError>>
+                + Send,
+        >,
     >;
 
     const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519;
@@ -516,7 +517,9 @@ mod tests {
     /// `deliver_to_one` triggers by dropping its stream handle once its
     /// write completes) — exactly `process_inbound_group_frame`'s own
     /// `frame_bytes` argument (marker already stripped).
-    async fn capture_frame<S>(mut stream: S) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>
+    async fn capture_frame<S>(
+        mut stream: S,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>
     where
         S: tokio::io::AsyncRead + Unpin,
     {
@@ -642,7 +645,10 @@ mod tests {
             persistence::load_group_state(&bob_group_path, bob_pw)?;
         assert_eq!(bob_group.group_id().to_vec(), group_id);
         assert_eq!(bob_group.members().count(), 2);
-        assert!(bob_roster.members.is_empty(), "a freshly joined group has no roster yet");
+        assert!(
+            bob_roster.members.is_empty(),
+            "a freshly joined group has no roster yet"
+        );
 
         std::fs::remove_dir_all(&alice_dir)?;
         std::fs::remove_dir_all(&bob_dir)?;
@@ -699,7 +705,10 @@ mod tests {
         // this test chose — the next step's resolution must find it
         // purely by group id.
         let joined_event = process_inbound_group_frame(&bob_dir, bob_pw, &welcome_frame)?;
-        let InboundGroupEvent::Joined { group_name: bob_group_name } = joined_event else {
+        let InboundGroupEvent::Joined {
+            group_name: bob_group_name,
+        } = joined_event
+        else {
             return Err("expected Joined event".into());
         };
 
@@ -798,7 +807,10 @@ mod tests {
         let welcome_frame =
             add_member_and_capture_frame(&alice_dir, alice_pw, "cell", "bob", &bob_kp).await?;
         let joined_event = process_inbound_group_frame(&bob_dir, bob_pw, &welcome_frame)?;
-        let InboundGroupEvent::Joined { group_name: bob_group_name } = joined_event else {
+        let InboundGroupEvent::Joined {
+            group_name: bob_group_name,
+        } = joined_event
+        else {
             return Err("expected Joined event".into());
         };
 
@@ -894,7 +906,10 @@ mod tests {
         frame.extend_from_slice(&mls_bytes);
 
         let result = process_inbound_group_frame(&dir, b"pw", &frame);
-        assert!(matches!(result, Err(GroupError::Malformed(_))), "got {result:?}");
+        assert!(
+            matches!(result, Err(GroupError::Malformed(_))),
+            "got {result:?}"
+        );
         Ok(())
     }
 }

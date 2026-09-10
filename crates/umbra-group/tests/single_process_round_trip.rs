@@ -8,8 +8,8 @@
 //! `.superpowers/sdd/2026-09-07-pq-mls-group-encryption/task-1-report.md`
 //! for the full verification notes), not merely assumed from docs.rs.
 
-use openmls::prelude::*;
 use openmls::prelude::tls_codec::{Deserialize as _, Serialize as _};
+use openmls::prelude::*;
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_libcrux_crypto::Provider;
 

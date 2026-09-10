@@ -131,7 +131,9 @@ where
     Fut: std::future::Future<Output = Result<Box<dyn AsyncWrite + Unpin + Send>, GroupError>>,
 {
     let address = peer_lookup(peer_name).ok_or_else(|| {
-        GroupError::Malformed(format!("no transport address on file for peer {peer_name:?}"))
+        GroupError::Malformed(format!(
+            "no transport address on file for peer {peer_name:?}"
+        ))
     })?;
 
     let mut stream = connect(&address).await?;
@@ -142,9 +144,8 @@ where
 
     let group_id_len = u32::try_from(group_id.len())
         .map_err(|_| GroupError::Malformed("group id too large to frame (> u32::MAX)".into()))?;
-    let mls_len = u32::try_from(mls_bytes.len()).map_err(|_| {
-        GroupError::Malformed("MLS message too large to frame (> u32::MAX)".into())
-    })?;
+    let mls_len = u32::try_from(mls_bytes.len())
+        .map_err(|_| GroupError::Malformed("MLS message too large to frame (> u32::MAX)".into()))?;
 
     stream.write_all(&[CONNECTION_TYPE_GROUP]).await?;
     stream.write_all(&group_id_len.to_be_bytes()).await?;
@@ -161,7 +162,9 @@ mod tests {
     use std::pin::Pin;
     use std::sync::Arc;
 
-    use openmls::prelude::{Ciphersuite, CredentialWithKey, KeyPackage, LeafNodeIndex, MlsMessageOut};
+    use openmls::prelude::{
+        Ciphersuite, CredentialWithKey, KeyPackage, LeafNodeIndex, MlsMessageOut,
+    };
     use openmls_libcrux_crypto::CryptoProvider;
     use openmls_memory_storage::MemoryStorage;
     use tokio::io::{AsyncReadExt, DuplexStream};
@@ -182,11 +185,14 @@ mod tests {
     /// The future type returned by [`single_use_stream`]'s closure.
     /// Factored into its own alias purely to satisfy
     /// `clippy::type_complexity` (denied via `-D warnings`).
-    type ConnectFuture =
-        Pin<Box<dyn std::future::Future<Output = Result<Box<dyn AsyncWrite + Unpin + Send>, GroupError>> + Send>>;
+    type ConnectFuture = Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Box<dyn AsyncWrite + Unpin + Send>, GroupError>>
+                + Send,
+        >,
+    >;
 
-    const CIPHERSUITE: Ciphersuite =
-        Ciphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519;
+    const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519;
 
     /// Builds a real `MlsMessageOut` (a `KeyPackage`'s own MLS message
     /// wrapper is the simplest way to get one without standing up a
@@ -267,11 +273,7 @@ mod tests {
     /// frame from `stream` and asserts it matches `group_id`/`mls_bytes`.
     /// Shared by both tests below so the wire-format assertions live in
     /// one place.
-    async fn assert_frame_matches<S>(
-        mut stream: S,
-        group_id: &[u8],
-        mls_bytes: &[u8],
-    ) -> TestResult
+    async fn assert_frame_matches<S>(mut stream: S, group_id: &[u8], mls_bytes: &[u8]) -> TestResult
     where
         S: tokio::io::AsyncRead + Unpin,
     {
@@ -314,7 +316,10 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         let alice_result = find_result(&results, "alice")?;
-        assert!(alice_result.is_ok(), "delivery should succeed: {alice_result:?}");
+        assert!(
+            alice_result.is_ok(),
+            "delivery should succeed: {alice_result:?}"
+        );
 
         assert_frame_matches(observer_side, &group_id, &expected_mls_bytes).await
     }
@@ -347,7 +352,10 @@ mod tests {
 
         let alice_result = find_result(&results, "alice")?;
         let bob_result = find_result(&results, "bob")?;
-        assert!(alice_result.is_ok(), "alice should succeed: {alice_result:?}");
+        assert!(
+            alice_result.is_ok(),
+            "alice should succeed: {alice_result:?}"
+        );
         assert!(bob_result.is_err(), "bob should fail (no address on file)");
 
         // alice's frame still made it onto her duplex end.

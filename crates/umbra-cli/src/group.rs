@@ -271,7 +271,9 @@ async fn add_member_over_tor(
             match address {
                 PeerTransportAddress::Onion(addr) => {
                     let onion_addr = umbra_net::addr::OnionAddr::parse(&addr).map_err(|error| {
-                        umbra_group::GroupError::Malformed(format!("invalid onion address: {error}"))
+                        umbra_group::GroupError::Malformed(format!(
+                            "invalid onion address: {error}"
+                        ))
                     })?;
                     let stream = transport.open_stream(&onion_addr).await.map_err(|error| {
                         umbra_group::GroupError::Malformed(format!("tor connect failed: {error}"))
@@ -457,7 +459,9 @@ async fn send_group_message_over_tor(
             match address {
                 PeerTransportAddress::Onion(addr) => {
                     let onion_addr = umbra_net::addr::OnionAddr::parse(&addr).map_err(|error| {
-                        umbra_group::GroupError::Malformed(format!("invalid onion address: {error}"))
+                        umbra_group::GroupError::Malformed(format!(
+                            "invalid onion address: {error}"
+                        ))
                     })?;
                     let stream = transport.open_stream(&onion_addr).await.map_err(|error| {
                         umbra_group::GroupError::Malformed(format!("tor connect failed: {error}"))
@@ -476,8 +480,15 @@ async fn send_group_message_over_tor(
         }
     };
 
-    umbra_group::send::send_group_message(keystore_dir, passphrase, group, plaintext, peer_lookup, connect)
-        .await?;
+    umbra_group::send::send_group_message(
+        keystore_dir,
+        passphrase,
+        group,
+        plaintext,
+        peer_lookup,
+        connect,
+    )
+    .await?;
     Ok(())
 }
 
@@ -515,7 +526,14 @@ async fn send_group_message_over_tor(
         async move { Err(umbra_group::GroupError::Malformed(message.into())) }
     };
 
-    umbra_group::send::send_group_message(keystore_dir, passphrase, group, plaintext, peer_lookup, connect)
-        .await?;
+    umbra_group::send::send_group_message(
+        keystore_dir,
+        passphrase,
+        group,
+        plaintext,
+        peer_lookup,
+        connect,
+    )
+    .await?;
     Ok(())
 }

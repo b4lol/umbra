@@ -53,8 +53,12 @@ type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
 /// The future type returned by [`addressed_streams`]'s closure —
 /// factored into its own alias to satisfy `clippy::type_complexity`.
-type ConnectFuture =
-    Pin<Box<dyn std::future::Future<Output = Result<Box<dyn AsyncWrite + Unpin + Send>, GroupError>> + Send>>;
+type ConnectFuture = Pin<
+    Box<
+        dyn std::future::Future<Output = Result<Box<dyn AsyncWrite + Unpin + Send>, GroupError>>
+            + Send,
+    >,
+>;
 
 /// Sets up a fresh temp dir under `std::env::temp_dir()`, unique per
 /// test/label pair (mirrors this crate's existing test style, e.g.
@@ -109,7 +113,9 @@ fn addressed_streams(
 /// `frame_bytes` argument (marker already stripped). Mirrors
 /// `add.rs`/`send.rs`/`inbound.rs`'s own `capture_frame`/
 /// `assert_frame_matches` test helpers.
-async fn capture_frame<S>(mut stream: S) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>
+async fn capture_frame<S>(
+    mut stream: S,
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>
 where
     S: tokio::io::AsyncRead + Unpin,
 {
@@ -163,16 +169,35 @@ async fn three_party_create_add_send_receive_flow() -> TestResult {
         let connect = addressed_streams(vec![(bob_addr.clone(), bob_member_side)]);
         let peer_lookup = {
             let bob_addr = bob_addr.clone();
-            move |name: &str| if name == "bob" { Some(bob_addr.clone()) } else { None }
+            move |name: &str| {
+                if name == "bob" {
+                    Some(bob_addr.clone())
+                } else {
+                    None
+                }
+            }
         };
 
-        add::add_member(&alice_dir, alice_pw, "cell", "bob", &bob_kp, peer_lookup, connect).await?;
+        add::add_member(
+            &alice_dir,
+            alice_pw,
+            "cell",
+            "bob",
+            &bob_kp,
+            peer_lookup,
+            connect,
+        )
+        .await?;
 
         capture_frame(bob_observer_side).await?
     };
 
-    let bob_joined = inbound::process_inbound_group_frame(&bob_dir, bob_pw, &welcome_frame_for_bob)?;
-    let InboundGroupEvent::Joined { group_name: bob_group_name } = bob_joined else {
+    let bob_joined =
+        inbound::process_inbound_group_frame(&bob_dir, bob_pw, &welcome_frame_for_bob)?;
+    let InboundGroupEvent::Joined {
+        group_name: bob_group_name,
+    } = bob_joined
+    else {
         return Err("expected Joined event for bob".into());
     };
 
@@ -224,14 +249,20 @@ async fn three_party_create_add_send_receive_flow() -> TestResult {
          existing member, not just a Welcome to a new one)"
     );
 
-    let carol_joined = inbound::process_inbound_group_frame(&carol_dir, carol_pw, &welcome_frame_for_carol)?;
-    let InboundGroupEvent::Joined { group_name: carol_group_name } = carol_joined else {
+    let carol_joined =
+        inbound::process_inbound_group_frame(&carol_dir, carol_pw, &welcome_frame_for_carol)?;
+    let InboundGroupEvent::Joined {
+        group_name: carol_group_name,
+    } = carol_joined
+    else {
         return Err("expected Joined event for carol".into());
     };
 
     // Both Bob and Carol now independently see a 3-member group.
     let bob_group_path = bob_dir.join("groups").join(format!("{bob_group_name}.enc"));
-    let carol_group_path = carol_dir.join("groups").join(format!("{carol_group_name}.enc"));
+    let carol_group_path = carol_dir
+        .join("groups")
+        .join(format!("{carol_group_name}.enc"));
     let (bob_group_after_adds, _bob_roster, _bob_provider) =
         persistence::load_group_state(&bob_group_path, bob_pw)?;
     assert_eq!(bob_group_after_adds.members().count(), 3);
@@ -259,8 +290,15 @@ async fn three_party_create_add_send_receive_flow() -> TestResult {
             }
         };
 
-        send::send_group_message(&alice_dir, alice_pw, "cell", &cell_plaintext, peer_lookup, connect)
-            .await?;
+        send::send_group_message(
+            &alice_dir,
+            alice_pw,
+            "cell",
+            &cell_plaintext,
+            peer_lookup,
+            connect,
+        )
+        .await?;
 
         (
             capture_frame(bob_observer_side).await?,
@@ -276,7 +314,8 @@ async fn three_party_create_add_send_receive_flow() -> TestResult {
             plaintext: cell_plaintext.clone(),
         }
     );
-    let carol_received = inbound::process_inbound_group_frame(&carol_dir, carol_pw, &carol_app_frame)?;
+    let carol_received =
+        inbound::process_inbound_group_frame(&carol_dir, carol_pw, &carol_app_frame)?;
     assert_eq!(
         carol_received,
         InboundGroupEvent::ApplicationMessage {
@@ -303,7 +342,10 @@ async fn three_party_create_add_send_receive_flow() -> TestResult {
         &bob_group_path,
         bob_pw,
         &GroupRoster {
-            members: vec![("alice".to_string(), alice_leaf), ("carol".to_string(), carol_leaf)],
+            members: vec![
+                ("alice".to_string(), alice_leaf),
+                ("carol".to_string(), carol_leaf),
+            ],
         },
     )?;
 
@@ -341,7 +383,8 @@ async fn three_party_create_add_send_receive_flow() -> TestResult {
         )
     };
 
-    let alice_received = inbound::process_inbound_group_frame(&alice_dir, alice_pw, &alice_app_frame)?;
+    let alice_received =
+        inbound::process_inbound_group_frame(&alice_dir, alice_pw, &alice_app_frame)?;
     assert_eq!(
         alice_received,
         InboundGroupEvent::ApplicationMessage {

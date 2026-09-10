@@ -127,12 +127,15 @@ pub async fn add_member<F, Fut>(
 ) -> Result<(), GroupError>
 where
     F: Fn(&PeerTransportAddress) -> Fut,
-    Fut: std::future::Future<Output = Result<Box<dyn tokio::io::AsyncWrite + Unpin + Send>, GroupError>>,
+    Fut: std::future::Future<
+            Output = Result<Box<dyn tokio::io::AsyncWrite + Unpin + Send>, GroupError>,
+        >,
 {
     let group_state_path = keystore_dir
         .join(GROUPS_DIR_NAME)
         .join(format!("{group_name}.enc"));
-    let (mut group, old_roster, provider) = persistence::load_group_state(&group_state_path, passphrase)?;
+    let (mut group, old_roster, provider) =
+        persistence::load_group_state(&group_state_path, passphrase)?;
 
     // The group identity must already exist — adding a member to a
     // group this peer never created/joined with an identity is a real
@@ -144,7 +147,8 @@ where
 
     // Untrusted, externally-supplied bytes: decode, then VALIDATE
     // (never trust an unvalidated `KeyPackageIn` — see module docs).
-    let key_package_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(key_package_blob)?;
+    let key_package_bytes =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(key_package_blob)?;
     let key_package_in = KeyPackageIn::tls_deserialize_exact_bytes(&key_package_bytes)?;
     let key_package = key_package_in.validate(provider.crypto(), ProtocolVersion::Mls10)?;
 
@@ -167,7 +171,9 @@ where
         })?;
 
     let mut new_roster = old_roster.clone();
-    new_roster.members.push((peer_name.to_string(), new_leaf_index));
+    new_roster
+        .members
+        .push((peer_name.to_string(), new_leaf_index));
 
     // The state mutation is now durable. Nothing after this point may
     // turn a successful save into an `Err` return (ruled semantics —
@@ -186,9 +192,14 @@ where
     // not `new_roster`) — the new member receives the Welcome instead,
     // never a Commit for their own addition (RFC 9420 semantics).
     // Per-member outcomes are intentionally discarded (module docs).
-    let _commit_results =
-        delivery::deliver_to_members(&old_roster, &peer_lookup, &connect, &group_id_bytes, &commit_msg)
-            .await;
+    let _commit_results = delivery::deliver_to_members(
+        &old_roster,
+        &peer_lookup,
+        &connect,
+        &group_id_bytes,
+        &commit_msg,
+    )
+    .await;
 
     // Fan out the Welcome to ONLY the new member.
     let welcome_roster = GroupRoster {
@@ -229,8 +240,12 @@ mod tests {
 
     /// The future type returned by [`dual_stream`]'s closure — factored
     /// into its own alias to satisfy `clippy::type_complexity`.
-    type ConnectFuture =
-        Pin<Box<dyn std::future::Future<Output = Result<Box<dyn AsyncWrite + Unpin + Send>, GroupError>> + Send>>;
+    type ConnectFuture = Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Box<dyn AsyncWrite + Unpin + Send>, GroupError>>
+                + Send,
+        >,
+    >;
 
     const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519;
 
@@ -394,11 +409,20 @@ mod tests {
         let (loaded_group, loaded_roster, _restored_provider) =
             persistence::load_group_state(&group_state_path, passphrase)?;
         assert_eq!(loaded_group.members().count(), 2);
-        assert!(loaded_roster.members.iter().any(|(name, _)| name == "alice"));
+        assert!(
+            loaded_roster
+                .members
+                .iter()
+                .any(|(name, _)| name == "alice")
+        );
         let bob_leaf = loaded_roster
             .leaf_index_for("bob")
             .ok_or("bob missing from persisted roster")?;
-        assert!(loaded_group.members().any(|member| member.index == bob_leaf));
+        assert!(
+            loaded_group
+                .members()
+                .any(|member| member.index == bob_leaf)
+        );
 
         // Both the Commit (to alice) and the Welcome (to bob) actually
         // made it onto their respective streams.

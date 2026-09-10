@@ -50,13 +50,12 @@ async fn send_text_stream_prepends_pqxdh_handshake_marker()
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use umbra_net::messenger::send_text_stream;
 
-    let (alice_identity, peer_keys) =
-        fixtures().map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
+    let (alice_identity, peer_keys) = fixtures()
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
     let (mut a_side, mut b_side) = tokio::io::duplex(4096);
 
-    let send_task = tokio::spawn(async move {
-        send_text_stream(&mut a_side, &peer_keys, b"hello").await
-    });
+    let send_task =
+        tokio::spawn(async move { send_text_stream(&mut a_side, &peer_keys, b"hello").await });
 
     let connection_type = peek_connection_type(&mut b_side).await?;
     assert_eq!(connection_type, ConnectionType::PqxdhHandshake);

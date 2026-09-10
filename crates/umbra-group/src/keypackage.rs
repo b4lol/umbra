@@ -353,7 +353,10 @@ pub(crate) fn load_keypackage_storage_with_params(
     let storage = MemoryStorage {
         values: RwLock::new(persisted.storage.into_iter().collect()),
     };
-    Ok(RestoredProvider::from_parts(CryptoProvider::new()?, storage))
+    Ok(RestoredProvider::from_parts(
+        CryptoProvider::new()?,
+        storage,
+    ))
 }
 
 /// Generates a fresh MLS `KeyPackage` for this peer's group identity
@@ -416,8 +419,8 @@ pub fn export_keypackage(keystore_dir: &Path, passphrase: &[u8]) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openmls::prelude::tls_codec::DeserializeBytes as _;
     use openmls::prelude::KeyPackageIn;
+    use openmls::prelude::tls_codec::DeserializeBytes as _;
 
     #[test]
     fn export_keypackage_produces_a_parseable_key_package()
@@ -455,7 +458,10 @@ mod tests {
         let second = export_keypackage(&dir, b"pw")?;
         let len_after_second = std::fs::metadata(&keypackages_path)?.len();
 
-        assert_ne!(first, second, "each export must generate a fresh key package");
+        assert_ne!(
+            first, second,
+            "each export must generate a fresh key package"
+        );
         assert!(
             len_after_second > len_after_first,
             "the persisted storage must grow as more key packages accumulate"

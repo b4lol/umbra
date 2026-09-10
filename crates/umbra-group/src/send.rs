@@ -124,12 +124,15 @@ pub async fn send_group_message<F, Fut>(
 ) -> Result<(), GroupError>
 where
     F: Fn(&PeerTransportAddress) -> Fut,
-    Fut: std::future::Future<Output = Result<Box<dyn tokio::io::AsyncWrite + Unpin + Send>, GroupError>>,
+    Fut: std::future::Future<
+            Output = Result<Box<dyn tokio::io::AsyncWrite + Unpin + Send>, GroupError>,
+        >,
 {
     let group_state_path = keystore_dir
         .join(GROUPS_DIR_NAME)
         .join(format!("{group_name}.enc"));
-    let (mut group, roster, provider) = persistence::load_group_state(&group_state_path, passphrase)?;
+    let (mut group, roster, provider) =
+        persistence::load_group_state(&group_state_path, passphrase)?;
 
     // The group identity must already exist — sending from a group this
     // peer never created/joined with an identity is a real error, not
@@ -143,13 +146,20 @@ where
     // The state mutation (ratchet/generation advancement) is now
     // durable. Nothing after this point may turn a successful save into
     // an `Err` return (ruled semantics — see module docs).
-    persistence::save_group_state(&group_state_path, passphrase, &group, provider.storage(), &roster)?;
+    persistence::save_group_state(
+        &group_state_path,
+        passphrase,
+        &group,
+        provider.storage(),
+        &roster,
+    )?;
 
     let group_id_bytes = group.group_id().to_vec();
 
     // Per-member outcomes are intentionally discarded (module docs).
     let _results =
-        delivery::deliver_to_members(&roster, &peer_lookup, &connect, &group_id_bytes, &message).await;
+        delivery::deliver_to_members(&roster, &peer_lookup, &connect, &group_id_bytes, &message)
+            .await;
 
     Ok(())
 }
@@ -172,8 +182,12 @@ mod tests {
     type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
     /// The future type returned by [`single_use_stream`]'s closure.
-    type ConnectFuture =
-        Pin<Box<dyn std::future::Future<Output = Result<Box<dyn AsyncWrite + Unpin + Send>, GroupError>> + Send>>;
+    type ConnectFuture = Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Box<dyn AsyncWrite + Unpin + Send>, GroupError>>
+                + Send,
+        >,
+    >;
 
     /// Hands out one end of a `tokio::io::duplex` pair from an `Fn`
     /// closure (mirrors `add.rs`/`delivery.rs`/`inbound.rs`'s own test
@@ -196,7 +210,9 @@ mod tests {
     /// `process_inbound_group_frame`'s own `frame_bytes` argument
     /// (marker already stripped). Mirrors `inbound.rs`'s own
     /// `capture_frame` test helper.
-    async fn capture_frame<S>(mut stream: S) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>
+    async fn capture_frame<S>(
+        mut stream: S,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>
     where
         S: tokio::io::AsyncRead + Unpin,
     {
@@ -210,11 +226,15 @@ mod tests {
     /// Sets up a fresh temp dir under `std::env::temp_dir()`, unique per
     /// test/label pair (mirrors this crate's existing test style).
     fn temp_dir(label: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("umbra-group-send-test-{}-{label}", std::process::id()))
+        std::env::temp_dir().join(format!(
+            "umbra-group-send-test-{}-{label}",
+            std::process::id()
+        ))
     }
 
     #[tokio::test]
-    async fn send_group_message_delivers_a_frame_that_decrypts_to_the_exact_plaintext() -> TestResult {
+    async fn send_group_message_delivers_a_frame_that_decrypts_to_the_exact_plaintext() -> TestResult
+    {
         let alice_dir = temp_dir("alice");
         let bob_dir = temp_dir("bob");
         std::fs::create_dir_all(&alice_dir)?;
@@ -235,10 +255,25 @@ mod tests {
             let connect = single_use_stream(bob_member_side);
             let peer_lookup = {
                 let bob_addr = bob_addr.clone();
-                move |name: &str| if name == "bob" { Some(bob_addr.clone()) } else { None }
+                move |name: &str| {
+                    if name == "bob" {
+                        Some(bob_addr.clone())
+                    } else {
+                        None
+                    }
+                }
             };
 
-            add::add_member(&alice_dir, alice_pw, "cell", "bob", &bob_kp, peer_lookup, connect).await?;
+            add::add_member(
+                &alice_dir,
+                alice_pw,
+                "cell",
+                "bob",
+                &bob_kp,
+                peer_lookup,
+                connect,
+            )
+            .await?;
 
             capture_frame(bob_observer_side).await?
         };
@@ -264,10 +299,24 @@ mod tests {
             let connect = single_use_stream(bob_member_side);
             let peer_lookup = {
                 let bob_addr = bob_addr.clone();
-                move |name: &str| if name == "bob" { Some(bob_addr.clone()) } else { None }
+                move |name: &str| {
+                    if name == "bob" {
+                        Some(bob_addr.clone())
+                    } else {
+                        None
+                    }
+                }
             };
 
-            send_group_message(&alice_dir, alice_pw, "cell", &plaintext, peer_lookup, connect).await?;
+            send_group_message(
+                &alice_dir,
+                alice_pw,
+                "cell",
+                &plaintext,
+                peer_lookup,
+                connect,
+            )
+            .await?;
 
             capture_frame(bob_observer_side).await?
         };
