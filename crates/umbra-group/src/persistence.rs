@@ -174,6 +174,17 @@ impl GroupRoster {
     }
 }
 
+/// Inner plaintext schema version of [`PersistedState`] — distinct
+/// from [`MAGIC`]'s envelope version: the magic versions the FILE
+/// framing (header/salt/envelope), this versions the serialized field
+/// layout INSIDE the AEAD wrapper (TODO B.2.6). Bump it whenever
+/// `PersistedState`'s field layout changes incompatibly; the loader
+/// refuses anything else with a loud, intentional error (the crate is
+/// pre-release, so — per the same ruling as `keypackage.rs`'s store
+/// path — no migration shim is provided; a dev-era state file is
+/// re-created, not migrated).
+const SCHEMA_VERSION: u32 = 1;
+
 /// The full contents persisted for one group: a snapshot of OpenMLS's
 /// own storage map (everything `MlsGroup::load` needs to reconstruct
 /// a live handle), the group's id (so [`load_group_state`] knows
@@ -181,6 +192,12 @@ impl GroupRoster {
 /// [`GroupRoster`].
 #[derive(Serialize, Deserialize)]
 struct PersistedState {
+    /// Inner schema version (see [`SCHEMA_VERSION`]). `#[serde(default)]
+    /// so a pre-versioning dev file still DESERIALIZES (as 0) and hits
+    /// the loader's explicit, intentional version error instead of a
+    /// bare serde "missing field" one.
+    #[serde(default)]
+    schema_version: u32,
     /// The group's MLS `GroupId`, as raw bytes (`GroupId::to_vec`).
     group_id: Vec<u8>,
     /// A snapshot of `MemoryStorage`'s `values` map, as `(key, value)`
@@ -298,6 +315,7 @@ pub fn save_group_state_with_params(
         .collect();
 
     let persisted = PersistedState {
+        schema_version: SCHEMA_VERSION,
         group_id: group.group_id().to_vec(),
         storage: storage_entries,
         roster: roster.clone(),
@@ -421,6 +439,14 @@ pub fn load_group_state_with_params(
     )?;
     let plaintext = keystore::open_envelope(&key, envelope)?;
     let persisted: PersistedState = serde_json::from_slice(&plaintext)?;
+    if persisted.schema_version != SCHEMA_VERSION {
+        return Err(GroupError::Malformed(format!(
+            "unsupported group state schema version {} (expected {SCHEMA_VERSION}; \
+             pre-versioning dev files are not migrated — the crate is pre-release, \
+             re-create the group)",
+            persisted.schema_version
+        )));
+    }
 
     let storage = MemoryStorage {
         values: RwLock::new(persisted.storage.into_iter().collect()),
@@ -571,6 +597,55 @@ mod tests {
             load_group_state_with_params(&path, b"wrong", TEST_M_KIB, TEST_T_COST, TEST_P_COST)
                 .is_err()
         );
+
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    /// TODO B.2.6: a state file written before inner schema versioning
+    /// (no `schema_version` field) must fail with the loader's
+    /// explicit, intentional version error — never a bare serde
+    /// "missing field" one, and never silently accepted.
+    #[test]
+    fn pre_versioning_state_file_is_a_loud_version_error()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let dir = std::env::temp_dir().join(format!(
+            "umbra-group-state-test-{}-legacy-schema",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("cell.enc");
+
+        // Hand-craft a legacy plaintext: the pre-B.2.6 PersistedState
+        // shape (no `schema_version` field).
+        let legacy = serde_json::json!({
+            "group_id": [],
+            "storage": [],
+            "roster": {"members": []},
+        });
+        let plaintext = Zeroizing::new(serde_json::to_vec(&legacy)?);
+        let mut salt = [0u8; KS_SALT_LEN];
+        umbra_crypto::rng::fill(&mut salt)?;
+        let key = keystore::derive_keystore_key_with_params(
+            b"pw",
+            &salt,
+            TEST_M_KIB,
+            TEST_T_COST,
+            TEST_P_COST,
+        )?;
+        let envelope = keystore::seal_envelope(&key, &plaintext)?;
+        let mut file = MAGIC.to_vec();
+        file.extend_from_slice(&salt);
+        file.extend_from_slice(&*envelope);
+        std::fs::write(&path, &file)?;
+
+        match load_group_state_with_params(&path, b"pw", TEST_M_KIB, TEST_T_COST, TEST_P_COST) {
+            Err(GroupError::Malformed(message)) => {
+                assert!(message.contains("schema version"), "got: {message}");
+            }
+            Err(other) => return Err(format!("expected Malformed, got {other}").into()),
+            Ok(_) => return Err("expected an error, but the legacy file loaded".into()),
+        }
 
         std::fs::remove_dir_all(&dir)?;
         Ok(())

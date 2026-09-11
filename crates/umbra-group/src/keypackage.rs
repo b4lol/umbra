@@ -137,12 +137,26 @@ const KEYPACKAGES_FILE_NAME: &str = "keypackages/store.enc";
 /// storage, v1).
 const MAGIC: [u8; 5] = *b"UMKP\x01";
 
+/// Inner plaintext schema version of [`PersistedKeyPackageStorage`] —
+/// distinct from [`MAGIC`]'s envelope version: the magic versions the
+/// FILE framing, this versions the serialized field layout INSIDE the
+/// AEAD wrapper (TODO B.2.6 — mirrors `persistence.rs`'s
+/// `SCHEMA_VERSION`; see its docs for the pre-release no-migration
+/// ruling).
+const SCHEMA_VERSION: u32 = 1;
+
 /// The full contents persisted for this peer's key-package storage: a
 /// snapshot of OpenMLS's own storage map (everything a later
 /// `StagedWelcome::new_from_welcome` needs to find and consume a
 /// previously exported key package's private keys).
 #[derive(Serialize, Deserialize)]
 struct PersistedKeyPackageStorage {
+    /// Inner schema version (see [`SCHEMA_VERSION`]). `#[serde(default)]
+    /// so a pre-versioning dev file still DESERIALIZES (as 0) and hits
+    /// the loader's explicit, intentional version error instead of a
+    /// bare serde "missing field" one.
+    #[serde(default)]
+    schema_version: u32,
     /// A snapshot of `MemoryStorage`'s `values` map, as `(key, value)`
     /// pairs rather than a `HashMap` (see `persistence.rs`'s
     /// `PersistedState::storage` for why).
@@ -219,6 +233,7 @@ pub(crate) fn save_keypackage_storage_with_params(
         .collect();
 
     let persisted = PersistedKeyPackageStorage {
+        schema_version: SCHEMA_VERSION,
         storage: storage_entries,
     };
     let plaintext = Zeroizing::new(serde_json::to_vec(&persisted)?);
@@ -349,6 +364,14 @@ pub(crate) fn load_keypackage_storage_with_params(
     )?;
     let plaintext = keystore::open_envelope(&key, envelope)?;
     let persisted: PersistedKeyPackageStorage = serde_json::from_slice(&plaintext)?;
+    if persisted.schema_version != SCHEMA_VERSION {
+        return Err(GroupError::Malformed(format!(
+            "unsupported key-package storage schema version {} (expected {SCHEMA_VERSION}; \
+             pre-versioning dev files are not migrated — the crate is pre-release, \
+             re-export a key package)",
+            persisted.schema_version
+        )));
+    }
 
     let storage = MemoryStorage {
         values: RwLock::new(persisted.storage.into_iter().collect()),
@@ -466,6 +489,51 @@ mod tests {
             len_after_second > len_after_first,
             "the persisted storage must grow as more key packages accumulate"
         );
+
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    /// TODO B.2.6: a key-package store written before inner schema
+    /// versioning (no `schema_version` field) must fail with the
+    /// loader's explicit, intentional version error — never a bare
+    /// serde "missing field" one, and never silently accepted.
+    #[test]
+    fn pre_versioning_keypackage_store_is_a_loud_version_error()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let dir = std::env::temp_dir().join(format!(
+            "umbra-group-keypackage-test-{}-legacy-schema",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(KEYPACKAGES_FILE_NAME);
+        // The store file lives in a subdirectory
+        // (`keypackages/store.enc`) — create it, mirroring the
+        // production save path's own `create_dir_all`.
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        // Hand-craft a legacy plaintext: the pre-B.2.6
+        // PersistedKeyPackageStorage shape (no `schema_version` field).
+        let legacy = serde_json::json!({ "storage": [] });
+        let plaintext = Zeroizing::new(serde_json::to_vec(&legacy)?);
+        let mut salt = [0u8; KS_SALT_LEN];
+        umbra_crypto::rng::fill(&mut salt)?;
+        let key = keystore::derive_keystore_key_with_params(b"pw", &salt, 8192, 2, 1)?;
+        let envelope = keystore::seal_envelope(&key, &plaintext)?;
+        let mut file = MAGIC.to_vec();
+        file.extend_from_slice(&salt);
+        file.extend_from_slice(&*envelope);
+        std::fs::write(&path, &file)?;
+
+        match load_keypackage_storage_with_params(&path, b"pw", 8192, 2, 1) {
+            Err(GroupError::Malformed(message)) => {
+                assert!(message.contains("schema version"), "got: {message}");
+            }
+            Err(other) => return Err(format!("expected Malformed, got {other}").into()),
+            Ok(_) => return Err("expected an error, but the legacy file loaded".into()),
+        }
 
         std::fs::remove_dir_all(&dir)?;
         Ok(())

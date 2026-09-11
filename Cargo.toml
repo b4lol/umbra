@@ -83,14 +83,20 @@ umbra-net = { path = "crates/umbra-net", version = "1.0.0-alpha.3" }
 # `Capabilities::for_provider(provider.crypto())` constructor is the
 # documented, intended way to advertise exactly what the crypto provider
 # actually supports instead of relying on that hardcoded default list.
-openmls = { version = "0.9.0", default-features = false, features = [
+# TODO B.2.6: the openmls family is EXACT-version pinned (`=`), not
+# caret — `umbra-group`'s whole-blob persistence depends on
+# `openmls_memory_storage::MemoryStorage`'s public map layout (an
+# implementation detail, not a documented contract; ADR-033), so even a
+# patch release must be a deliberate, reviewed bump, never a silent
+# `cargo update`.
+openmls = { version = "=0.9.0", default-features = false, features = [
     "libcrux-provider",
 ] }
-openmls_basic_credential = "0.6.0"
-openmls_memory_storage = "0.6.0"
+openmls_basic_credential = "=0.6.0"
+openmls_memory_storage = "=0.6.0"
 # Not re-exported through `openmls::`; needed directly to construct the
 # libcrux-backed `Provider` (verified against the installed source).
-openmls_libcrux_crypto = { version = "0.4.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
+openmls_libcrux_crypto = { version = "=0.4.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
 
 # Post-quantum cryptography (RustCrypto, pure Rust — ADR-026)
 ml-kem = { version = "0.3.2", features = ["zeroize"] }
