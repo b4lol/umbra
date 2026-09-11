@@ -46,6 +46,18 @@
 //! mixnet client's own stream ending) stops the loop and returns an
 //! error.
 //!
+//! # Stdout contract for `send-nym`
+//!
+//! On success, exactly one line, matching `mesh_send.rs`/`tor_send.rs`'s
+//! send-side shape byte-for-byte (via [`emit_event_fields`], this
+//! crate's own copy per the same duplication convention):
+//!
+//! - `{"event":"sent","bytes":N,"frames":N}` — the framed byte length
+//!   and ratchet frame count of the one Nym message sent. The event
+//!   means "accepted by the mixnet client", NOT delivered-and-
+//!   acknowledged (no end-to-end ACK exists — same caveat as the Tor
+//!   send path's own `sent` event).
+//!
 //! Both flows call `umbra_hardware::process::harden_process()`
 //! (mlockall/MCL_FUTURE + non-dumpable, ADR-025) as their literal FIRST
 //! step, before any secret material (identity seeds, peer PQXDH keys,
@@ -191,6 +203,23 @@ fn emit_event(event: &str, data: Option<&[u8]>) -> std::io::Result<()> {
         .and_then(|()| stdout.flush())
 }
 
+/// Emits one NDJSON event line with string fields (the send-side shape:
+/// `{"event":"sent","bytes":N,"frames":N}`) — copied from `umbra-cli`'s
+/// `tor_send.rs` private `emit_event` rather than shared, per the same
+/// established duplication convention as [`emit_event`] above.
+fn emit_event_fields(event: &str, fields: &[(&str, String)]) -> std::io::Result<()> {
+    let mut line = format!("{{\"event\":\"{event}\"");
+    for (key, value) in fields {
+        line.push_str(&format!(",\"{key}\":{value}"));
+    }
+    line.push_str("}\n");
+    use std::io::Write as _;
+    let mut stdout = std::io::stdout().lock();
+    stdout
+        .write_all(line.as_bytes())
+        .and_then(|()| stdout.flush())
+}
+
 /// Runs the `send-nym` flow: loads the named peer's record (the
 /// caller's OWN keystore identity is never read — see the module docs
 /// and `SendNym`'s own doc comment), reads one message from `input`
@@ -298,12 +327,24 @@ pub fn run_send_nym(
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(async move {
+    let (frames, bytes) = runtime.block_on(async move {
         let client = NymClient::connect_ephemeral(network).await?;
-        crate::bridge::send_via_nym(&client, peer_addr, &peer_keys, &plaintext).await?;
+        let sent = crate::bridge::send_via_nym(&client, peer_addr, &peer_keys, &plaintext).await?;
         client.disconnect().await;
-        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-    })
+        Ok::<(u64, usize), Box<dyn std::error::Error + Send + Sync>>(sent)
+    })?;
+
+    // The same NDJSON `sent` confirmation `mesh_send.rs`/`tor_send.rs`
+    // emit (TODO B.1's Nym item: this event was the one remaining
+    // send-side UX/consistency gap, now closed). Emitted only AFTER a
+    // genuine success — the event means "accepted by the mixnet
+    // client", NOT delivered-and-acknowledged (no end-to-end ACK
+    // exists, same caveat as the Tor send path).
+    emit_event_fields(
+        "sent",
+        &[("bytes", bytes.to_string()), ("frames", frames.to_string())],
+    )?;
+    Ok(())
 }
 
 /// Runs the `serve-nym` flow: loads the caller's identity seeds once,

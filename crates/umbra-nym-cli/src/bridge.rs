@@ -59,7 +59,9 @@ const DUPLEX_BUF: usize = 256 * 1024;
 
 /// Runs the PQXDH handshake + single-message send over an in-memory
 /// duplex, then forwards the accumulated bytes as exactly one Nym
-/// message to `to`.
+/// message to `to`. Returns `(frames, bytes)` — the ratchet frame count
+/// and the framed byte length — so the CLI can emit the same NDJSON
+/// `sent` confirmation `mesh_send.rs`/`tor_send.rs` emit.
 ///
 /// # Errors
 ///
@@ -70,11 +72,9 @@ pub async fn send_via_nym<T: NymTransport>(
     to: NymPeerAddr,
     peer: &PeerPqxdhKeys,
     plaintext: &[u8],
-) -> Result<(), TransportError> {
+) -> Result<(u64, usize), TransportError> {
     let (mut writer, mut reader) = tokio::io::duplex(DUPLEX_BUF);
-    send_text_stream(&mut writer, peer, plaintext)
-        .await
-        .map(|_frames| ())?;
+    let frames = send_text_stream(&mut writer, peer, plaintext).await?;
     writer
         .shutdown()
         .await
@@ -84,7 +84,11 @@ pub async fn send_via_nym<T: NymTransport>(
         .read_to_end(&mut framed)
         .await
         .map_err(|e| TransportError::Nym(format!("duplex read: {e}")))?;
-    transport.send(to, framed).await
+    let bytes = framed.len();
+    transport.send(to, framed).await?;
+    // `(frames, bytes)` — so the CLI can emit the same NDJSON `sent`
+    // confirmation event `mesh_send.rs`/`tor_send.rs` emit.
+    Ok((frames, bytes))
 }
 
 /// Waits for exactly one Nym message from `transport`, then runs it
@@ -174,7 +178,9 @@ mod tests {
         let mut transport_b = FakeNymTransport::new(addr.clone());
 
         let plaintext = b"meet at midnight";
-        send_via_nym(&transport_a, addr, &b_peer_keys, plaintext).await?;
+        let (frames, bytes) = send_via_nym(&transport_a, addr, &b_peer_keys, plaintext).await?;
+        assert!(frames >= 1, "one message must produce at least one frame");
+        assert!(bytes > 0, "the framed byte count must be nonzero");
 
         // The fake doesn't auto-route: pull what A "sent" and manually
         // deliver it into B's inbox.
