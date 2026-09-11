@@ -3,6 +3,13 @@
 //! the group's roster over each member's own transport (spec Decision
 //! 6, TODO B.2).
 //!
+//! The plaintext is framed as a TYPED application payload (tag `0x00`
+//! = user text) before encryption, so Umbra-level control traffic —
+//! the TODO B.2.1 roster sync, tag `0x01` — rides the group's own
+//! AEAD channel through the same code path rather than a side channel.
+//! See [`crate::roster_sync`]'s module docs for the tag table and
+//! framing.
+//!
 //! # Corrections to the original task brief (ruled before dispatch)
 //!
 //! The original brief sketched `send_group_message` as `pub fn`
@@ -77,6 +84,7 @@ use crate::delivery::{self, PeerTransportAddress};
 use crate::error::GroupError;
 use crate::identity::{self, GROUP_IDENTITY_FILE_NAME};
 use crate::persistence;
+use crate::roster_sync;
 
 /// Subdirectory (relative to the keystore directory) holding one
 /// encrypted group-state file per group, named `<group_name>.enc`
@@ -141,7 +149,12 @@ where
     let identity_path = keystore_dir.join(GROUP_IDENTITY_FILE_NAME);
     let identity = identity::load_group_identity(&identity_path, passphrase)?;
 
-    let message = group.create_message(&provider, &identity.signature_key_pair, plaintext)?;
+    // The payload is framed as a TYPED application payload (the user-
+    // text tag), so control traffic (roster syncs, TODO B.2.1) and user
+    // text share the group's own AEAD channel with no side channel —
+    // see `roster_sync.rs`'s module docs.
+    let framed = roster_sync::encode_user_text(plaintext);
+    let message = group.create_message(&provider, &identity.signature_key_pair, &framed)?;
 
     // The state mutation (ratchet/generation advancement) is now
     // durable. Nothing after this point may turn a successful save into
@@ -246,7 +259,14 @@ mod tests {
         // exactly as `inbound.rs`'s own tests do (rather than hand-
         // assembling an `MlsGroup` the way `add.rs`'s own test fixture
         // does): `create_group` + `export_keypackage` + `add_member`.
-        create::create_group(&alice_dir, alice_pw, "cell")?;
+        //
+        // Note: `add_member` now also sends a RosterSync to the new
+        // member (TODO B.2.1) as a SECOND connection; this test's
+        // single-use `connect` closure deliberately lets that second
+        // connection fail (per-member delivery failures are non-fatal
+        // by `add_member`'s ruled semantics) — this test's subject is
+        // the application-message path, not the sync.
+        create::create_group(&alice_dir, alice_pw, "cell", "alice")?;
         let bob_kp = keypackage::export_keypackage(&bob_dir, bob_pw)?;
 
         let bob_addr = PeerTransportAddress::Mesh("bob-mesh".to_string());
@@ -291,8 +311,8 @@ mod tests {
         // Now exercise the function under test: Alice sends a real
         // application message, fanned out to the group's roster (which,
         // after `add_member`, contains only "bob" — `create_group`
-        // persists an empty initial roster, a pre-existing, documented
-        // gap this test does not need to work around).
+        // persists an empty initial member list; the local member is
+        // never listed in their own roster).
         let plaintext = b"hello from alice via send_group_message".to_vec();
         let application_frame = {
             let (bob_member_side, bob_observer_side) = tokio::io::duplex(8192);

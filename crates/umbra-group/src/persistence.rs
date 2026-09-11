@@ -116,8 +116,51 @@ impl Argon2Params {
 /// name.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GroupRoster {
-    /// `(Umbra peer name, MLS leaf index)` pairs, one per member.
+    /// `(Umbra peer name, MLS leaf index)` pairs, one per OTHER member
+    /// of the cell. The local member is deliberately never listed here
+    /// (a peer never fan-out-delivers to itself); the local member's
+    /// own cell-wide name lives in [`Self::self_name`] instead.
     pub members: Vec<(String, LeafNodeIndex)>,
+
+    /// The local member's own cell-wide peer name — the name the rest
+    /// of the cell uses to address this device. Set by
+    /// [`crate::create::create_group`] (from `umbra group create
+    /// --self-name`) for a cell's creator; a member who joined via a
+    /// `Welcome` learns it from the first roster sync they adopt
+    /// (`roster_sync.rs`, TODO B.2.1), which carries every member's
+    /// name INCLUDING the sync sender's own.
+    ///
+    /// `None` until either of those happens. The gap is a degraded,
+    /// not broken, state: the member list (what `send`/fan-out
+    /// actually resolves) is populated by the sync regardless, but a
+    /// roster sync THIS peer originates (after an add/remove of their
+    /// own) cannot include a self entry without a name, so members who
+    /// join through such a sync would not learn how to address this
+    /// peer. The CLI warns on stderr when this happens.
+    ///
+    /// `#[serde(default)]` so state files persisted before TODO B.2.1
+    /// (which have no such field) still load, as `None`.
+    #[serde(default)]
+    pub self_name: Option<String>,
+
+    /// The MLS epoch of the most recent roster sync this peer ADOPTED,
+    /// guarding against out-of-order arrival: roster syncs are ordinary
+    /// MLS application messages (one per add/remove commit, each in the
+    /// commit's new epoch), and MLS deliberately allows an application
+    /// message from an older epoch to still decrypt (skipped-key
+    /// retention) — without this guard, a stale sync overtaken on the
+    /// wire by a newer one would silently REGRESS the adopted roster
+    /// (e.g. drop a member added in between). A sync whose message
+    /// epoch is not strictly newer than this value is ignored (the
+    /// group state itself is still re-persisted — its secret tree
+    /// advanced on decryption, per `inbound.rs`'s re-persist rule).
+    /// Distinct syncs never share an epoch because each follows an
+    /// epoch-advancing Commit.
+    ///
+    /// `#[serde(default)]` for the same pre-B.2.1 compatibility reason
+    /// as [`Self::self_name`].
+    #[serde(default)]
+    pub last_sync_epoch: Option<u64>,
 }
 
 impl GroupRoster {
@@ -449,6 +492,8 @@ mod tests {
         let (provider, signer, group) = new_single_member_group()?;
         let roster = GroupRoster {
             members: vec![("alice".to_string(), group.own_leaf_index())],
+            self_name: Some("alice".to_string()),
+            ..GroupRoster::default()
         };
 
         let dir = std::env::temp_dir().join(format!(
@@ -499,6 +544,7 @@ mod tests {
         let (provider, _signer, group) = new_single_member_group()?;
         let roster = GroupRoster {
             members: vec![("alice".to_string(), group.own_leaf_index())],
+            ..GroupRoster::default()
         };
 
         let dir = std::env::temp_dir().join(format!(

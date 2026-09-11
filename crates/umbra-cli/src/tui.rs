@@ -89,6 +89,12 @@ enum UiEvent {
         /// Local name of the updated group.
         group_name: String,
     },
+    /// A known group's roster was updated via an inbound roster sync
+    /// (TODO B.2.1).
+    GroupRosterSynced {
+        /// Local name of the group whose roster changed.
+        group_name: String,
+    },
     /// A peer session failed (contained to its connection).
     SessionError(String),
     /// An outbound send was accepted by Arti's stream (NOT an
@@ -230,6 +236,9 @@ impl UiState {
             }
             UiEvent::GroupUpdated { group_name } => {
                 self.push(format!("[✓] group {group_name}: membership updated"));
+            }
+            UiEvent::GroupRosterSynced { group_name } => {
+                self.push(format!("[i] group {group_name}: roster updated"));
             }
             UiEvent::SessionError(error) => {
                 self.push(format!("[!] inbound session failed: {error}"));
@@ -514,6 +523,9 @@ async fn background(
                 }
                 Some(Ok(InboundEvent::GroupUpdated { group_name })) => {
                     let _ = event_tx.send(UiEvent::GroupUpdated { group_name });
+                }
+                Some(Ok(InboundEvent::GroupRosterSynced { group_name })) => {
+                    let _ = event_tx.send(UiEvent::GroupRosterSynced { group_name });
                 }
                 Some(Err(error)) => {
                     let _ = event_tx.send(UiEvent::SessionError(error));

@@ -234,6 +234,7 @@ mod tests {
                     ((*name).to_string(), leaf_index)
                 })
                 .collect(),
+            ..GroupRoster::default()
         }
     }
 

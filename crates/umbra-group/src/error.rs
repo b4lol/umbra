@@ -157,4 +157,24 @@ pub enum GroupError {
     /// feature.
     #[error(transparent)]
     MessageCreation(#[from] openmls::prelude::CreateMessageError),
+
+    /// `MlsGroup::remove_members` itself failed while committing a
+    /// member's removal ([`crate::remove::remove_member`], TODO B.2.2)
+    /// — e.g. an empty member list (`RemoveMembersError::EmptyInput`),
+    /// a pending commit already exists, or a storage error surfaced
+    /// through OpenMLS's own commit-creation path. Same generic-over-
+    /// `StorageError` shape as [`Self::MembershipAddition`].
+    #[error(transparent)]
+    MembershipRemoval(
+        #[from] openmls::prelude::RemoveMembersError<openmls_memory_storage::MemoryStorageError>,
+    ),
+
+    /// `MlsGroup::self_update` itself failed while building an on-demand
+    /// key-rotation commit ([`crate::rotate::rotate_group_key`], TODO
+    /// B.2.3) — e.g. a pending commit already exists, or a storage
+    /// error surfaced through OpenMLS's own commit-creation path.
+    #[error(transparent)]
+    KeyRotation(
+        #[from] openmls::prelude::SelfUpdateError<openmls_memory_storage::MemoryStorageError>,
+    ),
 }

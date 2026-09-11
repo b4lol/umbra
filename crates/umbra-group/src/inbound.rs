@@ -45,16 +45,23 @@
 //!    the same Welcome twice must error, not silently re-create or
 //!    overwrite.
 //!
-//! # A freshly joined group has no roster yet (small, related ruling)
+//! # Roster bootstrapping for a freshly joined group (TODO B.2.1)
 //!
 //! [`GroupRoster`] is Umbra's own bookkeeping (Umbra peer name ->
 //! MLS leaf index), never transmitted over MLS itself. A `Welcome`
 //! carries no such mapping, so [`process_welcome`] persists a brand
-//! new group with [`GroupRoster::default`] (empty) — exactly what
+//! new group with an EMPTY member list — exactly what
 //! [`crate::create::create_group`] already does for a freshly created
-//! group. Populating it is left to whatever future mechanism
-//! bootstraps peer-name knowledge for a newly joined group; out of
-//! scope here.
+//! group. The gap is closed by the `RosterSync` mechanism
+//! ([`crate::roster_sync`]): immediately after the Welcome, the adding
+//! member sends a full roster snapshot as a typed MLS application
+//! message (tag `0x01`), which this module adopts into the persisted
+//! roster (see the `ApplicationMessage` branch of
+//! [`process_protocol_message`]). A roster sync races its Welcome only
+//! in theory (they are separate connections over an unordered
+//! transport); if it loses, the delivery fails with
+//! [`GroupError::GroupNotFound`] and is healed by the next membership
+//! change's sync — every snapshot is full and self-sufficient.
 //!
 //! # Re-persisting storage after EVERY processed message, not just Commits
 //!
@@ -148,6 +155,7 @@ use openmls::prelude::{
 use crate::error::GroupError;
 use crate::keypackage;
 use crate::persistence::{self, GroupRoster, RestoredProvider};
+use crate::roster_sync::{self, ApplicationPayload};
 
 /// Subdirectory (relative to the keystore directory) holding one
 /// encrypted group-state file per group, named `<group_name>.enc`
@@ -177,7 +185,8 @@ const KEYPACKAGES_FILE_NAME: &str = "keypackages/store.enc";
 pub enum InboundGroupEvent {
     /// A `Welcome` was processed: a brand-new group state file was
     /// created at `<keystore_dir>/groups/<group_name>.enc`, with an
-    /// empty [`GroupRoster`] (see module docs).
+    /// empty member roster (bootstrapped by the roster sync that
+    /// follows the Welcome — see module docs, TODO B.2.1).
     Joined {
         /// The newly minted group name (file stem), deterministically
         /// derived from the group id (module docs, ruling sub-case 2).
@@ -196,6 +205,19 @@ pub enum InboundGroupEvent {
         /// The decrypted plaintext bytes.
         plaintext: Vec<u8>,
     },
+    /// A roster sync (typed application payload, tag `0x01`, TODO
+    /// B.2.1) was decrypted and adopted: the receiver's persisted
+    /// [`GroupRoster`] was replaced by the sender's full snapshot
+    /// (minus the receiver's own entry — see
+    /// [`roster_sync::adopt_snapshot`]). Stale snapshots (message epoch
+    /// not newer than the last adopted sync's, e.g. out-of-order
+    /// delivery over Tor) are still REPORTED as this event — the
+    /// message was processed and the state re-persisted either way —
+    /// but leave the roster unchanged.
+    RosterSynced {
+        /// The resolved group name (file stem) the sync belongs to.
+        group_name: String,
+    },
 }
 
 /// Decodes `frame_bytes` (the `[group_id_len][group_id][mls_len]
@@ -203,7 +225,10 @@ pub enum InboundGroupEvent {
 /// `CONNECTION_TYPE_GROUP` marker byte already stripped by the caller)
 /// and processes the enclosed MLS message: a `Welcome` creates a new,
 /// locally joined group; a `Commit` updates an existing group's
-/// persisted state; an application message is decrypted and returned.
+/// persisted state; an application message is decrypted and either
+/// returned (typed payload `0x00`, user text) or adopted as a roster
+/// sync (typed payload `0x01`, TODO B.2.1 — see
+/// [`crate::roster_sync`]).
 ///
 /// `keystore_dir`/`passphrase` identify this peer's own keystore,
 /// exactly as `create_group`/`add_member`/`export_keypackage` already
@@ -388,6 +413,11 @@ fn process_protocol_message(
         .process_message(&provider, protocol_message)
         .map_err(GroupError::MessageProcessing)?;
 
+    // Captured BEFORE `into_content` consumes `processed`: the roster
+    // sync branch needs the message's epoch for its staleness guard
+    // (TODO B.2.1 — see `roster_sync.rs`'s module docs).
+    let message_epoch = processed.epoch().as_u64();
+
     match processed.into_content() {
         ProcessedMessageContent::StagedCommitMessage(staged_commit) => {
             group
@@ -403,18 +433,41 @@ fn process_protocol_message(
             Ok(InboundGroupEvent::MembershipUpdated { group_name })
         }
         ProcessedMessageContent::ApplicationMessage(application_message) => {
-            let plaintext = application_message.into_bytes();
-            persistence::save_group_state(
-                &group_state_path,
-                passphrase,
-                &group,
-                provider.storage(),
-                &roster,
-            )?;
-            Ok(InboundGroupEvent::ApplicationMessage {
-                group_name,
-                plaintext,
-            })
+            // The payload is TYPED (tag byte first — `roster_sync.rs`):
+            // `0x00` user text is surfaced to the caller, `0x01` is a
+            // roster snapshot adopted into the persisted roster.
+            match roster_sync::decode_application_payload(&application_message.into_bytes())? {
+                ApplicationPayload::UserText(plaintext) => {
+                    persistence::save_group_state(
+                        &group_state_path,
+                        passphrase,
+                        &group,
+                        provider.storage(),
+                        &roster,
+                    )?;
+                    Ok(InboundGroupEvent::ApplicationMessage {
+                        group_name,
+                        plaintext,
+                    })
+                }
+                ApplicationPayload::RosterSync(snapshot) => {
+                    let mut roster = roster;
+                    roster_sync::adopt_snapshot(
+                        &mut roster,
+                        group.own_leaf_index(),
+                        snapshot,
+                        message_epoch,
+                    );
+                    persistence::save_group_state(
+                        &group_state_path,
+                        passphrase,
+                        &group,
+                        provider.storage(),
+                        &roster,
+                    )?;
+                    Ok(InboundGroupEvent::RosterSynced { group_name })
+                }
+            }
         }
         _ => Err(GroupError::Malformed(
             "unsupported processed message content in inbound group frame (expected a Commit \
@@ -615,7 +668,7 @@ mod tests {
         let alice_pw = b"alice-pw";
         let bob_pw = b"bob-pw";
 
-        create::create_group(&alice_dir, alice_pw, "cell")?;
+        create::create_group(&alice_dir, alice_pw, "cell", "alice")?;
         let bob_kp = kp::export_keypackage(&bob_dir, bob_pw)?;
 
         let welcome_frame =
@@ -664,7 +717,7 @@ mod tests {
         let alice_pw = b"alice-pw";
         let bob_pw = b"bob-pw";
 
-        create::create_group(&alice_dir, alice_pw, "cell")?;
+        create::create_group(&alice_dir, alice_pw, "cell", "alice")?;
         let bob_kp = kp::export_keypackage(&bob_dir, bob_pw)?;
         let welcome_frame =
             add_member_and_capture_frame(&alice_dir, alice_pw, "cell", "bob", &bob_kp).await?;
@@ -695,7 +748,7 @@ mod tests {
         let bob_pw = b"bob-pw";
         let charlie_pw = b"charlie-pw";
 
-        create::create_group(&alice_dir, alice_pw, "cell")?;
+        create::create_group(&alice_dir, alice_pw, "cell", "alice")?;
         let bob_kp = kp::export_keypackage(&bob_dir, bob_pw)?;
         let welcome_frame =
             add_member_and_capture_frame(&alice_dir, alice_pw, "cell", "bob", &bob_kp).await?;
@@ -802,7 +855,7 @@ mod tests {
         let alice_pw = b"alice-pw";
         let bob_pw = b"bob-pw";
 
-        create::create_group(&alice_dir, alice_pw, "cell")?;
+        create::create_group(&alice_dir, alice_pw, "cell", "alice")?;
         let bob_kp = kp::export_keypackage(&bob_dir, bob_pw)?;
         let welcome_frame =
             add_member_and_capture_frame(&alice_dir, alice_pw, "cell", "bob", &bob_kp).await?;
@@ -814,7 +867,9 @@ mod tests {
             return Err("expected Joined event".into());
         };
 
-        // Alice sends a real, encrypted application message.
+        // Alice sends a real, encrypted application message — framed
+        // with the user-text type tag (TODO B.2.1), exactly as
+        // `send::send_group_message` frames it.
         let alice_group_path = alice_dir.join("groups").join("cell.enc");
         let (mut alice_group, _roster, alice_provider) =
             persistence::load_group_state(&alice_group_path, alice_pw)?;
@@ -824,7 +879,7 @@ mod tests {
         let app_message_out = alice_group.create_message(
             &alice_provider,
             &alice_identity.signature_key_pair,
-            &plaintext,
+            &roster_sync::encode_user_text(&plaintext),
         )?;
 
         let group_id = alice_group.group_id().to_vec();
@@ -853,6 +908,92 @@ mod tests {
         let (bob_group, _roster, _provider) =
             persistence::load_group_state(&bob_group_path, bob_pw)?;
         assert_eq!(bob_group.members().count(), 2);
+
+        std::fs::remove_dir_all(&alice_dir)?;
+        std::fs::remove_dir_all(&bob_dir)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn roster_sync_frame_populates_the_joined_members_roster() -> TestResult {
+        let alice_dir = temp_dir("sync-alice");
+        let bob_dir = temp_dir("sync-bob");
+        std::fs::create_dir_all(&alice_dir)?;
+        std::fs::create_dir_all(&bob_dir)?;
+        let alice_pw = b"alice-pw";
+        let bob_pw = b"bob-pw";
+
+        create::create_group(&alice_dir, alice_pw, "cell", "alice")?;
+        let bob_kp = kp::export_keypackage(&bob_dir, bob_pw)?;
+        let welcome_frame =
+            add_member_and_capture_frame(&alice_dir, alice_pw, "cell", "bob", &bob_kp).await?;
+        let joined_event = process_inbound_group_frame(&bob_dir, bob_pw, &welcome_frame)?;
+        let InboundGroupEvent::Joined {
+            group_name: bob_group_name,
+        } = joined_event
+        else {
+            return Err("expected Joined event".into());
+        };
+        let bob_group_path = bob_dir.join("groups").join(format!("{bob_group_name}.enc"));
+
+        // The freshly joined member's roster is still empty — the sync
+        // arrives as a SEPARATE frame (TODO B.2.1).
+        let (_group, bob_roster_before, _provider) =
+            persistence::load_group_state(&bob_group_path, bob_pw)?;
+        assert!(bob_roster_before.members.is_empty());
+
+        // Alice builds a real roster-sync application message (the same
+        // payload `add_member` now fans out, built by hand here so this
+        // test owns its framing — mirroring the application-message
+        // test above).
+        let alice_group_path = alice_dir.join("groups").join("cell.enc");
+        let (mut alice_group, alice_roster, alice_provider) =
+            persistence::load_group_state(&alice_group_path, alice_pw)?;
+        let alice_identity =
+            identity::load_group_identity(&alice_dir.join("group-identity.enc"), alice_pw)?;
+        let sync_payload = roster_sync::encode_roster_sync(&roster_sync::snapshot_entries(
+            &alice_roster,
+            &alice_group,
+        ))?;
+        let sync_message_out = alice_group.create_message(
+            &alice_provider,
+            &alice_identity.signature_key_pair,
+            &sync_payload,
+        )?;
+        let sync_frame = {
+            let group_id = alice_group.group_id().to_vec();
+            let mls_bytes = {
+                use openmls::prelude::tls_codec::Serialize as _;
+                sync_message_out.tls_serialize_detached()?
+            };
+            let mut frame = Vec::new();
+            frame.extend_from_slice(&u32::try_from(group_id.len())?.to_be_bytes());
+            frame.extend_from_slice(&group_id);
+            frame.extend_from_slice(&u32::try_from(mls_bytes.len())?.to_be_bytes());
+            frame.extend_from_slice(&mls_bytes);
+            frame
+        };
+
+        let event = process_inbound_group_frame(&bob_dir, bob_pw, &sync_frame)?;
+        assert_eq!(
+            event,
+            InboundGroupEvent::RosterSynced {
+                group_name: bob_group_name.clone()
+            }
+        );
+
+        // The adoption is persisted: bob's roster names alice (the sync
+        // sender's self entry), bob's own entry was stripped into his
+        // self_name, and the sync's epoch was recorded.
+        let (bob_group, bob_roster, _provider) =
+            persistence::load_group_state(&bob_group_path, bob_pw)?;
+        assert!(
+            bob_roster.leaf_index_for("alice").is_some(),
+            "bob's roster must name alice after the sync: {bob_roster:?}"
+        );
+        assert!(bob_roster.leaf_index_for("bob").is_none());
+        assert_eq!(bob_roster.self_name.as_deref(), Some("bob"));
+        assert_eq!(bob_roster.last_sync_epoch, Some(bob_group.epoch().as_u64()));
 
         std::fs::remove_dir_all(&alice_dir)?;
         std::fs::remove_dir_all(&bob_dir)?;

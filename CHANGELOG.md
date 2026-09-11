@@ -9,6 +9,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [Unreleased]
 
 ### Added
+- **Group-mode follow-up increment** (TODO B.2.1/B.2.2/B.2.3, ADR-033
+  addendum): `RosterSync` — typed application-level group payloads (tag
+  `0x00` user text / `0x01` roster sync) riding the group's own AEAD
+  channel close the Welcome-joined member's empty-roster gap; every
+  `add`/`remove` fans out a full roster snapshot (sender's own entry
+  included — `umbra group create` gained `--self-name`), adopted under
+  a strictly-newer-epoch staleness guard. `umbra group remove`
+  (membership revocation via Remove Commit; the removed member keeps
+  pre-removal traffic but cannot decrypt anything newer) and `umbra
+  group rotate` (manual on-demand `self_update` re-key). No ACL by
+  design — the single-cell trust model is co-equal. The hermetic
+  3-party end-to-end test now covers the full create→add→sync→send→
+  reverse-send→remove→rotate flow with zero test-side roster patching,
+  including the post-removal no-decrypt proof.
 - **Per-transport privacy/trust profiles, shown at runtime**
   (`crates/umbra-cli/src/privacy.rs`, THREAT_MODEL.md "Per-transport
   privacy/trust profiles"): every transport (Tor, Wi-Fi Direct mesh,

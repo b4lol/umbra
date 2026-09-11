@@ -107,6 +107,13 @@ pub enum InboundEvent {
         /// Local name (file stem) of the updated group.
         group_name: String,
     },
+    /// A known group's roster was updated via an inbound roster sync
+    /// (TODO B.2.1 — control traffic riding the group's own AEAD
+    /// channel; no user-visible plaintext).
+    GroupRosterSynced {
+        /// Local name (file stem) of the group whose roster changed.
+        group_name: String,
+    },
 }
 
 /// The keystore material the inbound loop's group branch needs AFTER
@@ -411,6 +418,9 @@ pub fn run(
                 Ok(InboundEvent::GroupUpdated { group_name }) => {
                     emit_event("group-updated", Some(group_name.as_bytes()))?;
                 }
+                Ok(InboundEvent::GroupRosterSynced { group_name }) => {
+                    emit_event("group-roster-synced", Some(group_name.as_bytes()))?;
+                }
                 Err(error) => {
                     eprintln!("umbra: inbound session failed: {error}");
                 }
@@ -537,6 +547,9 @@ where
             group_name,
             plaintext,
         }),
+        Ok(InboundGroupEvent::RosterSynced { group_name }) => {
+            Ok(InboundEvent::GroupRosterSynced { group_name })
+        }
         Err(error) => Err(format!("inbound group frame: {error}")),
     }
 }
@@ -736,7 +749,7 @@ mod tests {
         bob_dir: &Path,
         bob_pw: &[u8],
     ) -> TestResult2<Vec<u8>> {
-        create::create_group(alice_dir, alice_pw, "cell")?;
+        create::create_group(alice_dir, alice_pw, "cell", "alice")?;
         let bob_kp = keypackage::export_keypackage(bob_dir, bob_pw)?;
         let (bob_member_side, bob_observer_side) = tokio::io::duplex(64 * 1024);
         let connect = single_use_stream(bob_member_side);

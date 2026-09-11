@@ -1,9 +1,26 @@
 //! `umbra group add`: adds a new member to an existing PQ-MLS group by
 //! processing a peer's exported `KeyPackage`, committing the addition,
 //! persisting the updated group state, and fanning out the resulting
-//! `Commit` (to the previously-existing members) and `Welcome` (to the
-//! new member) over each member's own transport (spec Decision 6, TODO
-//! B.2).
+//! `Commit` (to the previously-existing members), `Welcome` (to the
+//! new member), and roster sync (to ALL members, the new one included
+//! — TODO B.2.1, see below) over each member's own transport (spec
+//! Decision 6, TODO B.2).
+//!
+//! # RosterSync fan-out (TODO B.2.1)
+//!
+//! MLS Commits and Welcomes carry no Umbra peer names, so a
+//! `Welcome`-joined member's roster starts empty and every other
+//! member's roster lacks the new peer. Immediately after the Welcome
+//! delivery, [`add_member`] sends a full roster snapshot (every
+//! member's peer name ↔ leaf index, INCLUDING its own) as a typed MLS
+//! application message (tag `0x01`) to every member of the NEW roster,
+//! via [`crate::roster_sync::fan_out_roster_sync`] — see that module's
+//! docs for the framing, the self-name design point, and the
+//! trust/ordering discussion. The same delivery-failure semantics
+//! ruled below apply: the sync's own state mutation (the
+//! `create_message` ratchet advancement) is persisted BEFORE any
+//! delivery attempt, and per-member delivery failures never turn the
+//! call into an `Err`.
 //!
 //! # Corrections to the original task brief (ruled before dispatch)
 //!
@@ -74,6 +91,7 @@ use crate::delivery::{self, PeerTransportAddress};
 use crate::error::GroupError;
 use crate::identity::{self, GROUP_IDENTITY_FILE_NAME};
 use crate::persistence::{self, GroupRoster};
+use crate::roster_sync;
 
 /// Subdirectory (relative to the keystore directory) holding one
 /// encrypted group-state file per group, named `<group_name>.enc`
@@ -100,11 +118,14 @@ const GROUPS_DIR_NAME: &str = "groups";
 /// group's roster AS IT WAS BEFORE this call (the previously-existing
 /// members — the new member gets a `Welcome` instead, per RFC 9420
 /// semantics, never a `Commit` for their own addition), and the
-/// `Welcome` is delivered to `peer_name` alone. `peer_lookup` resolves
-/// an Umbra peer name to a transport address; `connect` resolves that
-/// address to an already-usable, boxed stream — both exactly as
-/// documented on [`delivery::deliver_to_members`], which this function
-/// calls twice (once per message).
+/// `Welcome` is delivered to `peer_name` alone; finally, a full roster
+/// snapshot (typed application message, tag `0x01`) is delivered to
+/// every member of the NEW roster, the new member included (TODO
+/// B.2.1 — see this module's own docs and `roster_sync.rs`).
+/// `peer_lookup` resolves an Umbra peer name to a transport address;
+/// `connect` resolves that address to an already-usable, boxed stream
+/// — both exactly as documented on [`delivery::deliver_to_members`],
+/// which this function calls once per fanned-out message.
 ///
 /// # Errors
 ///
@@ -114,8 +135,11 @@ const GROUPS_DIR_NAME: &str = "groups";
 /// itself fails, if the newly added member cannot be found in the group
 /// after the merge (should be unreachable — see the inline comment at
 /// that call site), or if the updated state cannot be persisted. Does
-/// NOT return an error for a Commit/Welcome delivery failure once the
-/// state mutation has already been durably saved.
+/// NOT return an error for a Commit/Welcome/roster-sync DELIVERY
+/// failure once the state mutation has already been durably saved; a
+/// roster-sync CREATION or persistence failure (as opposed to a
+/// delivery failure) DOES surface as `Err` — the add itself is already
+/// durable at that point, so the error means only the sync failed.
 pub async fn add_member<F, Fut>(
     keystore_dir: &Path,
     passphrase: &[u8],
@@ -204,6 +228,7 @@ where
     // Fan out the Welcome to ONLY the new member.
     let welcome_roster = GroupRoster {
         members: vec![(peer_name.to_string(), new_leaf_index)],
+        ..GroupRoster::default()
     };
     let _welcome_results = delivery::deliver_to_members(
         &welcome_roster,
@@ -213,6 +238,27 @@ where
         &welcome_msg,
     )
     .await;
+
+    // Finally, the roster sync (TODO B.2.1): a full snapshot — every
+    // member INCLUDING this peer's own self entry — to every member of
+    // the NEW roster, so the new member learns how to address everyone
+    // (and everyone learns the new member's name). Its own
+    // `create_message` ratchet advancement is persisted inside the
+    // helper BEFORE the sync's delivery is attempted (same ruled
+    // semantics as above).
+    roster_sync::fan_out_roster_sync(
+        &mut roster_sync::GroupSessionContext {
+            group: &mut group,
+            provider: &provider,
+            identity: &identity,
+            group_state_path: &group_state_path,
+            passphrase,
+        },
+        &new_roster,
+        &peer_lookup,
+        &connect,
+    )
+    .await?;
 
     Ok(())
 }
@@ -359,6 +405,7 @@ mod tests {
         let group_state_path = groups_dir.join("my-cell.enc");
         let initial_roster = GroupRoster {
             members: vec![("alice".to_string(), group.own_leaf_index())],
+            ..GroupRoster::default()
         };
         persistence::save_group_state(
             &group_state_path,

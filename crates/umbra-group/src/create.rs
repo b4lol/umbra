@@ -53,6 +53,15 @@ fn load_or_generate_identity(
 /// persists its state to `<keystore_dir>/groups/<group_name>.enc`
 /// (creating the `groups/` subdirectory if it does not already exist).
 ///
+/// `self_name` is the caller's own cell-wide peer name — the name the
+/// rest of the cell will address this device by. It is persisted in
+/// the roster's [`GroupRoster::self_name`] so the roster syncs this
+/// peer later originates (TODO B.2.1, after every add/remove) can
+/// carry a self entry; without it, members added to this cell would
+/// never learn how to address its creator back. The roster's `members`
+/// list itself starts EMPTY (the local member is never listed in their
+/// own roster — nobody fan-out-delivers to themselves).
+///
 /// Generates this peer's group identity first if
 /// `<keystore_dir>/group-identity.enc` does not yet exist — a single
 /// group identity is shared across every group a peer creates or
@@ -70,6 +79,7 @@ fn load_or_generate_identity(
 ///
 /// # Errors
 ///
+/// Returns [`GroupError::Malformed`] if `self_name` is empty.
 /// Returns [`GroupError::AlreadyExists`] if the group state file
 /// already exists. Returns [`GroupError`] if the group identity cannot
 /// be generated, loaded, or saved; if the `groups/` directory cannot
@@ -79,7 +89,13 @@ pub fn create_group(
     keystore_dir: &Path,
     passphrase: &[u8],
     group_name: &str,
+    self_name: &str,
 ) -> Result<(), GroupError> {
+    if self_name.is_empty() {
+        return Err(GroupError::Malformed(
+            "self name must not be empty (the rest of the cell addresses this device by it)".into(),
+        ));
+    }
     let groups_dir = keystore_dir.join(GROUPS_DIR_NAME);
     let group_state_path = groups_dir.join(format!("{group_name}.enc"));
     if group_state_path.exists() {
@@ -116,7 +132,11 @@ pub fn create_group(
         passphrase,
         &group,
         provider.storage(),
-        &GroupRoster::default(),
+        &GroupRoster {
+            members: Vec::new(),
+            self_name: Some(self_name.to_string()),
+            ..GroupRoster::default()
+        },
     )?;
 
     Ok(())
@@ -142,7 +162,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir)?;
 
-        create_group(&dir, b"pw", "my-cell")?;
+        create_group(&dir, b"pw", "my-cell", "alice")?;
 
         // The group identity is generated once, shared across groups.
         assert!(dir.join(GROUP_IDENTITY_FILE_NAME).exists());
@@ -153,6 +173,7 @@ mod tests {
         let (loaded_group, loaded_roster, _provider) =
             persistence::load_group_state(&group_state_path, b"pw")?;
         assert!(loaded_roster.members.is_empty());
+        assert_eq!(loaded_roster.self_name.as_deref(), Some("alice"));
         assert_eq!(loaded_group.members().count(), 1);
 
         std::fs::remove_dir_all(&dir)?;
@@ -176,13 +197,13 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir)?;
 
-        create_group(&dir, b"pw", "my-cell")?;
+        create_group(&dir, b"pw", "my-cell", "alice")?;
         let group_state_path = dir.join(GROUPS_DIR_NAME).join("my-cell.enc");
         let bytes_after_first_create = std::fs::read(&group_state_path)?;
 
         // Second call, same keystore dir and group name: must be
         // refused, not silently clobber the first group's state.
-        let second_result = create_group(&dir, b"pw", "my-cell");
+        let second_result = create_group(&dir, b"pw", "my-cell", "alice");
         assert!(
             matches!(second_result, Err(GroupError::AlreadyExists(_))),
             "expected AlreadyExists, got {second_result:?}"
@@ -203,6 +224,30 @@ mod tests {
             persistence::load_group_state(&group_state_path, b"pw")?;
         assert!(loaded_roster.members.is_empty());
         assert_eq!(loaded_group.members().count(), 1);
+
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    /// An empty self name is refused up front: it would silently
+    /// produce roster syncs with no self entry, recreating the exact
+    /// bootstrap gap TODO B.2.1 exists to close.
+    #[test]
+    fn create_group_rejects_an_empty_self_name()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let dir = std::env::temp_dir().join(format!(
+            "umbra-group-create-test-{}-{}",
+            std::process::id(),
+            "empty-self-name"
+        ));
+        std::fs::create_dir_all(&dir)?;
+
+        let result = create_group(&dir, b"pw", "my-cell", "");
+        assert!(
+            matches!(result, Err(GroupError::Malformed(_))),
+            "expected Malformed, got {result:?}"
+        );
+        assert!(!dir.join(GROUPS_DIR_NAME).join("my-cell.enc").exists());
 
         std::fs::remove_dir_all(&dir)?;
         Ok(())

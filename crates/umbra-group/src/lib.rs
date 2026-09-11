@@ -10,6 +10,9 @@ pub mod identity;
 pub mod inbound;
 pub mod keypackage;
 pub mod persistence;
+pub mod remove;
+pub mod roster_sync;
+pub mod rotate;
 pub mod send;
 
 pub use error::GroupError;
