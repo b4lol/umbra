@@ -47,6 +47,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   scanning with push protection complements it at push time. Local
   pre-push equivalent: `just secrets` (CONTRIBUTING.md verification
   chain step 9).
+- **Group-persistence schema versioning** (TODO B.2.6): the
+  AEAD-encrypted on-disk group-state and key-package blobs now carry an
+  explicit inner schema-version field (`SCHEMA_VERSION = 1`, decoded
+  with a serde default so pre-versioning blobs still decrypt) — but any
+  version other than the current one is rejected with a loud
+  `GroupError::Malformed` at load time rather than being silently
+  misinterpreted; a future v2 gains a clean migration hook. The OpenMLS
+  dependency family (`openmls`, `openmls_libcrux_crypto`,
+  `openmls_traits`, `openmls_memory_storage`) is exact-pinned in the
+  workspace manifest because the serialized `MlsGroup` blob format is
+  not guaranteed stable across upstream releases. Two regression tests
+  prove pre-versioning blobs load as a loud version error, not a silent
+  misdecode.
+- **`umbra-nym send-nym` NDJSON sent confirmation**: `send-nym` now
+  prints the same `{"event":"sent","bytes":N,"frames":N}` success event
+  as `mesh send` / `send --onion` (the byte/frame counts come back from
+  the bridge, not a guess), closing the stdout-contract gap with the
+  other transports. The stale TODO note about a `send-nym`
+  temp-directory leak was removed — the ephemeral connect path is
+  in-memory only and never touches disk.
 
 ### Changed
 - **Repository layout**: topical documentation (ARCHITECTURE,
