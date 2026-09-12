@@ -466,8 +466,12 @@ pub fn run() -> Result<(), CliError> {
         #[cfg(feature = "mesh")]
         Command::ServeMesh { ref wpa_ctrl } => {
             harden_memory()?;
-            let bundle = load_identity(&cli)?;
-            crate::mesh_serve::run(wpa_ctrl, bundle)
+            let keystore = cli
+                .keystore
+                .as_ref()
+                .ok_or_else(|| CliError::Keystore("missing --keystore PATH".into()))?;
+            let passphrase = load_passphrase(&cli)?;
+            crate::mesh_serve::run(wpa_ctrl, keystore, &passphrase)
         }
         Command::ExportPairing => export_pairing(),
         Command::Fingerprint { ref peer } => match peer {

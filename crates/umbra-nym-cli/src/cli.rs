@@ -220,6 +220,52 @@ fn emit_event_fields(event: &str, fields: &[(&str, String)]) -> std::io::Result<
         .and_then(|()| stdout.flush())
 }
 
+/// Escapes a string for inclusion in a JSON string literal — copied from
+/// `umbra-cli`'s `serve.rs` private `json_escape`, per the same
+/// established duplication convention as [`emit_event`].
+fn json_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            other if other.is_control() => {
+                escaped.push_str(&format!("\\u{:04x}", u32::from(other)));
+            }
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
+/// Builds the single NDJSON line for a decrypted group application
+/// message — copied from `umbra-cli`'s `serve.rs` private
+/// `group_text_line`, per the same established duplication convention
+/// as [`emit_event`]. Split out so the exact wire text is unit-testable
+/// without capturing stdout.
+fn group_text_line(group_name: &str, plaintext: &[u8]) -> String {
+    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(plaintext);
+    format!(
+        "{{\"event\":\"group-text\",\"group\":\"{}\",\"data\":\"{b64}\"}}\n",
+        json_escape(group_name)
+    )
+}
+
+/// Emits the `group-text` NDJSON event — copied from `umbra-cli`'s
+/// `serve.rs` private `emit_group_text_event`, per the same established
+/// duplication convention as [`emit_event`].
+fn emit_group_text_event(group_name: &str, plaintext: &[u8]) -> std::io::Result<()> {
+    let line = group_text_line(group_name, plaintext);
+    use std::io::Write as _;
+    let mut stdout = std::io::stdout().lock();
+    stdout
+        .write_all(line.as_bytes())
+        .and_then(|()| stdout.flush())
+}
+
 /// Runs the `send-nym` flow: loads the named peer's record (the
 /// caller's OWN keystore identity is never read — see the module docs
 /// and `SendNym`'s own doc comment), reads one message from `input`
@@ -390,6 +436,12 @@ pub fn run_serve_nym(
 
     let passphrase = load_passphrase(passphrase_file)?;
     let seeds = std::sync::Arc::new(umbra_cli::keystore::load_seeds(keystore, &passphrase)?);
+    // Group state material (TODO B.2.4): mirrors `serve::run`'s step 2b
+    // — captured pre-sandbox, since the inbound group branch decrypts
+    // `groups/*.enc` and `keypackages/store.enc` AFTER the sandbox
+    // installs.
+    let group = umbra_cli::group_inbound::group_context_from_keystore(keystore, &passphrase)?;
+    let (groups_dir, keypackages_dir) = umbra_cli::group_inbound::prepare_group_paths(keystore)?;
 
     // Network selection resolved HERE, on the main thread, BEFORE the
     // Tokio runtime (and its worker threads) exists — see
@@ -409,7 +461,7 @@ pub fn run_serve_nym(
             .create(nym_config)?;
     }
     umbra_cli::sandbox::restrict_filesystem_with_exceptions(
-        &[nym_config],
+        &[nym_config, groups_dir.as_path(), keypackages_dir.as_path()],
         // /etc is READ-ONLY: public resolver/config content only. Same
         // grant, and the same reason, as `run_send_nym` above and as
         // `umbra-cli`'s own `serve.rs`/`tor_send.rs`: `nym-sdk`'s
@@ -432,10 +484,26 @@ pub fn run_serve_nym(
 
         loop {
             let bundle = IdentityBundle::from_seeds(&seeds);
-            match crate::bridge::receive_via_nym(&mut client, bundle).await {
-                Ok(plaintext) => {
+            match crate::bridge::receive_via_nym(&mut client, bundle, &group).await {
+                Ok(umbra_cli::group_inbound::InboundEvent::Text(plaintext)) => {
                     let plaintext = zeroize::Zeroizing::new(plaintext);
                     emit_event("text", Some(&plaintext))?;
+                }
+                Ok(umbra_cli::group_inbound::InboundEvent::GroupText {
+                    group_name,
+                    plaintext,
+                }) => {
+                    let plaintext = zeroize::Zeroizing::new(plaintext);
+                    emit_group_text_event(&group_name, &plaintext)?;
+                }
+                Ok(umbra_cli::group_inbound::InboundEvent::GroupJoined { group_name }) => {
+                    emit_event("group-joined", Some(group_name.as_bytes()))?;
+                }
+                Ok(umbra_cli::group_inbound::InboundEvent::GroupUpdated { group_name }) => {
+                    emit_event("group-updated", Some(group_name.as_bytes()))?;
+                }
+                Ok(umbra_cli::group_inbound::InboundEvent::GroupRosterSynced { group_name }) => {
+                    emit_event("group-roster-synced", Some(group_name.as_bytes()))?;
                 }
                 // The FATAL case: the SDK's own `MixnetClient` stream
                 // ended, so no further message will ever arrive.
@@ -459,6 +527,23 @@ pub fn run_serve_nym(
 mod tests {
     use super::{Cli, Command};
     use clap::Parser as _;
+
+    /// The `group-text` line carries both fields, and a group name with
+    /// JSON metacharacters stays valid JSON (mirrors `umbra-cli`'s
+    /// `serve.rs` identical test for its own copy of this helper).
+    #[test]
+    fn group_text_line_is_well_formed() {
+        let line = super::group_text_line("cell", b"hi");
+        assert_eq!(
+            line,
+            "{\"event\":\"group-text\",\"group\":\"cell\",\"data\":\"aGk\"}\n"
+        );
+        let quoted = super::group_text_line("a\"b\\c\nd", b"");
+        assert!(
+            quoted.starts_with("{\"event\":\"group-text\",\"group\":\"a\\\"b\\\\c\\nd\","),
+            "unescaped group name in: {quoted}"
+        );
+    }
 
     #[test]
     fn send_nym_parses_required_flags() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

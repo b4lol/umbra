@@ -130,6 +130,16 @@ pub fn restrict_filesystem_with_exceptions(
 /// exception grant must not gain `MakeSock` just because mesh needs it
 /// elsewhere.
 ///
+/// `group_state_dirs` (TODO B.2.4): zero or more additional directories
+/// granted the same read-write rights `restrict_filesystem_with_exceptions`
+/// grants its own `read_write` list (create/write/remove a regular file
+/// via a same-directory temp-file-plus-rename — not `MakeSock`, which
+/// stays scoped to `own_ctrl_dir` only). `serve-mesh` passes
+/// `<keystore dir>/groups` and `<keystore dir>/keypackages`
+/// (`serve::prepare_group_paths`) here so its inbound group-frame branch
+/// can persist decrypted group state; `send --mesh` (which never
+/// touches group state) passes an empty slice.
+///
 /// # Errors
 ///
 /// Returns [`CliError::Sandbox`] if the ruleset cannot be created, an
@@ -138,6 +148,7 @@ pub fn restrict_filesystem_with_exceptions(
 pub fn restrict_filesystem_for_mesh(
     wpa_ctrl_dir: &std::path::Path,
     own_ctrl_dir: &std::path::Path,
+    group_state_dirs: &[&std::path::Path],
 ) -> Result<landlock::RestrictionStatus, CliError> {
     let created = Ruleset::default()
         .set_compatibility(CompatLevel::HardRequirement)
@@ -227,6 +238,30 @@ pub fn restrict_filesystem_for_mesh(
     created = created
         .add_rule(PathBeneath::new(sysfs_devices_fd, sysfs_rights))
         .map_err(CliError::Sandbox)?;
+
+    // Caller-supplied group-state directories (TODO B.2.4): same rights
+    // as `restrict_filesystem_with_exceptions`'s `tor_grant` — regular
+    // files and directories only, no `MakeSock`/`Execute`/`IoctlDev`.
+    let group_state_rights = AccessFs::ReadFile
+        | AccessFs::WriteFile
+        | AccessFs::ReadDir
+        | AccessFs::MakeDir
+        | AccessFs::MakeReg
+        | AccessFs::RemoveDir
+        | AccessFs::RemoveFile
+        | AccessFs::Truncate
+        | AccessFs::Refer;
+    for path in group_state_dirs {
+        let fd = PathFd::new(path).map_err(|err| {
+            CliError::Io(std::io::Error::other(format!(
+                "sandbox exception path {}: {err}",
+                path.display()
+            )))
+        })?;
+        created = created
+            .add_rule(PathBeneath::new(fd, group_state_rights))
+            .map_err(CliError::Sandbox)?;
+    }
 
     let status = created.restrict_self()?;
     Ok(status)

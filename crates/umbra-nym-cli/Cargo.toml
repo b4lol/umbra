@@ -63,3 +63,14 @@ libc = "0.2.189"
 zeroize = { version = "1.9.0", features = ["derive", "alloc", "simd"] }
 futures = "0.3"
 base64 = "0.22.1"
+
+[dev-dependencies]
+# TODO B.2.4: the group-inbound hermetic test builds a REAL Welcome
+# frame (`umbra_group::create`/`add`/`keypackage`) to drive through
+# `bridge::receive_via_nym`'s group branch, mirroring `umbra-cli`'s own
+# `mesh_serve.rs` test. Test-only: `umbra-group` has no SQLite/Tor
+# dependency of its own (it depends on `openmls`/`openmls_libcrux_crypto`,
+# not the sqlite-provider ADR-032/033 ruled out), so this does not
+# reintroduce the `links = "sqlite3"` conflict this crate's own
+# `[package]` doc comment explains splitting it off to avoid.
+umbra-group = { path = "../umbra-group" }

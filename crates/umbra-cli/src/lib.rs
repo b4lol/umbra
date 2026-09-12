@@ -7,6 +7,7 @@
 pub mod cli;
 pub mod clipboard;
 pub mod group;
+pub mod group_inbound;
 pub mod keystore;
 #[cfg(feature = "mesh")]
 pub mod mesh_send;

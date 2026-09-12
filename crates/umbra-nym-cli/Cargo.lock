@@ -9397,6 +9397,7 @@ dependencies = [
  "tokio",
  "umbra-cli",
  "umbra-crypto",
+ "umbra-group",
  "umbra-hardware",
  "umbra-net",
  "zeroize",

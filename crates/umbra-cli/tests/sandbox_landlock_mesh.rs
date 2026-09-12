@@ -27,7 +27,7 @@ fn can_create_and_connect_a_socket_in_the_own_ctrl_dir()
 
     let handle = std::thread::spawn(
         move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-            restrict_filesystem_for_mesh(&wpa_dir, &own_dir)?;
+            restrict_filesystem_for_mesh(&wpa_dir, &own_dir, &[])?;
 
             // MakeSock + WriteFile on own_dir: binding a new UnixDatagram
             // there must succeed under the restriction.
@@ -58,7 +58,7 @@ fn cannot_create_a_socket_outside_the_granted_dirs()
 
     let handle = std::thread::spawn(
         move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-            restrict_filesystem_for_mesh(&wpa_dir, &own_dir)?;
+            restrict_filesystem_for_mesh(&wpa_dir, &own_dir, &[])?;
 
             let sock_path = outside_dir.join("client.sock");
             let socket = std::os::unix::net::UnixDatagram::bind(&sock_path);
@@ -92,7 +92,7 @@ fn can_read_and_write_in_the_wpa_ctrl_dir() -> Result<(), Box<dyn std::error::Er
 
     let handle = std::thread::spawn(
         move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-            restrict_filesystem_for_mesh(&wpa_dir, &own_dir)?;
+            restrict_filesystem_for_mesh(&wpa_dir, &own_dir, &[])?;
 
             // We must be able to connect to (open for write) the
             // pre-existing socket-substitute file inside wpa_dir, i.e.
@@ -137,7 +137,7 @@ fn can_read_procfs_and_sysfs_paths_the_mesh_transport_needs()
 
     let handle = std::thread::spawn(
         move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-            restrict_filesystem_for_mesh(&wpa_dir, &own_dir)?;
+            restrict_filesystem_for_mesh(&wpa_dir, &own_dir, &[])?;
 
             let if_inet6 = std::fs::read_to_string("/proc/net/if_inet6");
             assert!(
@@ -149,6 +149,75 @@ fn can_read_procfs_and_sysfs_paths_the_mesh_transport_needs()
             assert!(
                 ifindex.is_ok(),
                 "must be able to read /sys/class/net/lo/ifindex: {ifindex:?}"
+            );
+            Ok(())
+        },
+    );
+    match handle.join() {
+        Ok(result) => result,
+        Err(_panic) => Err("worker thread panicked".into()),
+    }
+}
+
+/// TODO B.2.4: the mesh transport's inbound group-cell wiring writes
+/// `<keystore dir>/groups/*.enc` and `keypackages/store.enc` the same
+/// way the Tor path does (`serve::prepare_group_paths` /
+/// `restrict_filesystem_with_exceptions`'s `tor_grant`), so this
+/// function must accept the same kind of read-write directory grant for
+/// them — same rights as the Tor exception (create/write/remove a
+/// regular file via a same-directory temp-file-plus-rename), not the
+/// narrower wpa/own-ctrl grants above (no `MakeSock` needed here).
+#[test]
+fn can_read_and_write_a_granted_group_state_dir()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let wpa_dir = temp_dir("wpa5");
+    let own_dir = temp_dir("own5");
+    let groups_dir = temp_dir("groups5");
+    std::fs::create_dir_all(&wpa_dir)?;
+    std::fs::create_dir_all(&own_dir)?;
+    std::fs::create_dir_all(&groups_dir)?;
+
+    let handle = std::thread::spawn(
+        move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            restrict_filesystem_for_mesh(&wpa_dir, &own_dir, &[groups_dir.as_path()])?;
+
+            let file_path = groups_dir.join("cell.enc");
+            let write_result = std::fs::write(&file_path, b"group state");
+            assert!(
+                write_result.is_ok(),
+                "must be able to create a file in a granted group-state dir: {write_result:?}"
+            );
+            Ok(())
+        },
+    );
+    match handle.join() {
+        Ok(result) => result,
+        Err(_panic) => Err("worker thread panicked".into()),
+    }
+}
+
+/// The mirror of the test above: a group-state-shaped directory that was
+/// NOT passed in the grant list must stay denied, same as any other path
+/// outside the sandbox's exceptions.
+#[test]
+fn cannot_write_an_ungranted_group_state_dir()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let wpa_dir = temp_dir("wpa6");
+    let own_dir = temp_dir("own6");
+    let groups_dir = temp_dir("groups6");
+    std::fs::create_dir_all(&wpa_dir)?;
+    std::fs::create_dir_all(&own_dir)?;
+    std::fs::create_dir_all(&groups_dir)?;
+
+    let handle = std::thread::spawn(
+        move || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            restrict_filesystem_for_mesh(&wpa_dir, &own_dir, &[])?;
+
+            let file_path = groups_dir.join("cell.enc");
+            let write_result = std::fs::write(&file_path, b"group state");
+            assert!(
+                write_result.is_err(),
+                "must NOT be able to write an ungranted group-state dir"
             );
             Ok(())
         },

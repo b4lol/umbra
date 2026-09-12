@@ -92,7 +92,13 @@ pub async fn send_via_nym<T: NymTransport>(
 }
 
 /// Waits for exactly one Nym message from `transport`, then runs it
-/// through `receive_message` over an in-memory duplex.
+/// through `receive_message` (two-party) or, TODO B.2.4,
+/// `umbra_cli::group_inbound::handle_group_frame` (a group cell frame) over an
+/// in-memory duplex — reusing `umbra-cli`'s own transport-agnostic
+/// group-frame parsing/processing rather than duplicating it, the same
+/// way `umbra-cli`'s `mesh_serve.rs` does (see that module's docs):
+/// this is security-sensitive, unauthenticated-input parsing code, and
+/// a second copy would be a second place for the two to drift apart.
 ///
 /// The inbound message is length-checked against [`DUPLEX_BUF`] BEFORE
 /// anything is written, and rejected outright if it is larger. This is
@@ -106,16 +112,24 @@ pub async fn send_via_nym<T: NymTransport>(
 /// could wedge `serve-nym`'s receive loop permanently by sending one
 /// oversized message. `serve-nym` already treats a `receive_via_nym`
 /// error as recoverable (logged to stderr, loop continues), so the
-/// rejection degrades correctly.
+/// rejection degrades correctly. Honest scope: this same ceiling now
+/// also bounds a group frame, whose own two length-prefixed fields are
+/// independently capped much higher (1 MiB each, `umbra_cli::group_inbound`) —
+/// in practice neither a `Welcome` nor an application message (itself
+/// capped at 64 KiB, `umbra_group::MAX_GROUP_MESSAGE`) for the group
+/// sizes this project currently tests approaches [`DUPLEX_BUF`], but a
+/// future very large cell's `Welcome` could; no protocol change is in
+/// scope here to address that.
 ///
 /// # Errors
 ///
 /// Returns [`TransportError`] on Nym receive failure, an oversized
-/// inbound message, or handshake processing failure.
+/// inbound message, or handshake/group-frame processing failure.
 pub async fn receive_via_nym<T: NymTransport>(
     transport: &mut T,
     identity: IdentityBundle,
-) -> Result<Vec<u8>, TransportError> {
+    group: &umbra_cli::group_inbound::GroupInboundContext,
+) -> Result<umbra_cli::group_inbound::InboundEvent, TransportError> {
     let framed = transport.recv().await?;
     if framed.len() > DUPLEX_BUF {
         return Err(TransportError::Nym(
@@ -131,18 +145,18 @@ pub async fn receive_via_nym<T: NymTransport>(
         .shutdown()
         .await
         .map_err(|e| TransportError::Nym(format!("duplex shutdown: {e}")))?;
-    // Leading connection-type marker (TODO B.2 groundwork): no group
-    // path exists yet, so anything other than a PQXDH handshake is
-    // treated as a receive failure.
+    // Leading connection-type marker: two-party PQXDH handshake, or a
+    // group (PQ-MLS) frame (TODO B.2.4).
     match peek_connection_type(&mut reader).await? {
-        ConnectionType::PqxdhHandshake => {}
+        ConnectionType::PqxdhHandshake => receive_message(identity, &mut reader)
+            .await
+            .map(umbra_cli::group_inbound::InboundEvent::Text),
         ConnectionType::GroupFrame => {
-            return Err(TransportError::Nym(
-                "group frames are not yet handled by the Nym bridge".into(),
-            ));
+            umbra_cli::group_inbound::handle_group_frame(&mut reader, group)
+                .await
+                .map_err(TransportError::Nym)
         }
     }
-    receive_message(identity, &mut reader).await
 }
 
 #[cfg(test)]
@@ -168,11 +182,33 @@ mod tests {
         Ok((bundle, keys))
     }
 
+    /// A fresh, unique-per-test `GroupInboundContext` rooted at a temp
+    /// directory — this bridge's group branch has no group of its own
+    /// to decrypt in these PQXDH-only tests, so an empty, otherwise
+    /// unused directory is all any of them need.
+    fn test_group_context(
+        label: &str,
+    ) -> (
+        std::path::PathBuf,
+        umbra_cli::group_inbound::GroupInboundContext,
+    ) {
+        let dir = std::env::temp_dir().join(format!(
+            "umbra-nym-cli-bridge-test-{}-{label}",
+            std::process::id()
+        ));
+        let group = umbra_cli::group_inbound::GroupInboundContext {
+            keystore_dir: dir.clone(),
+            passphrase: zeroize::Zeroizing::new(b"unused-in-these-tests".to_vec()),
+        };
+        (dir, group)
+    }
+
     #[tokio::test]
     async fn round_trips_a_pqxdh_message_through_two_fakes(
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let addr = NymPeerAddr::parse(crate::addr::tests_support::SAMPLE_VALID_ADDRESS)?;
         let (b_identity, b_peer_keys) = identity_and_peer_keys()?;
+        let (_dir, group) = test_group_context("round-trip");
 
         let transport_a = FakeNymTransport::new(addr.clone());
         let mut transport_b = FakeNymTransport::new(addr.clone());
@@ -192,7 +228,10 @@ mod tests {
             .ok_or("nothing was sent")?;
         transport_b.inbox.push_back(sent.1);
 
-        let received = receive_via_nym(&mut transport_b, b_identity).await?;
+        let event = receive_via_nym(&mut transport_b, b_identity, &group).await?;
+        let umbra_cli::group_inbound::InboundEvent::Text(received) = event else {
+            return Err("expected a Text event".into());
+        };
         assert_eq!(received, plaintext.to_vec());
         Ok(())
     }
@@ -214,10 +253,11 @@ mod tests {
             .inbox
             .push_back(vec![0u8; DUPLEX_BUF.saturating_add(1)]);
         let (identity, _peer_keys) = identity_and_peer_keys()?;
+        let (_dir, group) = test_group_context("oversized");
 
         let outcome = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            receive_via_nym(&mut transport, identity),
+            receive_via_nym(&mut transport, identity, &group),
         )
         .await
         .map_err(|_elapsed| "receive_via_nym hung on an oversized inbound message")?;
@@ -236,10 +276,11 @@ mod tests {
         let mut transport = FakeNymTransport::new(addr);
         transport.inbox.push_back(vec![0u8; DUPLEX_BUF]);
         let (identity, _peer_keys) = identity_and_peer_keys()?;
+        let (_dir, group) = test_group_context("exact-size");
 
         let outcome = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            receive_via_nym(&mut transport, identity),
+            receive_via_nym(&mut transport, identity, &group),
         )
         .await
         .map_err(|_elapsed| "receive_via_nym hung on an exactly-buffer-sized message")?;
@@ -253,7 +294,118 @@ mod tests {
         let addr = NymPeerAddr::parse(crate::addr::tests_support::SAMPLE_VALID_ADDRESS)?;
         let mut transport = FakeNymTransport::new(addr);
         let (identity, _peer_keys) = identity_and_peer_keys()?;
-        assert!(receive_via_nym(&mut transport, identity).await.is_err());
+        let (_dir, group) = test_group_context("transport-error");
+        assert!(receive_via_nym(&mut transport, identity, &group)
+            .await
+            .is_err());
+        Ok(())
+    }
+
+    /// The future type returned by [`single_use_stream`]'s closure
+    /// (mirrors `umbra-cli`'s `serve.rs`/`mesh_serve.rs` and
+    /// `umbra-group`'s own test helpers of the same shape).
+    type ConnectFuture = std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        Box<dyn tokio::io::AsyncWrite + Unpin + Send>,
+                        umbra_group::GroupError,
+                    >,
+                > + Send,
+        >,
+    >;
+
+    /// Hands out one end of a `tokio::io::duplex` pair from an `Fn`
+    /// closure (mirrors `umbra-cli`'s identical helper).
+    fn single_use_stream(
+        stream: tokio::io::DuplexStream,
+    ) -> impl Fn(&umbra_group::delivery::PeerTransportAddress) -> ConnectFuture {
+        let slot = std::sync::Arc::new(tokio::sync::Mutex::new(Some(stream)));
+        move |_address: &umbra_group::delivery::PeerTransportAddress| {
+            let slot = std::sync::Arc::clone(&slot);
+            Box::pin(async move {
+                let taken = slot.lock().await.take().ok_or_else(|| {
+                    umbra_group::GroupError::Malformed(
+                        "connect() called more than once in this test".into(),
+                    )
+                })?;
+                Ok(Box::new(taken) as Box<dyn tokio::io::AsyncWrite + Unpin + Send>)
+            })
+        }
+    }
+
+    /// A real inbound group Welcome, delivered as one whole Nym message
+    /// (marker byte included, exactly as `delivery.rs` writes it), routes
+    /// through the bridge's group branch to `GroupJoined` — proving the
+    /// Nym transport (not just `serve.rs`'s Tor path or `mesh_serve.rs`)
+    /// reaches the shared, transport-agnostic group-frame processing.
+    #[tokio::test]
+    async fn receive_via_nym_routes_a_real_welcome_to_a_joined_event(
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use tokio::io::AsyncReadExt as _;
+        use umbra_group::delivery::PeerTransportAddress;
+
+        let alice_dir = std::env::temp_dir().join(format!(
+            "umbra-nym-cli-bridge-test-{}-welcome-alice",
+            std::process::id()
+        ));
+        let bob_dir = std::env::temp_dir().join(format!(
+            "umbra-nym-cli-bridge-test-{}-welcome-bob",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&alice_dir)?;
+        std::fs::create_dir_all(&bob_dir)?;
+        let (alice_pw, bob_pw) = (b"alice-pw".as_slice(), b"bob-pw".as_slice());
+
+        umbra_group::create::create_group(&alice_dir, alice_pw, "cell", "alice")?;
+        let bob_kp = umbra_group::keypackage::export_keypackage(&bob_dir, bob_pw)?;
+        let (bob_member_side, mut bob_observer_side) = tokio::io::duplex(64 * 1024);
+        let connect = single_use_stream(bob_member_side);
+        let peer_lookup = move |name: &str| {
+            if name == "bob" {
+                Some(PeerTransportAddress::Nym("bob-nym".to_string()))
+            } else {
+                None
+            }
+        };
+        umbra_group::add::add_member(
+            &alice_dir,
+            alice_pw,
+            "cell",
+            "bob",
+            &bob_kp,
+            peer_lookup,
+            connect,
+        )
+        .await?;
+        // The whole delivered connection (marker byte included) is
+        // exactly what `receive_via_nym` expects as one Nym message —
+        // the same shape `send_via_nym` builds for the PQXDH path.
+        let mut welcome = Vec::new();
+        bob_observer_side.read_to_end(&mut welcome).await?;
+
+        let addr = NymPeerAddr::parse(crate::addr::tests_support::SAMPLE_VALID_ADDRESS)?;
+        let mut transport = FakeNymTransport::new(addr);
+        transport.inbox.push_back(welcome);
+        let group = umbra_cli::group_inbound::GroupInboundContext {
+            keystore_dir: bob_dir.clone(),
+            passphrase: zeroize::Zeroizing::new(bob_pw.to_vec()),
+        };
+
+        let event = receive_via_nym(&mut transport, IdentityBundle::generate(), &group).await?;
+        let umbra_cli::group_inbound::InboundEvent::GroupJoined { group_name } = event else {
+            return Err("expected a GroupJoined event".into());
+        };
+        assert!(
+            bob_dir
+                .join("groups")
+                .join(format!("{group_name}.enc"))
+                .exists(),
+            "the joined group's state file must have been persisted"
+        );
+
+        std::fs::remove_dir_all(&alice_dir)?;
+        std::fs::remove_dir_all(&bob_dir)?;
         Ok(())
     }
 }

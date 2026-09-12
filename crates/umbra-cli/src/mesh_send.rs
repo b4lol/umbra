@@ -113,6 +113,7 @@ pub fn run(
                 .unwrap_or_else(|| std::path::Path::new("/")),
         ),
         &own_ctrl_dir,
+        &[],
     )?;
     crate::sandbox::restrict_syscalls_mesh()?;
 

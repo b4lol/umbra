@@ -9,6 +9,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [Unreleased]
 
 ### Added
+- **Mesh/Nym transport group-inbound wiring** (TODO B.2.4): `umbra
+  serve-mesh` and `umbra-nym serve-nym` can now receive PQ-MLS group
+  cell frames (Welcome/Commit/application messages) — previously only
+  the Tor `umbra serve` path could. Extracted the transport-agnostic
+  group-frame parsing/processing (`GroupInboundContext`, `InboundEvent`,
+  `handle_group_frame`) out of `serve.rs` into a new, feature-ungated
+  `umbra-cli::group_inbound` module, since it was found gated behind
+  the `tor` feature — unreachable from a mesh-only build or from
+  `umbra-nym-cli`, which deliberately builds `umbra-cli` with neither
+  `tor` nor `mesh` enabled. `mesh_serve.rs` grants the same
+  `groups`/`keypackages` sandbox exception the Tor path already had;
+  `umbra-nym-cli`'s bridge now returns a full inbound-event enum instead
+  of raw plaintext bytes. Each transport keeps its own NDJSON emitters
+  (`group-text`/`group-joined`/`group-updated`/`group-roster-synced`),
+  matching the established per-transport duplication convention. One
+  hermetic test per transport, each driving a real Welcome/application
+  frame through the transport's own entry point.
 - **Group-mode follow-up increment** (TODO B.2.1/B.2.2/B.2.3, ADR-033
   addendum): `RosterSync` — typed application-level group payloads (tag
   `0x00` user text / `0x01` roster sync) riding the group's own AEAD
