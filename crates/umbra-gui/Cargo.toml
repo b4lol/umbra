@@ -10,7 +10,14 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[[bin]]
+name = "umbra-gui"
+path = "src/main.rs"
+
 [dependencies]
-# GTK4/Libadwaita dependencies are intentionally NOT declared yet: the GUI is
-# v2+ scope (ADR-027) and adding gtk4-rs would drag system build requirements
-# into the MVP workspace. This crate is the reserved module slot (TODO B.3).
+gtk4 = "0.11.4"
+# Aliased to `adw` (its own conventional short name throughout the
+# gtk4-rs/libadwaita ecosystem, matching its `adw::prelude`/`adw::Application`
+# usage in main.rs) since the crate's own library name is `libadwaita`, not
+# `adw`.
+adw = { package = "libadwaita", version = "0.9.2" }
