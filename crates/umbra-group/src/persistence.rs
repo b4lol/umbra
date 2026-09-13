@@ -636,7 +636,7 @@ mod tests {
         let envelope = keystore::seal_envelope(&key, &plaintext)?;
         let mut file = MAGIC.to_vec();
         file.extend_from_slice(&salt);
-        file.extend_from_slice(&*envelope);
+        file.extend_from_slice(&envelope);
         std::fs::write(&path, &file)?;
 
         match load_group_state_with_params(&path, b"pw", TEST_M_KIB, TEST_T_COST, TEST_P_COST) {

@@ -524,7 +524,7 @@ mod tests {
         let envelope = keystore::seal_envelope(&key, &plaintext)?;
         let mut file = MAGIC.to_vec();
         file.extend_from_slice(&salt);
-        file.extend_from_slice(&*envelope);
+        file.extend_from_slice(&envelope);
         std::fs::write(&path, &file)?;
 
         match load_keypackage_storage_with_params(&path, b"pw", 8192, 2, 1) {
