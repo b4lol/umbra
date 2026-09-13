@@ -290,11 +290,26 @@ const MAGIC_HW: [u8; 5] = *b"UMKS\x02";
 /// without physical access to the token — while a fixed challenge avoids
 /// threading a caller-generated salt through `save` before the salt
 /// that normally protects the KDF even exists.
+///
+/// This has a real cost, though: because the challenge never varies, the
+/// token's response `R` to it is effectively a permanent, machine-wide
+/// pepper with NO rotation — every hardware-gated keystore on this token
+/// computes its KDF input from the SAME `R` (only the salt and
+/// passphrase vary per file). A single capture of `R` (e.g. a memory
+/// scrape during any one unlock) therefore permanently degrades every
+/// past AND future hardware-gated keystore on that token to
+/// passphrase-only strength, not just the one file that was unlocked
+/// when it leaked. This is a deliberate trade for API simplicity,
+/// accepted for this increment. A per-file challenge — e.g. by taking a
+/// `impl FnOnce(&[u8]) -> Result<[u8; 32], _>` callback here instead of
+/// a precomputed `&[u8]`, so the freshly-generated salt itself could
+/// serve as the challenge — is a real future hardening option (tracked
+/// as a TODO), not implemented here.
 pub const HARDWARE_KEY_CHALLENGE: &[u8] = b"umbra-keystore-hardware-key-challenge-v1";
 
 /// Detects whether the keystore file at `path` requires a hardware-key
-/// HMAC response to unlock ([`MAGIC_HW`]) rather than a plain
-/// passphrase ([`MAGIC`]) — reads only the 5-byte magic header; no
+/// HMAC response to unlock (`MAGIC_HW`) rather than a plain
+/// passphrase (`MAGIC`) — inspects only the 5-byte magic header; no
 /// decryption is attempted.
 ///
 /// # Errors
@@ -336,6 +351,17 @@ fn combined_kdf_input(passphrase: &[u8], hmac_response: &[u8]) -> Zeroizing<Vec<
 /// output — this function does not compute it and has no dependency on
 /// `umbra-hwkey`.
 ///
+/// # Security
+///
+/// `hmac_response` is long-lived, high-value secret material — the
+/// caller MUST hold it in a `zeroize::Zeroizing` buffer and wipe it
+/// immediately after use. This matters more than for a typical secret:
+/// per [`HARDWARE_KEY_CHALLENGE`]'s documentation, the challenge is
+/// fixed, so this same response value gates EVERY hardware-key-gated
+/// keystore on this token, not just the one being saved here. A leaked
+/// `hmac_response` is a permanent, machine-wide compromise, not a
+/// one-file one.
+///
 /// # Errors
 ///
 /// Returns [`CliError`] for KDF, AEAD, or I/O failures.
@@ -371,6 +397,11 @@ pub fn save_with_hardware_key_with_params(
     t_cost: u32,
     p_cost: u32,
 ) -> Result<(), CliError> {
+    if hmac_response.len() != 32 {
+        return Err(CliError::Keystore(
+            "hardware-key response must be 32 bytes".into(),
+        ));
+    }
     let mut salt = [0u8; KS_SALT_LEN];
     umbra_crypto::rng::fill(&mut salt).map_err(CliError::Crypto)?;
     let combined = combined_kdf_input(passphrase, hmac_response);
@@ -418,6 +449,17 @@ pub fn save_with_hardware_key_with_params(
 /// keystore at `path`, given the correct `passphrase` and the correct
 /// `hmac_response` for [`HARDWARE_KEY_CHALLENGE`].
 ///
+/// # Security
+///
+/// `hmac_response` is long-lived, high-value secret material — the
+/// caller MUST hold it in a `zeroize::Zeroizing` buffer and wipe it
+/// immediately after use. This matters more than for a typical secret:
+/// per [`HARDWARE_KEY_CHALLENGE`]'s documentation, the challenge is
+/// fixed, so this same response value gates EVERY hardware-key-gated
+/// keystore on this token, not just the one being loaded here. A leaked
+/// `hmac_response` is a permanent, machine-wide compromise, not a
+/// one-file one.
+///
 /// # Errors
 ///
 /// Returns [`CliError::Keystore`] if the file is a plain (non-hardware-
@@ -453,6 +495,11 @@ pub fn load_with_hardware_key_with_params(
     t_cost: u32,
     p_cost: u32,
 ) -> Result<IdentityBundle, CliError> {
+    if hmac_response.len() != 32 {
+        return Err(CliError::Keystore(
+            "hardware-key response must be 32 bytes".into(),
+        ));
+    }
     let raw = fs::read(path)
         .map_err(|e| CliError::Keystore(format!("cannot read {}: {e}", path.display())))?;
     let header = raw
