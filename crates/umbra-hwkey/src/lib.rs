@@ -14,6 +14,20 @@
 //! `umbra-gui` already applies to its own GTK4/Libadwaita dependency
 //! (though unlike GTK4, `cryptoki` needs no build-time system library
 //! at all, so this crate needs no Cargo feature gate).
+//!
+//! See ADR-034 in `docs/DECISIONS.md` for this crate's own ADR-011
+//! scoped deviation (loading a third-party PKCS#11 module).
+//!
+//! # Concurrency
+//!
+//! `C_Initialize`/`C_Finalize` are process-global PKCS#11 state, and
+//! this crate's own explicit `finalize()` calls are the only thing
+//! tearing that state down (`cryptoki` 0.12.0 has no `Drop` impl for
+//! `Pkcs11`). [`generate_hmac_key`] and [`challenge_response`] both
+//! serialize on a single process-wide mutex ([`PKCS11_LOCK`]) for their
+//! entire call, so calling them from multiple threads is safe, but
+//! concurrent calls block on each other rather than running in
+//! parallel.
 
 mod error;
 pub use error::HwKeyError;
@@ -26,6 +40,34 @@ use cryptoki::object::{Attribute, ObjectClass, ObjectHandle};
 use cryptoki::session::{Session, UserType};
 use cryptoki::slot::Slot;
 use cryptoki::types::AuthPin;
+
+/// Guards this crate's PKCS#11 operations: `C_Initialize`/`C_Finalize`
+/// are process-global state (`cryptoki` 0.12.0 has no `Drop` impl for
+/// `Pkcs11` — nothing tears this down except this crate's own explicit
+/// `finalize()` calls), so two concurrent calls into this crate from
+/// different threads could otherwise race: one thread's `finalize()`
+/// tearing down the module while another is still mid-operation. This
+/// mutex is held for an ENTIRE call to [`generate_hmac_key`] or
+/// [`challenge_response`], from `Pkcs11::new` through `finalize()` —
+/// serializing this crate's PKCS#11 usage process-wide is the
+/// deliberately simple, provably-correct choice; a future increment
+/// wiring this into a multithreaded consumer (`umbra-gui`'s GTK main
+/// loop plus a worker thread for any blocking token operation) MUST
+/// NOT bypass this lock by calling into `cryptoki` directly.
+static PKCS11_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Acquires [`PKCS11_LOCK`], recovering from poisoning rather than
+/// propagating a panic: this lock only guards call-ordering (nothing
+/// enters an inconsistent SHARED state if a prior call panicked while
+/// holding it — each call's own `Pkcs11`/`Session` are entirely local),
+/// so one panicking caller must not permanently block every later
+/// caller from using this crate.
+fn lock_pkcs11() -> std::sync::MutexGuard<'static, ()> {
+    match PKCS11_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
 
 /// Finds the first initialized token's slot. This crate does not yet
 /// support choosing among multiple simultaneously-present tokens — a
@@ -83,10 +125,12 @@ fn challenge_response_on_session(
         .ok_or_else(|| HwKeyError::KeyNotFound(label.to_string()))?;
 
     let signature = session.sign(&Mechanism::Sha256Hmac, handle, challenge)?;
+    let length = signature.len();
+    let signature = zeroize::Zeroizing::new(signature);
     let output: [u8; 32] = signature
-        .clone()
+        .as_slice()
         .try_into()
-        .map_err(|_| HwKeyError::UnexpectedSignatureLength(signature.len()))?;
+        .map_err(|_| HwKeyError::UnexpectedSignatureLength(length))?;
     Ok(output)
 }
 
@@ -102,7 +146,15 @@ fn challenge_response_on_session(
 ///
 /// Returns [`HwKeyError`] if the PKCS#11 module cannot be loaded, no
 /// token is present, the PIN is rejected, or key generation fails.
+///
+/// # Concurrency
+///
+/// Serializes with every other call into this crate via a process-wide
+/// lock — safe to call from multiple threads, but concurrent calls
+/// block on each other rather than running in parallel (see
+/// [`PKCS11_LOCK`]).
 pub fn generate_hmac_key(module_path: &Path, pin: &[u8], label: &str) -> Result<(), HwKeyError> {
+    let _guard = lock_pkcs11();
     let pkcs11 = Pkcs11::new(module_path)?;
     pkcs11.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))?;
 
@@ -133,12 +185,20 @@ pub fn generate_hmac_key(module_path: &Path, pin: &[u8], label: &str) -> Result<
 /// Returns [`HwKeyError`] if the PKCS#11 module cannot be loaded, no
 /// token is present, the PIN is rejected, the labeled key cannot be
 /// found, or the sign operation fails.
+///
+/// # Concurrency
+///
+/// Serializes with every other call into this crate via a process-wide
+/// lock — safe to call from multiple threads, but concurrent calls
+/// block on each other rather than running in parallel (see
+/// [`PKCS11_LOCK`]).
 pub fn challenge_response(
     module_path: &Path,
     pin: &[u8],
     label: &str,
     challenge: &[u8],
 ) -> Result<[u8; 32], HwKeyError> {
+    let _guard = lock_pkcs11();
     let pkcs11 = Pkcs11::new(module_path)?;
     pkcs11.initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))?;
 

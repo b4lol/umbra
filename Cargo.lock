@@ -7920,6 +7920,7 @@ version = "1.0.0-alpha.3"
 dependencies = [
  "cryptoki",
  "thiserror 2.0.20",
+ "zeroize",
 ]
 
 [[package]]

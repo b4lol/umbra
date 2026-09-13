@@ -13,3 +13,4 @@ workspace = true
 [dependencies]
 cryptoki = "0.12"
 thiserror.workspace = true
+zeroize.workspace = true

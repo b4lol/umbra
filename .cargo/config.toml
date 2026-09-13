@@ -17,4 +17,12 @@ checkall = "check --workspace --all-targets"
 # mechanism) rather than via `std::env::set_var` in test code, because
 # that call is `unsafe` on this toolchain and this workspace forbids
 # `unsafe_code` even in tests.
-SOFTHSM2_CONF = { value = "crates/umbra-hwkey/tests/fixtures/softhsm2-test.conf", relative = true }
+#
+# `force = true` is required, not cosmetic: without it, Cargo's default
+# lets an ALREADY-set `SOFTHSM2_CONF` in a developer's own shell win
+# over this fixture path, silently breaking the test's hermeticity —
+# the test would then touch whatever ambient SoftHSM2 token store that
+# shell variable pointed at (potentially a developer's real, populated
+# token store, since `first_token_slot` just takes slot `[0]`) instead
+# of the isolated fixture one, while still reporting `ok`.
+SOFTHSM2_CONF = { value = "crates/umbra-hwkey/tests/fixtures/softhsm2-test.conf", relative = true, force = true }
