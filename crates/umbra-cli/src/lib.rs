@@ -7,6 +7,8 @@
 pub mod cli;
 pub mod clipboard;
 pub mod group;
+#[cfg(test)]
+pub(crate) mod hwkey_test_support;
 pub mod keystore;
 #[cfg(feature = "mesh")]
 pub mod mesh_send;

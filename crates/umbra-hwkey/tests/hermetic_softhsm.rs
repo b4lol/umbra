@@ -15,14 +15,28 @@
 //! contained to this one file, and having exactly one test function in
 //! it removes the hazard entirely.
 
-use std::path::Path;
 use std::process::Command;
 
-/// The SoftHSM2 PKCS#11 module path on this (Fedora-family) host —
-/// installed via `dnf install softhsm` (see this repo's
-/// `CONTRIBUTING.md` for the full local dev-setup list, TODO B.3
-/// addition).
-const SOFTHSM2_MODULE: &str = "/usr/lib64/pkcs11/libsofthsm2.so";
+/// Locates the SoftHSM2 PKCS#11 module: an explicit
+/// `UMBRA_SOFTHSM2_MODULE` env var override first, then the common
+/// Fedora (`/usr/lib64/pkcs11/`) and Debian/Ubuntu (`/usr/lib/softhsm/`)
+/// install paths, in that order — installed via `dnf install softhsm`
+/// or `apt-get install softhsm2` respectively (see this repo's
+/// `CONTRIBUTING.md`).
+fn softhsm2_module_path() -> Result<std::path::PathBuf, Box<dyn std::error::Error + Send + Sync>> {
+    if let Ok(path) = std::env::var("UMBRA_SOFTHSM2_MODULE") {
+        return Ok(std::path::PathBuf::from(path));
+    }
+    for candidate in [
+        "/usr/lib64/pkcs11/libsofthsm2.so",
+        "/usr/lib/softhsm/libsofthsm2.so",
+    ] {
+        if std::path::Path::new(candidate).exists() {
+            return Ok(std::path::PathBuf::from(candidate));
+        }
+    }
+    Err("no SoftHSM2 PKCS#11 module found at any known path; set UMBRA_SOFTHSM2_MODULE".into())
+}
 
 /// The tokendir `tests/fixtures/softhsm2-test.conf` points at — kept as
 /// a constant here so a mismatch between the two is a compile-adjacent,
@@ -60,7 +74,8 @@ fn generate_and_use_a_real_softhsm2_token() -> Result<(), Box<dyn std::error::Er
         .into());
     }
 
-    let module = Path::new(SOFTHSM2_MODULE);
+    let module = softhsm2_module_path()?;
+    let module = module.as_path();
     let label = "umbra-hwkey-test-key";
     umbra_hwkey::generate_hmac_key(module, b"1234", label)?;
 

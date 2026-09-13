@@ -552,44 +552,18 @@ mod tests {
         ))
     }
 
-    /// Serializes this module's own three `#[test]` functions against
-    /// each other. Unlike `umbra-hwkey`'s single-test integration file
-    /// (one `tests/*.rs` file = one process, so it has no intra-file
-    /// concurrency hazard by construction), THIS module is a unit-test
-    /// module: all three tests below compile into the SAME
-    /// `umbra-cli` test binary, and Rust's default harness runs
-    /// `#[test]` functions in parallel threads within one process.
-    /// Every one of these three tests calls [`real_hmac_response`],
-    /// which drives the same on-disk SoftHSM2 token directory
-    /// (`TOKEN_DIR`) through an external `softhsm2-util --init-token`
-    /// process plus `umbra_hwkey`'s own PKCS#11 calls — concurrent
-    /// threads interleaving a directory removal/recreation with another
-    /// thread's in-progress token init corrupts the shared token store
-    /// (observed directly: a concurrent run reliably produced
-    /// `Pkcs11(Pkcs11(GeneralError, Initialize))` on one of the three
-    /// tests). Holding this lock for [`real_hmac_response`]'s entire
-    /// body — mirroring `umbra_hwkey`'s own internal `PKCS11_LOCK`
-    /// pattern, which only serializes ITS OWN two functions against each
-    /// other and does not extend to this test's external
-    /// `softhsm2-util` process or directory operations — is the
-    /// deliberately simple, provably-correct fix.
-    static TEST_TOKEN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     /// Initializes a fresh SoftHSM2 token (via the same
     /// `SOFTHSM2_CONF`-pointed fixture `umbra-hwkey`'s own hermetic test
     /// uses), generates a real HMAC key, and returns the real
     /// `hmac_response` for [`HARDWARE_KEY_CHALLENGE`]. A distinct
     /// token/key label from `umbra-hwkey`'s own test
     /// (`umbra-cli-keystore-test`) keeps the two easy to tell apart in
-    /// any diagnostic output. See [`TEST_TOKEN_LOCK`] for why this
-    /// function's entire body must run under that lock: this module's
-    /// three tests all call it, and — unlike `umbra-hwkey`'s own
-    /// single-test integration file — they share one test binary.
+    /// any diagnostic output. See [`crate::hwkey_test_support::TEST_TOKEN_LOCK`]
+    /// for why this function's entire body must run under that lock:
+    /// this module's three tests, AND `cli.rs`'s own hardware-key
+    /// tests, all share one test binary.
     fn real_hmac_response() -> Result<[u8; 32], Box<dyn std::error::Error + Send + Sync>> {
-        let _guard = match TEST_TOKEN_LOCK.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _guard = crate::hwkey_test_support::lock_token_dir();
         const TOKEN_DIR: &str = "/tmp/umbra-hwkey-softhsm-test-tokens";
         let _ = std::fs::remove_dir_all(TOKEN_DIR);
         std::fs::create_dir_all(TOKEN_DIR)?;
@@ -614,7 +588,8 @@ mod tests {
             .into());
         }
 
-        let module = std::path::Path::new("/usr/lib64/pkcs11/libsofthsm2.so");
+        let module = crate::hwkey_test_support::softhsm2_module_path()?;
+        let module = module.as_path();
         let label = "umbra-cli-keystore-test-key";
         umbra_hwkey::generate_hmac_key(module, b"1234", label)?;
         let response =
