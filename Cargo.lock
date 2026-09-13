@@ -7865,10 +7865,13 @@ dependencies = [
 name = "umbra-gui"
 version = "1.0.0-alpha.3"
 dependencies = [
+ "clap",
  "gtk4",
  "libadwaita",
  "umbra-cli",
  "umbra-crypto",
+ "umbra-hardware",
+ "zeroize",
 ]
 
 [[package]]
