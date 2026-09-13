@@ -19,6 +19,7 @@ members = [
     "crates/umbra-gui",
     "crates/umbra-hardware",
     "crates/umbra-group",
+    "crates/umbra-hwkey",
 ]
 exclude = ["fuzz"]
 

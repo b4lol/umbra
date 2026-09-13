@@ -8,3 +8,13 @@
 [alias]
 # Verify the entire workspace including tests and examples.
 checkall = "check --workspace --all-targets"
+
+[env]
+# TODO B.3 (umbra-hwkey): points SoftHSM2's own config-loading at a
+# fixture file scoped to this workspace, so umbra-hwkey's hermetic
+# PKCS#11 test gets an isolated token store rather than touching the
+# system's real /etc/softhsm2.conf. Set here (Cargo's own env
+# mechanism) rather than via `std::env::set_var` in test code, because
+# that call is `unsafe` on this toolchain and this workspace forbids
+# `unsafe_code` even in tests.
+SOFTHSM2_CONF = { value = "crates/umbra-hwkey/tests/fixtures/softhsm2-test.conf", relative = true }
