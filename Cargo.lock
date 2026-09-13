@@ -7835,6 +7835,7 @@ dependencies = [
  "umbra-crypto",
  "umbra-group",
  "umbra-hardware",
+ "umbra-hwkey",
  "umbra-net",
  "umbra-protocol",
  "zbus",
