@@ -52,6 +52,7 @@ undocumented_unsafe_blocks = "deny"
 umbra-crypto = { path = "crates/umbra-crypto", version = "1.0.0-alpha.3" }
 umbra-protocol = { path = "crates/umbra-protocol", version = "1.0.0-alpha.3" }
 umbra-net = { path = "crates/umbra-net", version = "1.0.0-alpha.3" }
+umbra-cli = { path = "crates/umbra-cli", version = "1.0.0-alpha.3" }
 
 # PQ-MLS group ("cell") encryption (TODO B.2): OpenMLS with the X-Wing
 # hybrid (X25519 + ML-KEM-768) ciphersuite via the pure-Rust libcrux

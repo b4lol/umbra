@@ -12,6 +12,12 @@
 //! own future increments; see the design doc's "Out of scope"
 //! section).
 //!
+//! Second increment landed (TODO B.3, 2026-09-13, see
+//! `docs/superpowers/specs/2026-09-13-gui-keystore-unlock-design.md`):
+//! the [`unlock`] module's pure keystore-unlock function, wired into a
+//! real `--keystore PATH` + password-entry flow in `main.rs`. Still no
+//! messaging, peer list, or sandboxing yet.
+//!
 //! Scope when fully implemented (CLIENT_SECURITY / DECISIONS ADR-004):
 //!
 //! - `WAYLAND_DISPLAY` enforcement at startup: refuse to run under X11.
@@ -19,4 +25,5 @@
 //! - Decoy Vault (Duress PIN) entry integration.
 //! - Scratch-to-Reveal dynamic masking for message previews.
 
+pub mod unlock;
 pub mod wayland;

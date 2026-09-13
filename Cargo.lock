@@ -7867,6 +7867,8 @@ version = "1.0.0-alpha.3"
 dependencies = [
  "gtk4",
  "libadwaita",
+ "umbra-cli",
+ "umbra-crypto",
 ]
 
 [[package]]

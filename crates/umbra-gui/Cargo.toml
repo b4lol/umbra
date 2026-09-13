@@ -39,6 +39,8 @@ path = "tests/smoke.rs"
 required-features = ["gui"]
 
 [dependencies]
+umbra-cli.workspace = true
+umbra-crypto.workspace = true
 gtk4 = { version = "0.11.4", optional = true }
 # Aliased to `adw` (its own conventional short name throughout the
 # gtk4-rs/libadwaita ecosystem, matching its `adw::prelude`/`adw::Application`
