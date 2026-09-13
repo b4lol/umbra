@@ -9,6 +9,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [Unreleased]
 
 ### Added
+- **Large-group scalability benchmark** (TODO B.2.5, information-only —
+  no code changed as a result): `crates/umbra-group/tests/scalability_benchmark.rs`
+  measures the group creator's own wall-clock/peak-memory cost of
+  building a 10- and a 50-member cell and sending one group message.
+  Result: every per-call cost (`create_group`/`export_keypackage`/
+  `add_member`/`send_group_message`) is flat regardless of group size —
+  `add_member` costs the same whether fanning out to an empty roster or
+  a 48-member one (~16ms/recipient difference), and peak RSS grows by
+  only ~2 MiB from N=10 to N=50. The dominant, N-independent cost is
+  each call's ~19-38s of real Argon2id KDF. Confirms TreeKEM's own
+  path-update cost is effectively O(log N) in practice AND that
+  Umbra's own per-member delivery fan-out (the a priori suspected
+  bottleneck) is negligible at these sizes — no engineering follow-up
+  (session reuse, parallel fan-out) is warranted by these numbers.
 - **Mesh/Nym transport group-inbound wiring** (TODO B.2.4): `umbra
   serve-mesh` and `umbra-nym serve-nym` can now receive PQ-MLS group
   cell frames (Welcome/Commit/application messages) — previously only
