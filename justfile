@@ -65,3 +65,13 @@ audit-nym:
 #     docs/TODO.md B.1's Nym residual).
 live-test-nym:
     cargo test --manifest-path crates/umbra-nym-cli/Cargo.toml --test nym_live -- --ignored --nocapture
+
+# 11. umbra-gui verification (feature-gated GTK4 build — NOT covered by
+#     `check` above, since the `gui` feature is opt-in specifically to
+#     keep GTK4/Libadwaita's system-library requirement out of the
+#     default workspace build; see crates/umbra-gui/Cargo.toml).
+#     Requires libgtk-4-dev and libadwaita-1-dev system packages.
+check-gui:
+    cargo fmt -p umbra-gui -- --check
+    cargo clippy -p umbra-gui --all-targets --features gui -- -D warnings
+    cargo test -p umbra-gui --all-targets --features gui

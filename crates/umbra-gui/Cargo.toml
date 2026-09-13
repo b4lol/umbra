@@ -10,14 +10,38 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+# Gates the GTK4/Libadwaita dependencies (TODO B.3): keeps a plain
+# `cargo build --workspace` / `cargo test --workspace --all-targets`
+# free of GTK4's heavy system-library requirement (libgtk-4-dev,
+# libadwaita-1-dev) — those are only pulled in when this feature is
+# explicitly enabled, e.g. `cargo test -p umbra-gui --features gui`.
+gui = ["dep:gtk4", "dep:adw"]
+
 [[bin]]
 name = "umbra-gui"
 path = "src/main.rs"
+required-features = ["gui"]
+
+# The smoke tests spawn the `umbra-gui` binary via
+# `env!("CARGO_BIN_EXE_umbra-gui")`, which resolves to a path at compile
+# time regardless of whether the binary was actually built. Without
+# `required-features` here, `cargo test --workspace --all-targets` (no
+# `gui` feature) would compile and run this test file, only to fail at
+# runtime spawning a binary that `required-features` above skipped
+# building — reintroducing the exact "breaks CI with no GTK installed"
+# problem this feature gate exists to fix. Gating the test target the
+# same way makes Cargo skip it cleanly instead.
+[[test]]
+name = "smoke"
+path = "tests/smoke.rs"
+required-features = ["gui"]
 
 [dependencies]
-gtk4 = "0.11.4"
+gtk4 = { version = "0.11.4", optional = true }
 # Aliased to `adw` (its own conventional short name throughout the
 # gtk4-rs/libadwaita ecosystem, matching its `adw::prelude`/`adw::Application`
 # usage in main.rs) since the crate's own library name is `libadwaita`, not
 # `adw`.
-adw = { package = "libadwaita", version = "0.9.2" }
+adw = { package = "libadwaita", version = "0.9.2", optional = true }

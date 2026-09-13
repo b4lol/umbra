@@ -10,7 +10,7 @@ use gtk4::prelude::BoxExt;
 /// GTK application ID (reverse-DNS convention) for this skeleton.
 const APPLICATION_ID: &str = "org.umbra.Gui";
 
-fn main() {
+fn main() -> gtk4::glib::ExitCode {
     let wayland_display = std::env::var("WAYLAND_DISPLAY").ok();
     if !umbra_gui::wayland::wayland_session_present(wayland_display.as_deref()) {
         eprintln!(
@@ -20,11 +20,17 @@ fn main() {
         std::process::exit(1);
     }
 
+    // Closes the `GDK_BACKEND=x11`/XWayland bypass: without this, GDK could
+    // still connect via a non-Wayland backend even though the check above
+    // confirmed a Wayland session exists, defeating this binary's
+    // Wayland-only guarantee. Must run before any other GDK/GTK call.
+    gtk4::gdk::set_allowed_backends("wayland");
+
     let application = adw::Application::builder()
         .application_id(APPLICATION_ID)
         .build();
     application.connect_activate(build_window);
-    application.run();
+    application.run()
 }
 
 /// Builds and presents the (currently empty) placeholder window: a

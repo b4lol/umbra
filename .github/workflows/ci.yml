@@ -23,6 +23,21 @@ jobs:
       # TODO A.4: `-Z zero-call-used-regs=all` hardened profile gates here
       # once the nightly CI profile lands (ADR-025).
 
+  gui:
+    name: umbra-gui (feature-gated GTK4 build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install GTK4/Libadwaita dev packages
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libadwaita-1-dev
+      - run: cargo fmt -p umbra-gui -- --check
+      - run: cargo clippy -p umbra-gui --all-targets --features gui -- -D warnings
+      - run: cargo test -p umbra-gui --all-targets --features gui
+
   supply-chain:
     name: deny + audit
     runs-on: ubuntu-latest

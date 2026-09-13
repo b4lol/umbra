@@ -25,9 +25,10 @@ fn refuses_to_start_without_a_wayland_session()
     let output = Command::new(env!("CARGO_BIN_EXE_umbra-gui"))
         .env_remove("WAYLAND_DISPLAY")
         .output()?;
-    assert!(
-        !output.status.success(),
-        "must exit non-zero without a Wayland session"
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "must exit with code 1 without a Wayland session"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -39,9 +40,17 @@ fn refuses_to_start_without_a_wayland_session()
 
 /// Under a REAL Wayland session, the binary must start, stay running
 /// (i.e. it opened the window and entered the GTK main loop rather than
-/// crashing on startup), and be killable cleanly. Requires an actual
-/// compositor — run explicitly:
-/// `cargo test -p umbra-gui --test smoke -- --ignored`
+/// crashing on startup), and be terminable via `Child::kill()` (SIGKILL —
+/// this binary has no SIGTERM handler, so nothing "clean" is actually
+/// being tested in the shutdown itself). Requires an actual compositor —
+/// run explicitly: `cargo test -p umbra-gui --test smoke -- --ignored`
+///
+/// Limitation: this only proves the process survived and entered the
+/// main loop, NOT that a window surface was actually mapped/visible.
+/// Wayland deliberately does not expose window-content introspection to
+/// arbitrary clients, and no screenshot tooling is installed in this
+/// environment, so a build that entered the main loop but failed to
+/// present a window would still pass this test.
 #[test]
 #[ignore = "requires a real Wayland compositor — see this test's own doc comment"]
 fn opens_and_stays_running_under_a_real_wayland_session()
