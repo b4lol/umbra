@@ -101,7 +101,7 @@ This list contains the technical tasks planned for the step-by-step implementati
 
 ## B.3 Linux GUI & Advanced Client Security (`umbra-gui`)
 
-- [ ] Wayland-only enforcement (`WAYLAND_DISPLAY` requirement).
+- [x] Wayland-only enforcement (`WAYLAND_DISPLAY` requirement). LANDED 2026-09-13: `crates/umbra-gui`'s first increment — a standalone `umbra-gui` binary (own Cargo binary target, not a subcommand of `umbra`, so building the TUI/CLI never requires GTK4 dev libraries) that checks `WAYLAND_DISPLAY` via a pure, hermetically-tested `wayland_session_present` function BEFORE initializing GTK/Adwaita at all, then opens an empty placeholder `adw::ApplicationWindow`. No keystore/session integration and no Landlock/Seccomp sandboxing yet — deliberately deferred to whichever future increment first adds a real secret-handling feature (see `docs/superpowers/specs/2026-09-13-gui-wayland-skeleton-design.md`). The remaining four B.3 bullets (the GUI itself, FIDO2, Scratch-to-Reveal, Decoy Vault) are separate, still-open future increments building on this foundation.
 - [ ] Modern Desktop GUI (`gtk4` + `libadwaita`).
 - [ ] FIDO2 / YubiKey (PKCS#11 / NFC / USB) hardware-key verification.
 - [ ] Dynamic visual masking: Scratch-to-Reveal (Anti-Shoulder Surfing).
