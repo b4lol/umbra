@@ -29,7 +29,7 @@ use tokio::sync::Mutex;
 use umbra_group::delivery::PeerTransportAddress;
 use umbra_group::inbound::{self, InboundGroupEvent};
 use umbra_group::persistence;
-use umbra_group::{GroupError, add, create, keypackage, send};
+use umbra_group::{GroupError, add, create, keypackage, remove, rotate, send};
 
 /// Shorthand for a boxed, `Send`, `Send`-error result — matches this
 /// crate's other test modules (`unwrap()`/`expect()` are denied even in
@@ -414,6 +414,181 @@ async fn three_party_create_add_send_receive_flow() -> TestResult {
         InboundGroupEvent::ApplicationMessage {
             group_name: carol_group_name,
             plaintext: bob_plaintext,
+        }
+    );
+
+    // 8. Alice removes Carol (TODO B.2.2). Only bob remains reachable
+    // (carol is removed, never contacted; alice's own address is
+    // never in peer_lookup, matching this file's established pattern
+    // from steps 4-7 above).
+    let (bob_removal_commit_frame, bob_removal_roster_sync_frame) = {
+        let (bob_commit_side, bob_commit_observer) = tokio::io::duplex(8192);
+        let (bob_roster_sync_side, bob_roster_sync_observer) = tokio::io::duplex(8192);
+        let connect = addressed_streams(vec![
+            (bob_addr.clone(), bob_commit_side),
+            (bob_addr.clone(), bob_roster_sync_side),
+        ]);
+        let peer_lookup = {
+            let bob_addr = bob_addr.clone();
+            move |name: &str| {
+                if name == "bob" {
+                    Some(bob_addr.clone())
+                } else {
+                    None
+                }
+            }
+        };
+
+        remove::remove_member(&alice_dir, alice_pw, "cell", "carol", peer_lookup, connect).await?;
+
+        (
+            capture_frame(bob_commit_observer).await?,
+            capture_frame(bob_roster_sync_observer).await?,
+        )
+    };
+
+    let bob_removal_updated =
+        inbound::process_inbound_group_frame(&bob_dir, bob_pw, &bob_removal_commit_frame)?;
+    assert_eq!(
+        bob_removal_updated,
+        InboundGroupEvent::MembershipUpdated {
+            group_name: bob_group_name.clone(),
+        }
+    );
+    let bob_roster_synced_after_removal =
+        inbound::process_inbound_group_frame(&bob_dir, bob_pw, &bob_removal_roster_sync_frame)?;
+    let InboundGroupEvent::RosterSync {
+        roster: bob_roster_after_removal,
+        ..
+    } = bob_roster_synced_after_removal
+    else {
+        return Err("expected a RosterSync event for bob after removal".into());
+    };
+    assert!(bob_roster_after_removal.leaf_index_for("alice").is_some());
+    assert!(bob_roster_after_removal.leaf_index_for("carol").is_none());
+
+    // Alice sends a new message — only bob remains in her roster now.
+    let post_removal_plaintext = b"carol is gone".to_vec();
+    let bob_post_removal_frame = {
+        let (bob_member_side, bob_observer_side) = tokio::io::duplex(8192);
+        let connect = addressed_streams(vec![(bob_addr.clone(), bob_member_side)]);
+        let peer_lookup = {
+            let bob_addr = bob_addr.clone();
+            move |name: &str| {
+                if name == "bob" {
+                    Some(bob_addr.clone())
+                } else {
+                    None
+                }
+            }
+        };
+
+        send::send_group_message(
+            &alice_dir,
+            alice_pw,
+            "cell",
+            &post_removal_plaintext,
+            peer_lookup,
+            connect,
+        )
+        .await?;
+
+        capture_frame(bob_observer_side).await?
+    };
+
+    let bob_post_removal_received =
+        inbound::process_inbound_group_frame(&bob_dir, bob_pw, &bob_post_removal_frame)?;
+    assert_eq!(
+        bob_post_removal_received,
+        InboundGroupEvent::ApplicationMessage {
+            group_name: bob_group_name.clone(),
+            plaintext: post_removal_plaintext,
+        }
+    );
+
+    // Carol, still on her OLD epoch (never processed the removal
+    // Commit), cannot decrypt the SAME ciphertext bob just decrypted —
+    // TODO B.2.2's own literal acceptance criterion. MLS application
+    // messages are encrypted ONCE per send and fanned out identically
+    // to every recipient (verified: `deliver_to_members` takes one
+    // `&MlsMessageOut` and delivers it unchanged to each roster
+    // member), so replaying bob's exact captured frame to carol's own
+    // `process_inbound_group_frame` call is a valid same-ciphertext
+    // comparison, not a different message.
+    let carol_after_removal_result =
+        inbound::process_inbound_group_frame(&carol_dir, carol_pw, &bob_post_removal_frame);
+    assert!(
+        carol_after_removal_result.is_err(),
+        "carol must NOT be able to decrypt a message sent after her own removal"
+    );
+
+    // 9. Alice rotates her own key (TODO B.2.3) — no roster change,
+    // Commit-only fan-out to bob.
+    let bob_rotation_commit_frame = {
+        let (bob_member_side, bob_observer_side) = tokio::io::duplex(8192);
+        let connect = addressed_streams(vec![(bob_addr.clone(), bob_member_side)]);
+        let peer_lookup = {
+            let bob_addr = bob_addr.clone();
+            move |name: &str| {
+                if name == "bob" {
+                    Some(bob_addr.clone())
+                } else {
+                    None
+                }
+            }
+        };
+
+        rotate::rotate_key(&alice_dir, alice_pw, "cell", peer_lookup, connect).await?;
+
+        capture_frame(bob_observer_side).await?
+    };
+
+    let bob_rotation_updated =
+        inbound::process_inbound_group_frame(&bob_dir, bob_pw, &bob_rotation_commit_frame)?;
+    assert_eq!(
+        bob_rotation_updated,
+        InboundGroupEvent::MembershipUpdated {
+            group_name: bob_group_name.clone(),
+        }
+    );
+
+    // Alice sends another message after rotation — bob still decrypts
+    // correctly, proving rotation didn't break the group.
+    let post_rotation_plaintext = b"still here after rotation".to_vec();
+    let bob_post_rotation_frame = {
+        let (bob_member_side, bob_observer_side) = tokio::io::duplex(8192);
+        let connect = addressed_streams(vec![(bob_addr.clone(), bob_member_side)]);
+        let peer_lookup = {
+            let bob_addr = bob_addr.clone();
+            move |name: &str| {
+                if name == "bob" {
+                    Some(bob_addr.clone())
+                } else {
+                    None
+                }
+            }
+        };
+
+        send::send_group_message(
+            &alice_dir,
+            alice_pw,
+            "cell",
+            &post_rotation_plaintext,
+            peer_lookup,
+            connect,
+        )
+        .await?;
+
+        capture_frame(bob_observer_side).await?
+    };
+
+    let bob_post_rotation_received =
+        inbound::process_inbound_group_frame(&bob_dir, bob_pw, &bob_post_rotation_frame)?;
+    assert_eq!(
+        bob_post_rotation_received,
+        InboundGroupEvent::ApplicationMessage {
+            group_name: bob_group_name,
+            plaintext: post_rotation_plaintext,
         }
     );
 
