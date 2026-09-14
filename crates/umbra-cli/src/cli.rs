@@ -665,7 +665,13 @@ fn load_identity(cli: &Cli) -> Result<IdentityBundle, CliError> {
 
 /// Implements `umbra init`: new persistent identity keystore.
 fn init_with(cli: &Cli) -> Result<(), CliError> {
-    harden_memory()?;
+    // Process hardening (mlockall) is intentionally NOT enforced here, for
+    // the same reason `keygen` skips it: constrained environments (CI
+    // sanitizers, hardened containers with low RLIMIT_MEMLOCK or pre-5.13
+    // kernels) must still be able to create an identity keystore. This was
+    // tried during this increment's final review and reverted after it
+    // broke `mlockall` with ENOMEM in this project's own CI-like sandbox —
+    // empirical confirmation, not just a hypothetical risk.
     let path = cli
         .keystore
         .as_ref()
@@ -696,7 +702,6 @@ fn pair(
     mesh_addr: Option<&str>,
     nym_addr: Option<&str>,
 ) -> Result<(), CliError> {
-    harden_memory()?;
     // The peer record lives next to the keystore.
     let keystore_dir = cli
         .keystore
@@ -724,7 +729,6 @@ fn pair(
 
 /// Implements `umbra export-pairing`: own payload on `stdout`.
 fn export_pairing() -> Result<(), CliError> {
-    harden_memory()?;
     let cli = Cli::parse();
     let bundle = load_identity(&cli)?;
     let payload = crate::pairing::payload_for(&bundle)?;
