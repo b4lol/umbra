@@ -196,6 +196,16 @@ pub enum InboundGroupEvent {
         /// The decrypted plaintext bytes.
         plaintext: Vec<u8>,
     },
+    /// An inbound RosterSync application message replaced this
+    /// group's locally persisted [`GroupRoster`] with a fresh full
+    /// snapshot (TODO B.2.1).
+    RosterSync {
+        /// The resolved group name (file stem) whose roster was
+        /// updated.
+        group_name: String,
+        /// The new, fully-replacing roster.
+        roster: GroupRoster,
+    },
 }
 
 /// Decodes `frame_bytes` (the `[group_id_len][group_id][mls_len]
@@ -404,17 +414,31 @@ fn process_protocol_message(
         }
         ProcessedMessageContent::ApplicationMessage(application_message) => {
             let plaintext = application_message.into_bytes();
-            persistence::save_group_state(
-                &group_state_path,
-                passphrase,
-                &group,
-                provider.storage(),
-                &roster,
-            )?;
-            Ok(InboundGroupEvent::ApplicationMessage {
-                group_name,
-                plaintext,
-            })
+            if let Some(incoming_roster) = crate::roster_sync::try_decode(&plaintext)? {
+                persistence::save_group_state(
+                    &group_state_path,
+                    passphrase,
+                    &group,
+                    provider.storage(),
+                    &incoming_roster,
+                )?;
+                Ok(InboundGroupEvent::RosterSync {
+                    group_name,
+                    roster: incoming_roster,
+                })
+            } else {
+                persistence::save_group_state(
+                    &group_state_path,
+                    passphrase,
+                    &group,
+                    provider.storage(),
+                    &roster,
+                )?;
+                Ok(InboundGroupEvent::ApplicationMessage {
+                    group_name,
+                    plaintext,
+                })
+            }
         }
         _ => Err(GroupError::Malformed(
             "unsupported processed message content in inbound group frame (expected a Commit \
@@ -853,6 +877,96 @@ mod tests {
         let (bob_group, _roster, _provider) =
             persistence::load_group_state(&bob_group_path, bob_pw)?;
         assert_eq!(bob_group.members().count(), 2);
+
+        std::fs::remove_dir_all(&alice_dir)?;
+        std::fs::remove_dir_all(&bob_dir)?;
+        Ok(())
+    }
+
+    /// A RosterSync application message is recognized, replaces the
+    /// local roster, and yields `InboundGroupEvent::RosterSync` — not
+    /// `ApplicationMessage`. Follows the exact same hand-built-frame
+    /// pattern as `application_message_frame_decrypts_via_group_id_
+    /// resolved_file` above, with a RosterSync-encoded plaintext.
+    #[tokio::test]
+    async fn roster_sync_application_message_replaces_the_local_roster() -> TestResult {
+        let alice_dir = temp_dir("roster-sync-alice");
+        let bob_dir = temp_dir("roster-sync-bob");
+        std::fs::create_dir_all(&alice_dir)?;
+        std::fs::create_dir_all(&bob_dir)?;
+        let alice_pw = b"alice-pw";
+        let bob_pw = b"bob-pw";
+
+        create::create_group(&alice_dir, alice_pw, "cell", "alice")?;
+        let bob_kp = kp::export_keypackage(&bob_dir, bob_pw)?;
+        let welcome_frame =
+            add_member_and_capture_frame(&alice_dir, alice_pw, "cell", "bob", &bob_kp).await?;
+        let joined_event = process_inbound_group_frame(&bob_dir, bob_pw, &welcome_frame)?;
+        let InboundGroupEvent::Joined {
+            group_name: bob_group_name,
+        } = joined_event
+        else {
+            return Err("expected Joined event".into());
+        };
+
+        // Alice broadcasts a real RosterSync application message —
+        // hand-built exactly like `application_message_frame_decrypts_
+        // via_group_id_resolved_file` builds a chat-text one, just
+        // with `roster_sync::encode`'s output as the plaintext.
+        let alice_group_path = alice_dir.join("groups").join("cell.enc");
+        let (mut alice_group, _alice_roster, alice_provider) =
+            persistence::load_group_state(&alice_group_path, alice_pw)?;
+        let alice_identity =
+            identity::load_group_identity(&alice_dir.join("group-identity.enc"), alice_pw)?;
+        let broadcast_roster = persistence::GroupRoster {
+            members: vec![
+                ("alice".to_string(), alice_group.own_leaf_index()),
+                ("bob".to_string(), openmls::prelude::LeafNodeIndex::new(1)),
+            ],
+        };
+        let roster_sync_plaintext = crate::roster_sync::encode(&broadcast_roster)?;
+        let app_message_out = alice_group.create_message(
+            &alice_provider,
+            &alice_identity.signature_key_pair,
+            &roster_sync_plaintext,
+        )?;
+        persistence::save_group_state(
+            &alice_group_path,
+            alice_pw,
+            &alice_group,
+            alice_provider.storage(),
+            &broadcast_roster,
+        )?;
+
+        let group_id = alice_group.group_id().to_vec();
+        let mls_bytes = {
+            use openmls::prelude::tls_codec::Serialize as _;
+            app_message_out.tls_serialize_detached()?
+        };
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&u32::try_from(group_id.len())?.to_be_bytes());
+        frame.extend_from_slice(&group_id);
+        frame.extend_from_slice(&u32::try_from(mls_bytes.len())?.to_be_bytes());
+        frame.extend_from_slice(&mls_bytes);
+
+        let event = process_inbound_group_frame(&bob_dir, bob_pw, &frame)?;
+        let InboundGroupEvent::RosterSync {
+            group_name,
+            roster: received_roster,
+        } = event
+        else {
+            return Err("expected a RosterSync event".into());
+        };
+        assert_eq!(group_name, bob_group_name.clone());
+        assert_eq!(received_roster, broadcast_roster);
+
+        let bob_group_path = bob_dir.join("groups").join(format!("{bob_group_name}.enc"));
+        let (_bob_group, bob_persisted_roster, _bob_provider) =
+            persistence::load_group_state(&bob_group_path, bob_pw)?;
+        assert_eq!(
+            bob_persisted_roster, broadcast_roster,
+            "the RosterSync event's roster must match what was actually persisted for bob"
+        );
 
         std::fs::remove_dir_all(&alice_dir)?;
         std::fs::remove_dir_all(&bob_dir)?;
