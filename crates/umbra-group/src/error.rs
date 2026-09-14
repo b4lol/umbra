@@ -157,4 +157,24 @@ pub enum GroupError {
     /// feature.
     #[error(transparent)]
     MessageCreation(#[from] openmls::prelude::CreateMessageError),
+
+    /// `MlsGroup::remove_members` itself failed while committing a
+    /// member's removal ([`crate::remove::remove_member`]).
+    #[error(transparent)]
+    MembershipRemoval(
+        #[from] openmls::prelude::RemoveMembersError<openmls_memory_storage::MemoryStorageError>,
+    ),
+
+    /// `MlsGroup::self_update` itself failed while rotating this
+    /// peer's own key material ([`crate::rotate::rotate_key`]).
+    #[error(transparent)]
+    SelfUpdate(
+        #[from] openmls::prelude::SelfUpdateError<openmls_memory_storage::MemoryStorageError>,
+    ),
+
+    /// [`crate::remove::remove_member`] was asked to remove a peer
+    /// name that does not appear in the group's currently persisted
+    /// [`crate::persistence::GroupRoster`].
+    #[error("peer {0:?} is not in this group's roster")]
+    PeerNotInRoster(String),
 }
