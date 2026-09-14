@@ -74,6 +74,7 @@ use crate::delivery::{self, PeerTransportAddress};
 use crate::error::GroupError;
 use crate::identity::{self, GROUP_IDENTITY_FILE_NAME};
 use crate::persistence::{self, GroupRoster};
+use crate::roster_sync;
 
 /// Subdirectory (relative to the keystore directory) holding one
 /// encrypted group-state file per group, named `<group_name>.enc`
@@ -175,6 +176,20 @@ where
         .members
         .push((peer_name.to_string(), new_leaf_index));
 
+    // Build the RosterSync application message BEFORE the durable
+    // save below: `create_message` advances the sender's own
+    // secret-tree/ratchet state as a required step of encryption
+    // (the same rule `send.rs`'s own module docs establish — forward
+    // secrecy requires the used key material to be consumed and
+    // persisted immediately), so this message's ratchet advancement
+    // must be captured in the SAME save as the Commit-merge's storage
+    // state, not a separate later one.
+    let roster_sync_message = group.create_message(
+        &provider,
+        &identity.signature_key_pair,
+        &roster_sync::encode(&new_roster)?,
+    )?;
+
     // The state mutation is now durable. Nothing after this point may
     // turn a successful save into an `Err` return (ruled semantics —
     // see module docs).
@@ -214,6 +229,21 @@ where
     )
     .await;
 
+    // Fan out the RosterSync to EVERYONE in the post-add roster (the
+    // previously-existing members AND the new member) — TODO B.2.1's
+    // own scoping: "immediately after the Welcome, and again to ALL
+    // members after every subsequent add." Per-member outcomes are
+    // intentionally discarded, matching this function's own
+    // already-established delivery-failure semantics (module docs).
+    let _roster_sync_results = delivery::deliver_to_members(
+        &new_roster,
+        &peer_lookup,
+        &connect,
+        &group_id_bytes,
+        &roster_sync_message,
+    )
+    .await;
+
     Ok(())
 }
 
@@ -238,8 +268,8 @@ mod tests {
     /// in test code by this workspace's clippy lints).
     type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
-    /// The future type returned by [`dual_stream`]'s closure — factored
-    /// into its own alias to satisfy `clippy::type_complexity`.
+    /// The future type returned by [`queued_streams`]'s closure —
+    /// factored into its own alias to satisfy `clippy::type_complexity`.
     type ConnectFuture = Pin<
         Box<
             dyn std::future::Future<Output = Result<Box<dyn AsyncWrite + Unpin + Send>, GroupError>>
@@ -249,41 +279,44 @@ mod tests {
 
     const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519;
 
-    /// A `connect` closure routing to one of two single-use
-    /// `DuplexStream` halves by address — generalizes `delivery.rs`'s
-    /// own `single_use_stream` test helper to this test's two
-    /// recipients (the old member getting the Commit, the new member
-    /// getting the Welcome).
-    fn dual_stream(
-        alice_addr: PeerTransportAddress,
-        alice_stream: DuplexStream,
-        bob_addr: PeerTransportAddress,
-        bob_stream: DuplexStream,
+    /// A `connect` closure routing to a per-address QUEUE of
+    /// single-use `DuplexStream` halves — generalizes the old
+    /// `dual_stream` helper now that `add_member` delivers THREE
+    /// messages per call (Commit, Welcome, RosterSync) and a roster
+    /// member can appear in more than one of those deliveries (e.g. an
+    /// old member gets both the Commit and the RosterSync, on two
+    /// SEPARATE connections — `deliver_to_members` opens a fresh
+    /// connection per delivery call, never reuses one). Each address's
+    /// queue is popped in the order its streams were registered,
+    /// matching the order `add_member` performs its delivery calls
+    /// (Commit-to-old-members, Welcome-to-new-member,
+    /// RosterSync-to-everyone).
+    fn queued_streams(
+        streams: Vec<(
+            PeerTransportAddress,
+            std::collections::VecDeque<DuplexStream>,
+        )>,
     ) -> impl Fn(&PeerTransportAddress) -> ConnectFuture {
-        let alice_slot = Arc::new(Mutex::new(Some(alice_stream)));
-        let bob_slot = Arc::new(Mutex::new(Some(bob_stream)));
+        let state = Arc::new(Mutex::new(streams));
         move |address: &PeerTransportAddress| {
             let address = address.clone();
-            let alice_addr = alice_addr.clone();
-            let bob_addr = bob_addr.clone();
-            let alice_slot = Arc::clone(&alice_slot);
-            let bob_slot = Arc::clone(&bob_slot);
+            let state = Arc::clone(&state);
             Box::pin(async move {
-                let slot = if address == alice_addr {
-                    alice_slot
-                } else if address == bob_addr {
-                    bob_slot
-                } else {
-                    return Err(GroupError::Malformed(format!(
-                        "unexpected connect() address in test: {address:?}"
-                    )));
-                };
-                let taken = slot.lock().await.take().ok_or_else(|| {
-                    GroupError::Malformed(
-                        "connect() called more than once for this address in test".into(),
-                    )
+                let mut state = state.lock().await;
+                let (_, queue) = state
+                    .iter_mut()
+                    .find(|(candidate, _)| candidate == &address)
+                    .ok_or_else(|| {
+                        GroupError::Malformed(format!(
+                            "unexpected connect() address in test: {address:?}"
+                        ))
+                    })?;
+                let stream = queue.pop_front().ok_or_else(|| {
+                    GroupError::Malformed(format!(
+                        "connect() called more times than expected for {address:?} in test"
+                    ))
                 })?;
-                Ok(Box::new(taken) as Box<dyn AsyncWrite + Unpin + Send>)
+                Ok(Box::new(stream) as Box<dyn AsyncWrite + Unpin + Send>)
             })
         }
     }
@@ -381,14 +414,23 @@ mod tests {
 
         let alice_addr = PeerTransportAddress::Onion("alice.onion".to_string());
         let bob_addr = PeerTransportAddress::Mesh("bob-mesh".to_string());
-        let (alice_member_side, alice_observer_side) = tokio::io::duplex(8192);
-        let (bob_member_side, bob_observer_side) = tokio::io::duplex(8192);
-        let connect = dual_stream(
-            alice_addr.clone(),
-            alice_member_side,
-            bob_addr.clone(),
-            bob_member_side,
-        );
+        // Alice (an old member, present in `old_roster`) receives 2
+        // messages: the Commit, then the RosterSync. Bob (the new
+        // member) also receives 2: the Welcome, then the RosterSync.
+        let (alice_commit_member, alice_commit_observer) = tokio::io::duplex(8192);
+        let (alice_roster_sync_member, alice_roster_sync_observer) = tokio::io::duplex(8192);
+        let (bob_welcome_member, bob_welcome_observer) = tokio::io::duplex(8192);
+        let (bob_roster_sync_member, bob_roster_sync_observer) = tokio::io::duplex(8192);
+        let connect = queued_streams(vec![
+            (
+                alice_addr.clone(),
+                std::collections::VecDeque::from([alice_commit_member, alice_roster_sync_member]),
+            ),
+            (
+                bob_addr.clone(),
+                std::collections::VecDeque::from([bob_welcome_member, bob_roster_sync_member]),
+            ),
+        ]);
         let peer_lookup = move |name: &str| match name {
             "alice" => Some(alice_addr.clone()),
             "bob" => Some(bob_addr.clone()),
@@ -424,10 +466,13 @@ mod tests {
                 .any(|member| member.index == bob_leaf)
         );
 
-        // Both the Commit (to alice) and the Welcome (to bob) actually
-        // made it onto their respective streams.
-        assert_frame_matches(alice_observer_side, &group_id).await?;
-        assert_frame_matches(bob_observer_side, &group_id).await?;
+        // The Commit (to alice), the Welcome (to bob), and the
+        // RosterSync (to both) all actually made it onto their
+        // respective streams.
+        assert_frame_matches(alice_commit_observer, &group_id).await?;
+        assert_frame_matches(alice_roster_sync_observer, &group_id).await?;
+        assert_frame_matches(bob_welcome_observer, &group_id).await?;
+        assert_frame_matches(bob_roster_sync_observer, &group_id).await?;
 
         std::fs::remove_dir_all(&dir)?;
         std::fs::remove_dir_all(&bob_dir)?;
