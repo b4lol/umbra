@@ -25,5 +25,6 @@
 //! - Decoy Vault (Duress PIN) entry integration.
 //! - Scratch-to-Reveal dynamic masking for message previews.
 
+pub mod scratch_reveal;
 pub mod unlock;
 pub mod wayland;
