@@ -98,8 +98,8 @@ fn build_window(application: &adw::Application, keystore_path: &std::path::Path)
     unlock_box.append(&error_label);
     stack.add_named(&unlock_box, Some("unlock"));
 
-    let identity_label = gtk4::Label::new(None);
-    stack.add_named(&identity_label, Some("identity"));
+    let identity_container = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    stack.add_named(&identity_container, Some("identity"));
     stack.set_visible_child_name("unlock");
 
     let keystore_path = keystore_path.to_path_buf();
@@ -108,7 +108,10 @@ fn build_window(application: &adw::Application, keystore_path: &std::path::Path)
         let passphrase = zeroize::Zeroizing::new(password_entry.text().as_bytes().to_vec());
         match umbra_gui::unlock::unlock(&keystore_path, &passphrase) {
             Ok(fingerprint) => {
-                identity_label.set_label(&format!("Fingerprint: {fingerprint}"));
+                let reveal_widget = umbra_gui::scratch_reveal::build_scratch_reveal(&format!(
+                    "Fingerprint: {fingerprint}"
+                ));
+                identity_container.append(&reveal_widget);
                 stack_for_closure.set_visible_child_name("identity");
             }
             Err(message) => {

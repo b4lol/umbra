@@ -160,6 +160,111 @@ impl RevealState {
     }
 }
 
+/// Grid dimensions for [`build_scratch_reveal`]'s widget — a
+/// wide-short grid matching a single-line hex string's aspect ratio.
+#[cfg(feature = "gui")]
+const GRID_COLUMNS: usize = 16;
+/// See [`GRID_COLUMNS`].
+#[cfg(feature = "gui")]
+const GRID_ROWS: usize = 4;
+/// Scratch brush radius, in grid-cell units — a natural-feeling brush
+/// size at this grid density.
+#[cfg(feature = "gui")]
+const SCRATCH_RADIUS_CELLS: f64 = 1.5;
+/// Fixed widget content size, in pixels — sized for a hex fingerprint
+/// string; not dynamically measured in this increment.
+#[cfg(feature = "gui")]
+const WIDGET_WIDTH: i32 = 300;
+/// See [`WIDGET_WIDTH`].
+#[cfg(feature = "gui")]
+const WIDGET_HEIGHT: i32 = 40;
+
+/// Builds a scratch-to-reveal widget showing `secret_text` once enough
+/// of the surface has been dragged over (see [`REVEAL_THRESHOLD`]).
+///
+/// # Honest scope
+///
+/// See this module's top-level doc comment: the interactive
+/// gesture/draw wiring below is not exercised by any automated test.
+#[cfg(feature = "gui")]
+#[must_use]
+pub fn build_scratch_reveal(secret_text: &str) -> gtk4::DrawingArea {
+    use gtk4::prelude::{DrawingAreaExtManual, GestureDragExt, WidgetExt};
+
+    let drawing_area = gtk4::DrawingArea::builder()
+        .content_width(WIDGET_WIDTH)
+        .content_height(WIDGET_HEIGHT)
+        .build();
+
+    let state = std::rc::Rc::new(std::cell::RefCell::new(RevealState::new(
+        GRID_COLUMNS,
+        GRID_ROWS,
+    )));
+
+    let gesture = gtk4::GestureDrag::new();
+    {
+        let state = std::rc::Rc::clone(&state);
+        let drawing_area_for_redraw = drawing_area.clone();
+        gesture.connect_drag_update(move |gesture, offset_x, offset_y| {
+            let Some((start_x, start_y)) = gtk4::prelude::GestureDragExt::start_point(gesture)
+            else {
+                return;
+            };
+            let mut state = state.borrow_mut();
+            state.scratch_at(
+                start_x + offset_x,
+                start_y + offset_y,
+                f64::from(WIDGET_WIDTH),
+                f64::from(WIDGET_HEIGHT),
+                SCRATCH_RADIUS_CELLS,
+            );
+            drawing_area_for_redraw.queue_draw();
+        });
+    }
+    drawing_area.add_controller(gesture);
+
+    let secret_text = secret_text.to_string();
+    drawing_area.set_draw_func(move |_area, cr, width, height| {
+        cr.select_font_face(
+            "monospace",
+            gtk4::cairo::FontSlant::Normal,
+            gtk4::cairo::FontWeight::Normal,
+        );
+        cr.set_font_size(14.0);
+        cr.set_source_rgba(1.0, 1.0, 1.0, 1.0);
+        cr.move_to(8.0, f64::from(height) / 2.0 + 5.0);
+        // Cairo text rendering can fail (e.g. an unsupported glyph);
+        // this widget shows non-secret hex/label text only, so a
+        // rendering failure here is a display glitch, never a security
+        // issue — deliberately not propagated as an error.
+        let _ = cr.show_text(&secret_text);
+
+        let state = state.borrow();
+        if state.is_fully_revealed() {
+            return;
+        }
+        cr.set_source_rgba(0.15, 0.15, 0.15, 1.0);
+        let column_width = f64::from(width) / state.columns() as f64;
+        let row_height = f64::from(height) / state.rows() as f64;
+        for row in 0..state.rows() {
+            for column in 0..state.columns() {
+                if state.is_cell_revealed(column, row) {
+                    continue;
+                }
+                cr.rectangle(
+                    column as f64 * column_width,
+                    row as f64 * row_height,
+                    column_width,
+                    row_height,
+                );
+                let _ = cr.fill();
+            }
+        }
+    });
+
+    drawing_area
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
