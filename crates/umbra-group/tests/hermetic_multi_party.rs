@@ -64,10 +64,15 @@ fn temp_dir(label: &str) -> PathBuf {
 fn addressed_streams(
     pairs: Vec<(PeerTransportAddress, DuplexStream)>,
 ) -> impl Fn(&PeerTransportAddress) -> ConnectFuture {
-    let mut queues: Vec<(PeerTransportAddress, std::collections::VecDeque<DuplexStream>)> =
-        Vec::new();
+    let mut queues: Vec<(
+        PeerTransportAddress,
+        std::collections::VecDeque<DuplexStream>,
+    )> = Vec::new();
     for (address, stream) in pairs {
-        match queues.iter_mut().find(|(candidate, _)| candidate == &address) {
+        match queues
+            .iter_mut()
+            .find(|(candidate, _)| candidate == &address)
+        {
             Some((_, queue)) => queue.push_back(stream),
             None => {
                 queues.push((address, std::collections::VecDeque::from([stream])));
@@ -261,8 +266,16 @@ async fn three_party_create_add_send_receive_flow() -> TestResult {
     else {
         return Err("expected a RosterSync event for bob".into());
     };
-    assert!(bob_roster_after_second_add.leaf_index_for("alice").is_some());
-    assert!(bob_roster_after_second_add.leaf_index_for("carol").is_some());
+    assert!(
+        bob_roster_after_second_add
+            .leaf_index_for("alice")
+            .is_some()
+    );
+    assert!(
+        bob_roster_after_second_add
+            .leaf_index_for("carol")
+            .is_some()
+    );
 
     let carol_joined =
         inbound::process_inbound_group_frame(&carol_dir, carol_pw, &welcome_frame_for_carol)?;
