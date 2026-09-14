@@ -114,6 +114,31 @@ pub enum GroupCommand {
         #[arg(long)]
         group: String,
     },
+
+    /// Removes a peer (identified by a stored peer record name) from
+    /// an existing group: commits the removal, persists the updated
+    /// state, and fans out the resulting Commit + RosterSync to every
+    /// REMAINING member (the removed peer receives nothing).
+    Remove {
+        /// Group name (matches the `--name` used at `umbra group
+        /// create`).
+        #[arg(long)]
+        group: String,
+        /// Peer record name being removed, resolved from the peers/
+        /// directory next to the keystore.
+        #[arg(long)]
+        peer: String,
+    },
+
+    /// Rotates this peer's own key material within a group (no
+    /// membership/roster change) and fans out the resulting Commit to
+    /// every current member.
+    Rotate {
+        /// Group name (matches the `--name` used at `umbra group
+        /// create`).
+        #[arg(long)]
+        group: String,
+    },
 }
 
 /// Dispatches a parsed `umbra group` subcommand.
@@ -147,6 +172,8 @@ pub fn dispatch(command: &GroupCommand, cli: &Cli) -> Result<(), CliError> {
             keypackage,
         } => add(cli, group, peer, keypackage),
         GroupCommand::Send { group } => send(cli, group),
+        GroupCommand::Remove { group, peer } => remove(cli, group, peer),
+        GroupCommand::Rotate { group } => rotate(cli, group),
     }
 }
 
@@ -372,6 +399,255 @@ async fn add_member_over_tor(
         connect,
     )
     .await?;
+    Ok(())
+}
+
+/// `umbra group remove --group NAME --peer NAME`.
+fn remove(cli: &Cli, group: &str, peer: &str) -> Result<(), CliError> {
+    let passphrase = crate::cli::load_passphrase(cli)?;
+    let keystore_dir = keystore_dir(cli);
+    let peers_dir = keystore_dir.join("peers");
+    let lookup = peer_lookup(peers_dir);
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(CliError::Io)?;
+
+    runtime.block_on(remove_member_over_tor(
+        cli,
+        &keystore_dir,
+        &passphrase,
+        group,
+        peer,
+        lookup,
+    ))?;
+
+    crate::cli::output::line(&format!("removed {peer} from group {group}"));
+    Ok(())
+}
+
+/// `umbra group rotate --group NAME`.
+fn rotate(cli: &Cli, group: &str) -> Result<(), CliError> {
+    let passphrase = crate::cli::load_passphrase(cli)?;
+    let keystore_dir = keystore_dir(cli);
+    let peers_dir = keystore_dir.join("peers");
+    let lookup = peer_lookup(peers_dir);
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(CliError::Io)?;
+
+    runtime.block_on(rotate_key_over_tor(
+        cli,
+        &keystore_dir,
+        &passphrase,
+        group,
+        lookup,
+    ))?;
+
+    crate::cli::output::line(&format!("rotated key in group {group}"));
+    Ok(())
+}
+
+/// Builds the real, `#[cfg(feature = "tor")]`-gated `connect` closure
+/// and drives `remove_member` with it. Mirrors `add_member_over_tor`
+/// exactly (see its own doc comment) — only the trailing
+/// `umbra_group` call differs.
+///
+/// # Errors
+///
+/// Returns [`CliError`] if `--keystore PATH` is missing, if the Tor
+/// storage directory cannot be created, if bootstrapping Tor fails, or
+/// if `remove_member` itself fails.
+#[cfg(feature = "tor")]
+async fn remove_member_over_tor(
+    cli: &Cli,
+    keystore_dir: &Path,
+    passphrase: &[u8],
+    group: &str,
+    peer: &str,
+    peer_lookup: impl Fn(&str) -> Option<PeerTransportAddress>,
+) -> Result<(), CliError> {
+    let keystore_file = cli
+        .keystore
+        .clone()
+        .ok_or_else(|| CliError::Keystore("missing --keystore PATH".into()))?;
+    let tor_base = crate::serve::tor_base_from_keystore(&keystore_file)?;
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&tor_base)
+            .map_err(CliError::Io)?;
+    }
+    let transport = umbra_net::tor::TorTransport::bootstrap_persistent(&tor_base)
+        .await
+        .map_err(|error| CliError::Keystore(format!("tor transport bootstrap failed: {error}")))?;
+
+    let connect = |address: &PeerTransportAddress| {
+        let transport = &transport;
+        let address = address.clone();
+        async move {
+            match address {
+                PeerTransportAddress::Onion(addr) => {
+                    let onion_addr = umbra_net::addr::OnionAddr::parse(&addr).map_err(|error| {
+                        umbra_group::GroupError::Malformed(format!(
+                            "invalid onion address: {error}"
+                        ))
+                    })?;
+                    let stream = transport.open_stream(&onion_addr).await.map_err(|error| {
+                        umbra_group::GroupError::Malformed(format!("tor connect failed: {error}"))
+                    })?;
+                    Ok(Box::new(stream) as Box<dyn tokio::io::AsyncWrite + Unpin + Send>)
+                }
+                PeerTransportAddress::Mesh(_) | PeerTransportAddress::Nym(_) => {
+                    Err(umbra_group::GroupError::Malformed(
+                        "group delivery not yet implemented for this transport".into(),
+                    ))
+                }
+            }
+        }
+    };
+
+    umbra_group::remove::remove_member(keystore_dir, passphrase, group, peer, peer_lookup, connect)
+        .await?;
+    Ok(())
+}
+
+/// Fallback for builds without the `tor` build feature: every address
+/// kind returns a clear, explicit error (mirrors `add_member_over_tor`'s
+/// own `#[cfg(not(feature = "tor"))]` fallback exactly).
+///
+/// # Errors
+///
+/// Returns [`CliError`] if `remove_member` itself fails (its own
+/// `connect` closure never succeeds here, so this is reachable only via
+/// the non-delivery failure paths — delivery failures themselves are
+/// non-fatal, see `umbra_group::remove`'s own module docs).
+#[cfg(not(feature = "tor"))]
+async fn remove_member_over_tor(
+    _cli: &Cli,
+    keystore_dir: &Path,
+    passphrase: &[u8],
+    group: &str,
+    peer: &str,
+    peer_lookup: impl Fn(&str) -> Option<PeerTransportAddress>,
+) -> Result<(), CliError> {
+    let connect = |address: &PeerTransportAddress| {
+        let message: &'static str = match address {
+            PeerTransportAddress::Onion(_) => {
+                "this binary was built without the tor feature; rebuild with --features tor"
+            }
+            PeerTransportAddress::Mesh(_) | PeerTransportAddress::Nym(_) => {
+                "group delivery not yet implemented for this transport"
+            }
+        };
+        async move { Err(umbra_group::GroupError::Malformed(message.into())) }
+    };
+
+    umbra_group::remove::remove_member(keystore_dir, passphrase, group, peer, peer_lookup, connect)
+        .await?;
+    Ok(())
+}
+
+/// Builds the real, `#[cfg(feature = "tor")]`-gated `connect` closure
+/// and drives `rotate_key` with it. Mirrors `add_member_over_tor`
+/// exactly (see its own doc comment) — only the trailing
+/// `umbra_group` call differs.
+///
+/// # Errors
+///
+/// Returns [`CliError`] if `--keystore PATH` is missing, if the Tor
+/// storage directory cannot be created, if bootstrapping Tor fails, or
+/// if `rotate_key` itself fails.
+#[cfg(feature = "tor")]
+async fn rotate_key_over_tor(
+    cli: &Cli,
+    keystore_dir: &Path,
+    passphrase: &[u8],
+    group: &str,
+    peer_lookup: impl Fn(&str) -> Option<PeerTransportAddress>,
+) -> Result<(), CliError> {
+    let keystore_file = cli
+        .keystore
+        .clone()
+        .ok_or_else(|| CliError::Keystore("missing --keystore PATH".into()))?;
+    let tor_base = crate::serve::tor_base_from_keystore(&keystore_file)?;
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&tor_base)
+            .map_err(CliError::Io)?;
+    }
+    let transport = umbra_net::tor::TorTransport::bootstrap_persistent(&tor_base)
+        .await
+        .map_err(|error| CliError::Keystore(format!("tor transport bootstrap failed: {error}")))?;
+
+    let connect = |address: &PeerTransportAddress| {
+        let transport = &transport;
+        let address = address.clone();
+        async move {
+            match address {
+                PeerTransportAddress::Onion(addr) => {
+                    let onion_addr = umbra_net::addr::OnionAddr::parse(&addr).map_err(|error| {
+                        umbra_group::GroupError::Malformed(format!(
+                            "invalid onion address: {error}"
+                        ))
+                    })?;
+                    let stream = transport.open_stream(&onion_addr).await.map_err(|error| {
+                        umbra_group::GroupError::Malformed(format!("tor connect failed: {error}"))
+                    })?;
+                    Ok(Box::new(stream) as Box<dyn tokio::io::AsyncWrite + Unpin + Send>)
+                }
+                PeerTransportAddress::Mesh(_) | PeerTransportAddress::Nym(_) => {
+                    Err(umbra_group::GroupError::Malformed(
+                        "group delivery not yet implemented for this transport".into(),
+                    ))
+                }
+            }
+        }
+    };
+
+    umbra_group::rotate::rotate_key(keystore_dir, passphrase, group, peer_lookup, connect).await?;
+    Ok(())
+}
+
+/// Fallback for builds without the `tor` build feature: every address
+/// kind returns a clear, explicit error (mirrors `add_member_over_tor`'s
+/// own `#[cfg(not(feature = "tor"))]` fallback exactly).
+///
+/// # Errors
+///
+/// Returns [`CliError`] if `rotate_key` itself fails (its own `connect`
+/// closure never succeeds here, so this is reachable only via the
+/// non-delivery failure paths — delivery failures themselves are
+/// non-fatal, see `umbra_group::rotate`'s own module docs).
+#[cfg(not(feature = "tor"))]
+async fn rotate_key_over_tor(
+    _cli: &Cli,
+    keystore_dir: &Path,
+    passphrase: &[u8],
+    group: &str,
+    peer_lookup: impl Fn(&str) -> Option<PeerTransportAddress>,
+) -> Result<(), CliError> {
+    let connect = |address: &PeerTransportAddress| {
+        let message: &'static str = match address {
+            PeerTransportAddress::Onion(_) => {
+                "this binary was built without the tor feature; rebuild with --features tor"
+            }
+            PeerTransportAddress::Mesh(_) | PeerTransportAddress::Nym(_) => {
+                "group delivery not yet implemented for this transport"
+            }
+        };
+        async move { Err(umbra_group::GroupError::Malformed(message.into())) }
+    };
+
+    umbra_group::rotate::rotate_key(keystore_dir, passphrase, group, peer_lookup, connect).await?;
     Ok(())
 }
 

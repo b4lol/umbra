@@ -186,12 +186,14 @@ pub fn profile(kind: TransportKind) -> Profile {
                            Ed25519 — no PQ signature ciphersuite exists in \
                            OpenMLS yet (ADR-033)",
             maturity: Level::Limited,
-            maturity_note: "single-cell increment validated at 3-party scale \
-                            only; no member removal or key rotation yet \
-                            (TODO B.2.2/B.2.3)",
-            guidance: "a member who joins via an inbound Welcome cannot SEND \
-                       until roster-bootstrapping lands (TODO B.2.1) — group \
-                       frames are Tor-only",
+            maturity_note: "single-cell increment validated at 3-party scale; \
+                            member removal and on-demand key rotation are both \
+                            implemented (TODO B.2.2/B.2.3) — no automatic/ \
+                            periodic rotation policy",
+            guidance: "a member who joins via an inbound Welcome can send once \
+                       RosterSync (TODO B.2.1) delivers the group's roster to \
+                       them, which may take one round trip after joining — \
+                       group frames are Tor-only",
             doc_ref: PROFILES_DOC,
         },
     }
@@ -324,6 +326,6 @@ mod tests {
         let group = profile(TransportKind::Group);
         assert_eq!(group.content, Level::Moderate);
         assert!(group.content_note.contains("Ed25519"));
-        assert!(group.guidance.contains("B.2.1"));
+        assert!(group.guidance.contains("RosterSync"));
     }
 }
