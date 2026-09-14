@@ -10,40 +10,25 @@
 //! seam) — no live network is involved at any point. This is this
 //! increment's central acceptance proof.
 //!
-//! # A documented, ruled scope gap this test works around (not a bug)
+//! # RosterSync (TODO B.2.1) replaces the old test-only workaround
 //!
-//! `inbound.rs`'s own module docs (see its "A freshly joined group has
-//! no roster yet" section) rule that a peer who joins a group via a
-//! `Welcome` gets an EMPTY [`persistence::GroupRoster`] persisted
-//! alongside their group state — `GroupRoster` is Umbra's own
-//! peer-name-to-leaf-index bookkeeping, never carried over MLS itself,
-//! and populating it for a freshly joined member is explicitly left to
-//! "whatever future mechanism bootstraps peer-name knowledge," ruled
-//! out of scope for that task.
-//!
-//! That means a freshly joined member's own `send_group_message` would
-//! fan out to an empty roster (nobody) until such a mechanism exists.
-//! Proving the reverse-direction send this test's Step 7 requires (an
-//! added member sending a message the others decrypt) therefore needs
-//! that peer's roster to be populated first. Since the bootstrap
-//! mechanism itself is a deliberately deferred design question (not an
-//! "obvious correction" this test's job is to invent), this test
-//! populates it directly using the same already-tested, public
-//! `persistence::load_group_state`/`save_group_state` primitives
-//! `add_member`/`inbound.rs` themselves use — simulating what that
-//! future bootstrap would produce, without touching any production
-//! file. No new production code was needed or added for this test.
-use std::path::{Path, PathBuf};
+//! Earlier versions of this test directly patched a peer's persisted
+//! `GroupRoster` on disk (`patch_roster`, since removed) to work
+//! around `add_member` not yet broadcasting roster updates. That gap
+//! is now closed for real: `add_member` sends a RosterSync application
+//! message (`crate::roster_sync`) after every membership change, and
+//! `process_inbound_group_frame` applies it on receipt. This test now
+//! exercises ONLY the real mechanism — no roster is ever hand-patched.
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use openmls::prelude::OpenMlsProvider as _;
 use tokio::io::{AsyncReadExt, AsyncWrite, DuplexStream};
 use tokio::sync::Mutex;
 
 use umbra_group::delivery::PeerTransportAddress;
 use umbra_group::inbound::{self, InboundGroupEvent};
-use umbra_group::persistence::{self, GroupRoster};
+use umbra_group::persistence;
 use umbra_group::{GroupError, add, create, keypackage, send};
 
 /// Shorthand for a boxed, `Send`, `Send`-error result — matches this
@@ -70,38 +55,45 @@ fn temp_dir(label: &str) -> PathBuf {
     ))
 }
 
-/// A `connect` closure routing to whichever pre-built `DuplexStream`
-/// half was registered for a given address — generalizes `add.rs`'s own
-/// `dual_stream` test helper (fixed at exactly two recipients) to an
-/// arbitrary number, which this 3-party test needs (a `Commit` fan-out
-/// to N-1 previously-existing members, plus a `Welcome` to the new
-/// member, in the same `add_member` call).
+/// A `connect` closure routing to a per-address QUEUE of pre-built
+/// `DuplexStream` halves — generalizes the old single-slot
+/// `addressed_streams` helper now that `add_member` delivers an
+/// additional RosterSync message per call, so a roster member can
+/// receive more than one message (over separate connections) within a
+/// single `add_member`/`send_group_message` invocation.
 fn addressed_streams(
     pairs: Vec<(PeerTransportAddress, DuplexStream)>,
 ) -> impl Fn(&PeerTransportAddress) -> ConnectFuture {
-    let slots: Vec<(PeerTransportAddress, Arc<Mutex<Option<DuplexStream>>>)> = pairs
-        .into_iter()
-        .map(|(address, stream)| (address, Arc::new(Mutex::new(Some(stream)))))
-        .collect();
+    let mut queues: Vec<(PeerTransportAddress, std::collections::VecDeque<DuplexStream>)> =
+        Vec::new();
+    for (address, stream) in pairs {
+        match queues.iter_mut().find(|(candidate, _)| candidate == &address) {
+            Some((_, queue)) => queue.push_back(stream),
+            None => {
+                queues.push((address, std::collections::VecDeque::from([stream])));
+            }
+        }
+    }
+    let state = Arc::new(Mutex::new(queues));
     move |address: &PeerTransportAddress| {
         let address = address.clone();
-        let slots = slots.clone();
+        let state = Arc::clone(&state);
         Box::pin(async move {
-            let slot = slots
-                .into_iter()
+            let mut state = state.lock().await;
+            let (_, queue) = state
+                .iter_mut()
                 .find(|(candidate, _)| candidate == &address)
-                .map(|(_, slot)| slot)
                 .ok_or_else(|| {
                     GroupError::Malformed(format!(
                         "unexpected connect() address in test: {address:?}"
                     ))
                 })?;
-            let taken = slot.lock().await.take().ok_or_else(|| {
-                GroupError::Malformed(
-                    "connect() called more than once for this address in test".into(),
-                )
+            let stream = queue.pop_front().ok_or_else(|| {
+                GroupError::Malformed(format!(
+                    "connect() called more times than expected for {address:?} in test"
+                ))
             })?;
-            Ok(Box::new(taken) as Box<dyn AsyncWrite + Unpin + Send>)
+            Ok(Box::new(stream) as Box<dyn AsyncWrite + Unpin + Send>)
         })
     }
 }
@@ -126,17 +118,6 @@ where
     Ok(buf)
 }
 
-/// Directly patches a group-state file's persisted [`GroupRoster`] to
-/// `new_roster`, preserving the group's own MLS tree/epoch state exactly
-/// as loaded (only the orthogonal Umbra-bookkeeping roster field
-/// changes) — see this file's top-level module docs for why this test
-/// needs to do this rather than the production code.
-fn patch_roster(path: &Path, passphrase: &[u8], new_roster: &GroupRoster) -> TestResult {
-    let (group, _old_roster, provider) = persistence::load_group_state(path, passphrase)?;
-    persistence::save_group_state(path, passphrase, &group, provider.storage(), new_roster)?;
-    Ok(())
-}
-
 #[tokio::test]
 async fn three_party_create_add_send_receive_flow() -> TestResult {
     let alice_dir = temp_dir("alice");
@@ -149,7 +130,9 @@ async fn three_party_create_add_send_receive_flow() -> TestResult {
     let bob_pw = b"bob-hermetic-pw";
     let carol_pw = b"carol-hermetic-pw";
 
-    // 1 & 2. Alice creates the group.
+    // 1 & 2. Alice creates the group, seeding her own name into the
+    // roster (TODO B.2.1) — without this, nobody she later adds could
+    // ever route a reply back to her via RosterSync.
     create::create_group(&alice_dir, alice_pw, "cell", "alice")?;
 
     // 3. Bob and Carol each export a key package.
@@ -160,13 +143,21 @@ async fn three_party_create_add_send_receive_flow() -> TestResult {
     let carol_addr = PeerTransportAddress::Mesh("carol-mesh".to_string());
     let alice_addr = PeerTransportAddress::Onion("alice.onion".to_string());
 
-    // 4. Alice adds Bob. Alice's roster is empty at this point (a
-    // freshly created group's own documented starting state — see
-    // `create.rs`), so the Commit fan-out (to nobody) makes no
-    // `connect()` call at all; only the Welcome to Bob does.
+    // 4. Alice adds Bob. Alice's roster contains only herself at this
+    // point (seeded at create time), so the Commit fan-out goes to
+    // her alone... but `add_member` never delivers to the ACTOR's own
+    // address (it fans the Commit out to `old_roster`, which here is
+    // `[alice]` — `peer_lookup` below has no entry for "alice", so
+    // that one delivery attempt harmlessly fails and is discarded, a
+    // documented, accepted simplification — see the design spec's
+    // §0). Bob receives the Welcome, then the RosterSync.
     let welcome_frame_for_bob = {
-        let (bob_member_side, bob_observer_side) = tokio::io::duplex(8192);
-        let connect = addressed_streams(vec![(bob_addr.clone(), bob_member_side)]);
+        let (bob_welcome_side, bob_welcome_observer) = tokio::io::duplex(8192);
+        let (bob_roster_sync_side, bob_roster_sync_observer) = tokio::io::duplex(8192);
+        let connect = addressed_streams(vec![
+            (bob_addr.clone(), bob_welcome_side),
+            (bob_addr.clone(), bob_roster_sync_side),
+        ]);
         let peer_lookup = {
             let bob_addr = bob_addr.clone();
             move |name: &str| {
@@ -189,7 +180,9 @@ async fn three_party_create_add_send_receive_flow() -> TestResult {
         )
         .await?;
 
-        capture_frame(bob_observer_side).await?
+        let welcome = capture_frame(bob_welcome_observer).await?;
+        let _roster_sync_from_first_add = capture_frame(bob_roster_sync_observer).await?;
+        welcome
     };
 
     let bob_joined =
@@ -202,14 +195,19 @@ async fn three_party_create_add_send_receive_flow() -> TestResult {
     };
 
     // 5. Alice adds Carol. Alice's roster now contains Bob (from step
-    // 4), so THIS add's Commit fans out to Bob too — the specific path
-    // this test must exercise beyond the Welcome-only case above.
-    let (bob_commit_frame, welcome_frame_for_carol) = {
-        let (bob_member_side, bob_observer_side) = tokio::io::duplex(8192);
-        let (carol_member_side, carol_observer_side) = tokio::io::duplex(8192);
+    // 4), so THIS add's Commit fans out to Bob too. Bob receives the
+    // Commit then a RosterSync; Carol receives the Welcome then a
+    // RosterSync.
+    let (bob_commit_frame, bob_roster_sync_frame, welcome_frame_for_carol, carol_roster_sync_frame) = {
+        let (bob_commit_side, bob_commit_observer) = tokio::io::duplex(8192);
+        let (bob_roster_sync_side, bob_roster_sync_observer) = tokio::io::duplex(8192);
+        let (carol_welcome_side, carol_welcome_observer) = tokio::io::duplex(8192);
+        let (carol_roster_sync_side, carol_roster_sync_observer) = tokio::io::duplex(8192);
         let connect = addressed_streams(vec![
-            (bob_addr.clone(), bob_member_side),
-            (carol_addr.clone(), carol_member_side),
+            (bob_addr.clone(), bob_commit_side),
+            (bob_addr.clone(), bob_roster_sync_side),
+            (carol_addr.clone(), carol_welcome_side),
+            (carol_addr.clone(), carol_roster_sync_side),
         ]);
         let peer_lookup = {
             let bob_addr = bob_addr.clone();
@@ -233,8 +231,10 @@ async fn three_party_create_add_send_receive_flow() -> TestResult {
         .await?;
 
         (
-            capture_frame(bob_observer_side).await?,
-            capture_frame(carol_observer_side).await?,
+            capture_frame(bob_commit_observer).await?,
+            capture_frame(bob_roster_sync_observer).await?,
+            capture_frame(carol_welcome_observer).await?,
+            capture_frame(carol_roster_sync_observer).await?,
         )
     };
 
@@ -249,6 +249,21 @@ async fn three_party_create_add_send_receive_flow() -> TestResult {
          existing member, not just a Welcome to a new one)"
     );
 
+    // Bob applies the RosterSync that followed the Commit — this is
+    // the REAL mechanism populating his roster with alice and carol,
+    // replacing the old `patch_roster` workaround entirely.
+    let bob_roster_synced =
+        inbound::process_inbound_group_frame(&bob_dir, bob_pw, &bob_roster_sync_frame)?;
+    let InboundGroupEvent::RosterSync {
+        roster: bob_roster_after_second_add,
+        ..
+    } = bob_roster_synced
+    else {
+        return Err("expected a RosterSync event for bob".into());
+    };
+    assert!(bob_roster_after_second_add.leaf_index_for("alice").is_some());
+    assert!(bob_roster_after_second_add.leaf_index_for("carol").is_some());
+
     let carol_joined =
         inbound::process_inbound_group_frame(&carol_dir, carol_pw, &welcome_frame_for_carol)?;
     let InboundGroupEvent::Joined {
@@ -256,6 +271,11 @@ async fn three_party_create_add_send_receive_flow() -> TestResult {
     } = carol_joined
     else {
         return Err("expected Joined event for carol".into());
+    };
+    let carol_roster_synced =
+        inbound::process_inbound_group_frame(&carol_dir, carol_pw, &carol_roster_sync_frame)?;
+    let InboundGroupEvent::RosterSync { .. } = carol_roster_synced else {
+        return Err("expected a RosterSync event for carol".into());
     };
 
     // Both Bob and Carol now independently see a 3-member group.
@@ -271,7 +291,9 @@ async fn three_party_create_add_send_receive_flow() -> TestResult {
     assert_eq!(carol_group_after_adds.members().count(), 3);
 
     // 6. Alice sends a group message; it fans out to both Bob and
-    // Carol (Alice's own roster now holds both).
+    // Carol (Alice's own roster now holds both — from Bob's and
+    // Carol's own adds, unchanged by RosterSync since Alice is the
+    // sender of those, not a receiver).
     let cell_plaintext = b"hello cell".to_vec();
     let (bob_app_frame, carol_app_frame) = {
         let (bob_member_side, bob_observer_side) = tokio::io::duplex(8192);
@@ -326,29 +348,9 @@ async fn three_party_create_add_send_receive_flow() -> TestResult {
 
     // 7. Reverse direction: Bob independently sends a message that
     // Alice and Carol can both decrypt too — proving this isn't a
-    // one-way artifact of Alice's own state.
-    //
-    // Bob's own persisted roster is empty (see this file's top-level
-    // module docs), so it is patched here with the peer-name/leaf-index
-    // mapping this test already knows, using only already-tested
-    // persistence primitives (no production code changed).
-    let (alice_group_for_leaf, alice_roster, _alice_provider) =
-        persistence::load_group_state(&alice_dir.join("groups").join("cell.enc"), alice_pw)?;
-    let alice_leaf = alice_group_for_leaf.own_leaf_index();
-    let carol_leaf = alice_roster
-        .leaf_index_for("carol")
-        .ok_or("carol missing from alice's persisted roster")?;
-    patch_roster(
-        &bob_group_path,
-        bob_pw,
-        &GroupRoster {
-            members: vec![
-                ("alice".to_string(), alice_leaf),
-                ("carol".to_string(), carol_leaf),
-            ],
-        },
-    )?;
-
+    // one-way artifact of Alice's own state. Bob's roster (populated
+    // via the REAL RosterSync mechanism in step 5, NOT `patch_roster`)
+    // already contains alice and carol.
     let bob_plaintext = b"hello from bob".to_vec();
     let (alice_app_frame, carol_app_frame_from_bob) = {
         let (alice_member_side, alice_observer_side) = tokio::io::duplex(8192);
