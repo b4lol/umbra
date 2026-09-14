@@ -20,6 +20,15 @@ use std::sync::{Mutex, MutexGuard};
 /// time would race (observed directly during the keystore-format
 /// increment: `Pkcs11(Pkcs11(GeneralError, Initialize))`). Holding this
 /// lock for a test's entire SoftHSM2-touching body is the fix.
+///
+/// NOTE: this lock only protects tests within THIS crate's one lib test
+/// binary. Safety against `umbra-hwkey`'s own separate test binary
+/// (which shares the same on-disk token directory) rests on the
+/// undocumented-by-cargo-but-currently-true invariant that stock
+/// `cargo test` runs different test binaries SEQUENTIALLY, never
+/// concurrently — this would break under `cargo-nextest` (which
+/// deliberately parallelizes across binaries) or two concurrent `cargo
+/// test` invocations (e.g. two worktree sessions building at once).
 pub(crate) static TEST_TOKEN_LOCK: Mutex<()> = Mutex::new(());
 
 /// Acquires [`TEST_TOKEN_LOCK`], recovering from poisoning rather than

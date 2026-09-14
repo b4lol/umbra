@@ -64,6 +64,13 @@ pub struct Cli {
     /// module path for a real hardware token). Required, together with
     /// `--hw-pin-file` and `--hw-key-label`, for `init` to create a
     /// hardware-gated keystore, or to unlock one that already exists.
+    /// Accepted as a trust boundary at the same level as
+    /// `--keystore`/`--passphrase-file` (ADR-034's addendum) — this flag
+    /// `dlopen`s whatever `.so` it points to, with no signature or
+    /// provenance verification. Loading a PKCS#11 module happens after
+    /// this process's `mlockall(MCL_FUTURE)` (ADR-025) runs — a
+    /// constrained `RLIMIT_MEMLOCK` may cause the module's `dlopen` to
+    /// fail with `ENOMEM`; raise the limit if that happens.
     #[arg(long, global = true, value_name = "PATH")]
     pub hw_module: Option<std::path::PathBuf>,
 
@@ -658,6 +665,7 @@ fn load_identity(cli: &Cli) -> Result<IdentityBundle, CliError> {
 
 /// Implements `umbra init`: new persistent identity keystore.
 fn init_with(cli: &Cli) -> Result<(), CliError> {
+    harden_memory()?;
     let path = cli
         .keystore
         .as_ref()
@@ -688,6 +696,7 @@ fn pair(
     mesh_addr: Option<&str>,
     nym_addr: Option<&str>,
 ) -> Result<(), CliError> {
+    harden_memory()?;
     // The peer record lives next to the keystore.
     let keystore_dir = cli
         .keystore
@@ -715,6 +724,7 @@ fn pair(
 
 /// Implements `umbra export-pairing`: own payload on `stdout`.
 fn export_pairing() -> Result<(), CliError> {
+    harden_memory()?;
     let cli = Cli::parse();
     let bundle = load_identity(&cli)?;
     let payload = crate::pairing::payload_for(&bundle)?;
