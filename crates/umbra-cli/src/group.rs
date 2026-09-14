@@ -67,6 +67,12 @@ pub enum GroupCommand {
         /// (`<keystore-dir>/groups/<name>.enc`).
         #[arg(long)]
         name: String,
+        /// The name this peer wants to be known as within this group
+        /// (seeds the initial `GroupRoster`, TODO B.2.1) — without
+        /// this, nobody added to the group later could ever route a
+        /// reply back to this peer via the RosterSync mechanism.
+        #[arg(long)]
+        own_name: String,
     },
 
     /// Generates a fresh MLS `KeyPackage` for this peer's group
@@ -133,7 +139,7 @@ pub fn dispatch(command: &GroupCommand, cli: &Cli) -> Result<(), CliError> {
     );
 
     match command {
-        GroupCommand::Create { name } => create(cli, name),
+        GroupCommand::Create { name, own_name } => create(cli, name, own_name),
         GroupCommand::ExportKeypackage => export_keypackage(cli),
         GroupCommand::Add {
             group,
@@ -155,10 +161,10 @@ fn keystore_dir(cli: &Cli) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// `umbra group create --name NAME`.
-fn create(cli: &Cli, name: &str) -> Result<(), CliError> {
+/// `umbra group create --name NAME --own-name NAME`.
+fn create(cli: &Cli, name: &str, own_name: &str) -> Result<(), CliError> {
     let passphrase = crate::cli::load_passphrase(cli)?;
-    umbra_group::create::create_group(&keystore_dir(cli), &passphrase, name)?;
+    umbra_group::create::create_group(&keystore_dir(cli), &passphrase, name, own_name)?;
     Ok(())
 }
 

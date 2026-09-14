@@ -615,7 +615,7 @@ mod tests {
         let alice_pw = b"alice-pw";
         let bob_pw = b"bob-pw";
 
-        create::create_group(&alice_dir, alice_pw, "cell")?;
+        create::create_group(&alice_dir, alice_pw, "cell", "alice")?;
         let bob_kp = kp::export_keypackage(&bob_dir, bob_pw)?;
 
         let welcome_frame =
@@ -664,7 +664,7 @@ mod tests {
         let alice_pw = b"alice-pw";
         let bob_pw = b"bob-pw";
 
-        create::create_group(&alice_dir, alice_pw, "cell")?;
+        create::create_group(&alice_dir, alice_pw, "cell", "alice")?;
         let bob_kp = kp::export_keypackage(&bob_dir, bob_pw)?;
         let welcome_frame =
             add_member_and_capture_frame(&alice_dir, alice_pw, "cell", "bob", &bob_kp).await?;
@@ -695,7 +695,7 @@ mod tests {
         let bob_pw = b"bob-pw";
         let charlie_pw = b"charlie-pw";
 
-        create::create_group(&alice_dir, alice_pw, "cell")?;
+        create::create_group(&alice_dir, alice_pw, "cell", "alice")?;
         let bob_kp = kp::export_keypackage(&bob_dir, bob_pw)?;
         let welcome_frame =
             add_member_and_capture_frame(&alice_dir, alice_pw, "cell", "bob", &bob_kp).await?;
@@ -802,7 +802,7 @@ mod tests {
         let alice_pw = b"alice-pw";
         let bob_pw = b"bob-pw";
 
-        create::create_group(&alice_dir, alice_pw, "cell")?;
+        create::create_group(&alice_dir, alice_pw, "cell", "alice")?;
         let bob_kp = kp::export_keypackage(&bob_dir, bob_pw)?;
         let welcome_frame =
             add_member_and_capture_frame(&alice_dir, alice_pw, "cell", "bob", &bob_kp).await?;

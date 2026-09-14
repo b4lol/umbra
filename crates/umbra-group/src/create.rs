@@ -68,6 +68,14 @@ fn load_or_generate_identity(
 /// now the ONLY place left that must still refuse to silently clobber
 /// an existing group's entire MLS tree/epoch state).
 ///
+/// The initial persisted roster contains a single entry mapping
+/// `own_peer_name` to this peer's own MLS leaf index — without this,
+/// nobody the creator later adds could ever route a reply back to the
+/// creator via [`crate::add::add_member`]'s RosterSync broadcast
+/// (TODO B.2.1), since a member's own name is otherwise never present
+/// in any roster (see `crates/umbra-group/src/add.rs`'s roster
+/// construction, which only ever appends the ADDED peer's name).
+///
 /// # Errors
 ///
 /// Returns [`GroupError::AlreadyExists`] if the group state file
@@ -79,6 +87,7 @@ pub fn create_group(
     keystore_dir: &Path,
     passphrase: &[u8],
     group_name: &str,
+    own_peer_name: &str,
 ) -> Result<(), GroupError> {
     let groups_dir = keystore_dir.join(GROUPS_DIR_NAME);
     let group_state_path = groups_dir.join(format!("{group_name}.enc"));
@@ -111,12 +120,15 @@ pub fn create_group(
         credential_with_key,
     )?;
 
+    let initial_roster = GroupRoster {
+        members: vec![(own_peer_name.to_string(), group.own_leaf_index())],
+    };
     persistence::save_group_state(
         &group_state_path,
         passphrase,
         &group,
         provider.storage(),
-        &GroupRoster::default(),
+        &initial_roster,
     )?;
 
     Ok(())
@@ -142,7 +154,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir)?;
 
-        create_group(&dir, b"pw", "my-cell")?;
+        create_group(&dir, b"pw", "my-cell", "alice")?;
 
         // The group identity is generated once, shared across groups.
         assert!(dir.join(GROUP_IDENTITY_FILE_NAME).exists());
@@ -152,7 +164,10 @@ mod tests {
 
         let (loaded_group, loaded_roster, _provider) =
             persistence::load_group_state(&group_state_path, b"pw")?;
-        assert!(loaded_roster.members.is_empty());
+        assert_eq!(
+            loaded_roster.members,
+            vec![("alice".to_string(), loaded_group.own_leaf_index())]
+        );
         assert_eq!(loaded_group.members().count(), 1);
 
         std::fs::remove_dir_all(&dir)?;
@@ -176,13 +191,13 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir)?;
 
-        create_group(&dir, b"pw", "my-cell")?;
+        create_group(&dir, b"pw", "my-cell", "alice")?;
         let group_state_path = dir.join(GROUPS_DIR_NAME).join("my-cell.enc");
         let bytes_after_first_create = std::fs::read(&group_state_path)?;
 
         // Second call, same keystore dir and group name: must be
         // refused, not silently clobber the first group's state.
-        let second_result = create_group(&dir, b"pw", "my-cell");
+        let second_result = create_group(&dir, b"pw", "my-cell", "alice");
         assert!(
             matches!(second_result, Err(GroupError::AlreadyExists(_))),
             "expected AlreadyExists, got {second_result:?}"
@@ -201,7 +216,10 @@ mod tests {
         // byte-identical by coincidence).
         let (loaded_group, loaded_roster, _provider) =
             persistence::load_group_state(&group_state_path, b"pw")?;
-        assert!(loaded_roster.members.is_empty());
+        assert_eq!(
+            loaded_roster.members,
+            vec![("alice".to_string(), loaded_group.own_leaf_index())]
+        );
         assert_eq!(loaded_group.members().count(), 1);
 
         std::fs::remove_dir_all(&dir)?;

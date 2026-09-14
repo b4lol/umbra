@@ -150,7 +150,7 @@ async fn three_party_create_add_send_receive_flow() -> TestResult {
     let carol_pw = b"carol-hermetic-pw";
 
     // 1 & 2. Alice creates the group.
-    create::create_group(&alice_dir, alice_pw, "cell")?;
+    create::create_group(&alice_dir, alice_pw, "cell", "alice")?;
 
     // 3. Bob and Carol each export a key package.
     let bob_kp = keypackage::export_keypackage(&bob_dir, bob_pw)?;

@@ -246,7 +246,7 @@ mod tests {
         // exactly as `inbound.rs`'s own tests do (rather than hand-
         // assembling an `MlsGroup` the way `add.rs`'s own test fixture
         // does): `create_group` + `export_keypackage` + `add_member`.
-        create::create_group(&alice_dir, alice_pw, "cell")?;
+        create::create_group(&alice_dir, alice_pw, "cell", "alice")?;
         let bob_kp = keypackage::export_keypackage(&bob_dir, bob_pw)?;
 
         let bob_addr = PeerTransportAddress::Mesh("bob-mesh".to_string());

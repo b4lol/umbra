@@ -736,7 +736,7 @@ mod tests {
         bob_dir: &Path,
         bob_pw: &[u8],
     ) -> TestResult2<Vec<u8>> {
-        create::create_group(alice_dir, alice_pw, "cell")?;
+        create::create_group(alice_dir, alice_pw, "cell", "alice")?;
         let bob_kp = keypackage::export_keypackage(bob_dir, bob_pw)?;
         let (bob_member_side, bob_observer_side) = tokio::io::duplex(64 * 1024);
         let connect = single_use_stream(bob_member_side);
