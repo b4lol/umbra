@@ -107,6 +107,11 @@ pub enum InboundEvent {
         /// Local name (file stem) of the updated group.
         group_name: String,
     },
+    /// A known group's roster was replaced by an inbound RosterSync.
+    GroupRosterSynced {
+        /// Local name (file stem) of the group whose roster changed.
+        group_name: String,
+    },
 }
 
 /// The keystore material the inbound loop's group branch needs AFTER
@@ -411,6 +416,9 @@ pub fn run(
                 Ok(InboundEvent::GroupUpdated { group_name }) => {
                     emit_event("group-updated", Some(group_name.as_bytes()))?;
                 }
+                Ok(InboundEvent::GroupRosterSynced { group_name }) => {
+                    emit_event("group-roster-synced", Some(group_name.as_bytes()))?;
+                }
                 Err(error) => {
                     eprintln!("umbra: inbound session failed: {error}");
                 }
@@ -537,6 +545,9 @@ where
             group_name,
             plaintext,
         }),
+        Ok(InboundGroupEvent::RosterSync { group_name, .. }) => {
+            Ok(InboundEvent::GroupRosterSynced { group_name })
+        }
         Err(error) => Err(format!("inbound group frame: {error}")),
     }
 }
