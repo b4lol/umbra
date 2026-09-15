@@ -71,7 +71,26 @@ pub enum EngineError {
 /// Returns [`EngineError`] if memory hardening, the socket bind, or
 /// sandbox setup fails.
 pub fn run(socket_path: &Path, keystore_dir: &Path) -> Result<(), EngineError> {
-    umbra_hardware::process::harden_process()
+    // Core-dump suppression only — NOT `umbra_hardware::process::
+    // harden_process()`'s full bundle, which also calls `mlockall
+    // (MCL_CURRENT | MCL_FUTURE)`. That call locks every FUTURE
+    // allocation into RAM too, and this process's own unlock dispatch
+    // (`dispatch::unlock`) drives Argon2id at the production cost
+    // (`m_cost_kib = 1 << 18` = 256 MiB, `crates/umbra-crypto/src/
+    // keystore.rs`) — an allocation far larger than a constrained
+    // `RLIMIT_MEMLOCK` (8 MiB, empirically confirmed in this project's
+    // own dev sandbox) can lock, which fails Argon2id itself with
+    // `ENOMEM` well after `mlockall` already "succeeded" (mlockall
+    // only marks future allocations for locking; the failure surfaces
+    // later, at the large allocation). `crates/umbra-cli/src/cli.rs`'s
+    // `init_with` already hit and documented this exact conflict for
+    // `umbra init`/`keygen` and deliberately skips hardening there for
+    // the same reason. This function keeps the free, unrelated
+    // protections (`disable_core_dumps`/`limit_core_dumps`) and drops
+    // only `lock_all_memory`.
+    umbra_hardware::process::disable_core_dumps()
+        .map_err(|error| EngineError::Hardware(error.to_string()))?;
+    umbra_hardware::process::limit_core_dumps()
         .map_err(|error| EngineError::Hardware(error.to_string()))?;
 
     // A stale socket file (e.g. left behind by an ungraceful prior
