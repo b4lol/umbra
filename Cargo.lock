@@ -7913,8 +7913,8 @@ dependencies = [
  "clap",
  "gtk4",
  "libadwaita",
- "umbra-cli",
- "umbra-crypto",
+ "serde",
+ "serde_json",
  "umbra-hardware",
  "zeroize",
 ]

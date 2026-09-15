@@ -1,14 +1,20 @@
 //! `umbra-gui` binary entry point (TODO B.3). Checks for a Wayland
 //! session BEFORE touching GTK/Adwaita at all; if present, hardens
 //! process memory (ADR-025) before the passphrase can touch RAM, then
-//! opens a keystore-unlock view. On success, shows the unlocked
-//! identity's fingerprint. No messaging, peer list, or sandboxing yet
-//! — see `docs/superpowers/specs/2026-09-13-gui-keystore-unlock-design.md`.
+//! spawns the `umbra-engine` process (TODO B.3.1) and opens a
+//! keystore-unlock view backed by it. On success, shows the unlocked
+//! identity's fingerprint. No messaging, peer list, or sandboxing of
+//! THIS process yet — see
+//! `docs/superpowers/specs/2026-09-13-gui-keystore-unlock-design.md`
+//! and `docs/superpowers/specs/2026-09-15-engine-ui-separation-design.md`.
 
-use std::path::PathBuf;
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk4::prelude::{BoxExt, ButtonExt, EditableExt, WidgetExt};
+use umbra_gui::engine_client::EngineClient;
 
 /// GTK application ID (reverse-DNS convention).
 const APPLICATION_ID: &str = "org.umbra.Gui";
@@ -37,10 +43,33 @@ fn main() -> gtk4::glib::ExitCode {
     }
 
     // ADR-025: memory hardening BEFORE the passphrase (entered shortly,
-    // in the unlock view) or any other secret touches RAM. No
-    // Landlock/Seccomp sandboxing yet — deferred to whichever future
-    // increment adds real networking (see the design doc).
-    if let Err(error) = umbra_hardware::process::harden_process() {
+    // in the unlock view) or any other secret touches RAM. Kept in
+    // THIS process too (defense in depth, TODO B.3.1): the passphrase
+    // still passes through here transiently, in a `Zeroizing` buffer,
+    // between the `PasswordEntry` widget and the Engine socket write —
+    // only the unlock COMPUTATION itself, and the resulting identity
+    // key material, live exclusively in the separate Engine process.
+    //
+    // Core-dump suppression only — NOT `umbra_hardware::process::
+    // harden_process()`'s full bundle, which also calls `mlockall
+    // (MCL_CURRENT | MCL_FUTURE)`. `MCL_CURRENT` alone locks every page
+    // already mapped at call time, and GTK4/Libadwaita's own baseline
+    // footprint (Pango/Cairo/GDK plus their shared libraries) already
+    // exceeds a constrained `RLIMIT_MEMLOCK` (8 MiB, empirically
+    // confirmed in this project's own dev sandbox) before this
+    // process's own passphrase buffer is even allocated — so
+    // `mlockall` itself fails with `ENOMEM` immediately (root-caused
+    // by actually running this binary under this sandbox's real
+    // Wayland session, TODO B.3.1's own manual-verification step; see
+    // `crates/umbra-engine/src/lib.rs::run`'s own analogous fix for
+    // the same conflict on the Engine side, and
+    // `crates/umbra-cli/src/cli.rs`'s `init_with`, which hit and
+    // documented it first). This keeps the free, unrelated protections
+    // (`disable_core_dumps`/`limit_core_dumps`) and drops only
+    // `lock_all_memory`.
+    if let Err(error) = umbra_hardware::process::disable_core_dumps()
+        .and_then(|()| umbra_hardware::process::limit_core_dumps())
+    {
         eprintln!("umbra-gui: memory hardening failed: {error}");
         std::process::exit(1);
     }
@@ -53,10 +82,26 @@ fn main() -> gtk4::glib::ExitCode {
     // any other GDK/GTK call.
     gtk4::gdk::set_allowed_backends("wayland");
 
+    // TODO B.3.1: spawn the sandboxed Engine process BEFORE building
+    // any window. No in-process fallback on failure — see this
+    // increment's spec, "no in-process fallback to the old direct-
+    // unlock code path, since that would defeat the separation
+    // entirely."
+    let (engine_client, canonical_keystore_path) = match EngineClient::spawn(&cli.keystore) {
+        Ok(result) => result,
+        Err(message) => {
+            eprintln!("umbra-gui: failed to start the Engine process: {message}");
+            std::process::exit(1);
+        }
+    };
+    let engine_client = Rc::new(RefCell::new(engine_client));
+
     let application = adw::Application::builder()
         .application_id(APPLICATION_ID)
         .build();
-    application.connect_activate(move |application| build_window(application, &cli.keystore));
+    application.connect_activate(move |application| {
+        build_window(application, &canonical_keystore_path, engine_client.clone());
+    });
     // `run()` would re-parse the PROCESS'S OWN argv through GLib's option
     // parser (`ApplicationExtManual::run()` forwards `std::env::args_os()`
     // straight into `g_application_run`) — since `--keystore` isn't a
@@ -72,7 +117,8 @@ fn main() -> gtk4::glib::ExitCode {
 /// password field + button + hidden-by-default error label) and the
 /// `"identity"` view (the unlocked fingerprint). Everything below this
 /// point is the ONLY GTK/Adwaita-touching code in this binary — the
-/// Wayland check and memory hardening above have already run.
+/// Wayland check, memory hardening, and Engine spawn above have
+/// already run.
 ///
 /// # Honest scope: the password field's own memory is not zeroized
 ///
@@ -81,11 +127,14 @@ fn main() -> gtk4::glib::ExitCode {
 /// `zeroize`/`Zeroizing` control (and outside safe Rust's reach without
 /// `unsafe`, which this workspace forbids). Only the copy THIS function
 /// extracts from it, once read at unlock-button-click time, is wrapped
-/// in `zeroize::Zeroizing` before being passed to
-/// [`umbra_gui::unlock::unlock`] — a real, accepted residual of using a
-/// GUI toolkit that predates and does not itself practice
-/// zeroize-on-drop hygiene.
-fn build_window(application: &adw::Application, keystore_path: &std::path::Path) {
+/// in `zeroize::Zeroizing` before being sent to the Engine over the
+/// `AF_UNIX` socket — a real, accepted residual of using a GUI toolkit
+/// that predates and does not itself practice zeroize-on-drop hygiene.
+fn build_window(
+    application: &adw::Application,
+    keystore_path: &Path,
+    engine_client: Rc<RefCell<EngineClient>>,
+) {
     let stack = gtk4::Stack::new();
 
     let password_entry = gtk4::PasswordEntry::builder().show_peek_icon(true).build();
@@ -106,7 +155,8 @@ fn build_window(application: &adw::Application, keystore_path: &std::path::Path)
     let stack_for_closure = stack.clone();
     unlock_button.connect_clicked(move |_button| {
         let passphrase = zeroize::Zeroizing::new(password_entry.text().as_bytes().to_vec());
-        match umbra_gui::unlock::unlock(&keystore_path, &passphrase) {
+        let mut engine_client = engine_client.borrow_mut();
+        match engine_client.unlock(&keystore_path, &passphrase) {
             Ok(fingerprint) => {
                 let reveal_widget = umbra_gui::scratch_reveal::build_scratch_reveal(&format!(
                     "Fingerprint: {fingerprint}"
