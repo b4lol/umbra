@@ -225,6 +225,12 @@ pub enum Command {
     /// later tasks of the same plan) invite/join/send/receive.
     #[command(subcommand)]
     Group(crate::group::GroupCommand),
+    /// Decoy Vault: hidden-volume identity storage under coercion
+    /// (TODO B.3). `create`/`add-hidden`/`unlock` — see
+    /// `crate::decoy_vault::DecoyVaultCommand`'s own doc comments,
+    /// especially `unlock`'s duress-safety guarantee.
+    #[command(subcommand)]
+    DecoyVault(crate::decoy_vault::DecoyVaultCommand),
 }
 
 /// Top-level CLI error.
@@ -545,6 +551,7 @@ pub fn run() -> Result<(), CliError> {
             nym_addr.as_deref(),
         ),
         Command::Group(ref sub) => crate::group::dispatch(sub, &cli),
+        Command::DecoyVault(ref sub) => crate::decoy_vault::dispatch(sub, &cli),
     }
 }
 

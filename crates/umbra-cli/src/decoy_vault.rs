@@ -188,6 +188,57 @@ pub fn load_hidden_with_params(
     Ok(IdentityBundle::from_seeds(&seeds))
 }
 
+/// Unlocks a decoy-vault file: tries BOTH the outer and hidden
+/// identities with the SAME `passphrase`.
+///
+/// # Constant-time property (security-critical, do not "optimize")
+///
+/// Both [`load_outer_with_params`] and [`load_hidden_with_params`] are
+/// called UNCONDITIONALLY — even when the first already succeeded.
+/// Short-circuiting the second call would make this function's total
+/// running time depend on WHICH region matched (one Argon2id
+/// derivation vs. two), a real, measurable timing side-channel that
+/// would defeat the entire point of a duress-safe single unlock
+/// command: an observer timing `unlock` could otherwise infer whether
+/// the outer or hidden identity was just opened, even without seeing
+/// any output.
+///
+/// # Errors
+///
+/// Returns [`CliError`] if `passphrase` matches NEITHER region (the
+/// outer failure's error text — identical to the hidden failure's, by
+/// Phase 1/2's own deniability guarantee).
+pub fn unlock(path: &Path, passphrase: &[u8]) -> Result<IdentityBundle, CliError> {
+    unlock_with_params(
+        path,
+        passphrase,
+        crypto_keystore::ARGON2_M_KIB,
+        crypto_keystore::ARGON2_T_COST,
+        crypto_keystore::ARGON2_P_COST,
+    )
+}
+
+/// [`unlock`] with explicit Argon2id parameters.
+///
+/// # Errors
+///
+/// See [`unlock`].
+pub fn unlock_with_params(
+    path: &Path,
+    passphrase: &[u8],
+    m_cost_kib: u32,
+    t_cost: u32,
+    p_cost: u32,
+) -> Result<IdentityBundle, CliError> {
+    let outer_result = load_outer_with_params(path, passphrase, m_cost_kib, t_cost, p_cost);
+    let hidden_result = load_hidden_with_params(path, passphrase, m_cost_kib, t_cost, p_cost);
+    match (outer_result, hidden_result) {
+        (Ok(bundle), _) => Ok(bundle),
+        (Err(_), Ok(bundle)) => Ok(bundle),
+        (Err(outer_error), Err(_)) => Err(outer_error),
+    }
+}
+
 /// Writes `contents` to a brand-new file at `path` with `0600`
 /// permissions, refusing to overwrite an existing file. Mirrors
 /// `umbra_cli::keystore::save_with_params`'s own exact file-creation
@@ -233,6 +284,81 @@ fn overwrite_file(path: &Path, contents: &[u8]) -> Result<(), CliError> {
     handle
         .sync_all()
         .map_err(|e| CliError::Keystore(format!("sync failed: {e}")))?;
+    Ok(())
+}
+
+/// `umbra decoy-vault` subcommands (TODO B.3, Phase 3).
+#[derive(Debug, clap::Subcommand)]
+pub enum DecoyVaultCommand {
+    /// Creates a new decoy-vault file with a fresh outer identity.
+    Create,
+    /// Adds a hidden identity to an existing decoy-vault file. Does
+    /// NOT require knowledge of the outer passphrase (matches
+    /// VeraCrypt's own UX: hidden-volume creation only needs the
+    /// hidden passphrase and file access).
+    AddHidden,
+    /// Unlocks a decoy-vault file — tries the outer identity, then
+    /// the hidden identity, with the SAME `--passphrase-file`. NEVER
+    /// reveals which one (if either) actually matched: identical
+    /// output, identical error text, identical timing either way.
+    Unlock,
+}
+
+/// Dispatches a parsed `umbra decoy-vault` subcommand.
+///
+/// # Errors
+///
+/// Returns [`CliError`] on failure.
+pub fn dispatch(command: &DecoyVaultCommand, cli: &crate::cli::Cli) -> Result<(), CliError> {
+    match command {
+        DecoyVaultCommand::Create => create_cmd(cli),
+        DecoyVaultCommand::AddHidden => add_hidden_cmd(cli),
+        DecoyVaultCommand::Unlock => unlock_cmd(cli),
+    }
+}
+
+/// Resolves `--keystore PATH` (reused for decoy-vault files — same
+/// role, "the identity file path", as the ordinary keystore command's
+/// own use of this global flag).
+fn keystore_path(cli: &crate::cli::Cli) -> Result<&Path, CliError> {
+    cli.keystore
+        .as_deref()
+        .ok_or_else(|| CliError::Keystore("missing --keystore PATH".into()))
+}
+
+/// `umbra decoy-vault create`.
+fn create_cmd(cli: &crate::cli::Cli) -> Result<(), CliError> {
+    let path = keystore_path(cli)?;
+    let passphrase = crate::cli::load_passphrase(cli)?;
+    let bundle = IdentityBundle::generate();
+    create(path, &passphrase, &bundle)?;
+    crate::cli::output::line("decoy vault created");
+    Ok(())
+}
+
+/// `umbra decoy-vault add-hidden`.
+fn add_hidden_cmd(cli: &crate::cli::Cli) -> Result<(), CliError> {
+    let path = keystore_path(cli)?;
+    let passphrase = crate::cli::load_passphrase(cli)?;
+    let bundle = IdentityBundle::generate();
+    write_hidden(path, &passphrase, &bundle)?;
+    crate::cli::output::line("hidden identity added");
+    Ok(())
+}
+
+/// `umbra decoy-vault unlock`. Prints the resulting identity's
+/// fingerprint — the SAME code path regardless of whether the outer
+/// or hidden identity was actually unlocked (see [`unlock`]'s own
+/// doc comment for why this indistinguishability matters).
+fn unlock_cmd(cli: &crate::cli::Cli) -> Result<(), CliError> {
+    let path = keystore_path(cli)?;
+    let passphrase = crate::cli::load_passphrase(cli)?;
+    let bundle = unlock(path, &passphrase)?;
+    let fingerprint = umbra_crypto::kdf::identity_fingerprint(
+        &bundle.x25519.public_bytes(),
+        &bundle.dsa.public_bytes(),
+    );
+    crate::cli::output::line(&crate::cli::output::hex(&fingerprint));
     Ok(())
 }
 
@@ -385,6 +511,108 @@ mod tests {
             before_message, wrong_message,
             "\"no hidden volume\" and \"wrong passphrase\" must produce IDENTICAL error text"
         );
+
+        std::fs::remove_file(&path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn unlock_returns_outer_bundle_when_outer_passphrase_given()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let path = temp_path("unlock-outer");
+        let _ = std::fs::remove_file(&path);
+        let outer_bundle = IdentityBundle::generate();
+
+        create_with_params(
+            &path,
+            b"outer-pw",
+            &outer_bundle,
+            TEST_M_COST_KIB,
+            TEST_T_COST,
+            TEST_P_COST,
+        )?;
+
+        let unlocked = unlock_with_params(
+            &path,
+            b"outer-pw",
+            TEST_M_COST_KIB,
+            TEST_T_COST,
+            TEST_P_COST,
+        )?;
+        assert_eq!(
+            unlocked.x25519.public_bytes(),
+            outer_bundle.x25519.public_bytes()
+        );
+
+        std::fs::remove_file(&path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn unlock_returns_hidden_bundle_when_hidden_passphrase_given()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let path = temp_path("unlock-hidden");
+        let _ = std::fs::remove_file(&path);
+        let outer_bundle = IdentityBundle::generate();
+        let hidden_bundle = IdentityBundle::generate();
+
+        create_with_params(
+            &path,
+            b"outer-pw",
+            &outer_bundle,
+            TEST_M_COST_KIB,
+            TEST_T_COST,
+            TEST_P_COST,
+        )?;
+        write_hidden_with_params(
+            &path,
+            b"hidden-pw",
+            &hidden_bundle,
+            TEST_M_COST_KIB,
+            TEST_T_COST,
+            TEST_P_COST,
+        )?;
+
+        let unlocked = unlock_with_params(
+            &path,
+            b"hidden-pw",
+            TEST_M_COST_KIB,
+            TEST_T_COST,
+            TEST_P_COST,
+        )?;
+        assert_eq!(
+            unlocked.x25519.public_bytes(),
+            hidden_bundle.x25519.public_bytes()
+        );
+
+        std::fs::remove_file(&path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn unlock_fails_with_a_passphrase_matching_neither_region()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let path = temp_path("unlock-neither");
+        let _ = std::fs::remove_file(&path);
+        let outer_bundle = IdentityBundle::generate();
+
+        create_with_params(
+            &path,
+            b"outer-pw",
+            &outer_bundle,
+            TEST_M_COST_KIB,
+            TEST_T_COST,
+            TEST_P_COST,
+        )?;
+
+        let result = unlock_with_params(
+            &path,
+            b"neither-pw",
+            TEST_M_COST_KIB,
+            TEST_T_COST,
+            TEST_P_COST,
+        );
+        assert!(result.is_err());
 
         std::fs::remove_file(&path)?;
         Ok(())
