@@ -39,13 +39,17 @@ path = "tests/smoke.rs"
 required-features = ["gui"]
 
 [dependencies]
-umbra-cli.workspace = true
-umbra-crypto.workspace = true
 # Not gated behind `gui`: lightweight (libc/zeroize/thiserror only, no
 # system-library requirement), and `main.rs`'s ADR-025 memory-hardening
 # call needs it as a direct dependency. Matches umbra-cli/umbra-crypto's
 # own unconditional dependency on this crate.
 umbra-hardware = { path = "../umbra-hardware" }
+# Ungated (not behind `gui`): `engine_client.rs`'s NDJSON wire protocol
+# has no GTK dependency, matching this crate's existing precedent of
+# keeping non-GTK logic testable under a plain `cargo test --workspace
+# --all-targets` with no display server or GTK dev libraries needed.
+serde.workspace = true
+serde_json.workspace = true
 gtk4 = { version = "0.11.4", optional = true }
 # Aliased to `adw` (its own conventional short name throughout the
 # gtk4-rs/libadwaita ecosystem, matching its `adw::prelude`/`adw::Application`

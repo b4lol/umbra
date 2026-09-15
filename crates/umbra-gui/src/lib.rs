@@ -14,9 +14,18 @@
 //!
 //! Second increment landed (TODO B.3, 2026-09-13, see
 //! `docs/superpowers/specs/2026-09-13-gui-keystore-unlock-design.md`):
-//! the [`unlock`] module's pure keystore-unlock function, wired into a
-//! real `--keystore PATH` + password-entry flow in `main.rs`. Still no
-//! messaging, peer list, or sandboxing yet.
+//! a keystore-unlock flow, wired into a real `--keystore PATH` +
+//! password-entry flow in `main.rs`. Still no messaging, peer list, or
+//! sandboxing yet.
+//!
+//! AF_UNIX Engine/UI separation LANDED (TODO B.3.1, 2026-09-15, see
+//! `docs/superpowers/specs/2026-09-15-engine-ui-separation-design.md`):
+//! the keystore-unlock computation moved OUT of this process entirely,
+//! into a separate, sandboxed `umbra-engine` process spawned and
+//! talked to over a private `AF_UNIX` socket ([`engine_client`]). This
+//! process no longer links `umbra-cli`/`umbra-crypto` at all — the
+//! identity's private key material now lives only in the Engine's own
+//! address space.
 //!
 //! Scope when fully implemented (CLIENT_SECURITY / DECISIONS ADR-004):
 //!
@@ -25,6 +34,6 @@
 //! - Decoy Vault (Duress PIN) entry integration.
 //! - Scratch-to-Reveal dynamic masking for message previews.
 
+pub mod engine_client;
 pub mod scratch_reveal;
-pub mod unlock;
 pub mod wayland;
