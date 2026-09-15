@@ -7867,6 +7867,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "umbra-engine"
+version = "1.0.0-alpha.3"
+dependencies = [
+ "clap",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "umbra-cli",
+ "umbra-crypto",
+ "umbra-hardware",
+]
+
+[[package]]
 name = "umbra-ffi"
 version = "1.0.0-alpha.3"
 dependencies = [
