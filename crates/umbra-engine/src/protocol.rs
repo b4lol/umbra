@@ -84,8 +84,7 @@ mod tests {
     use super::{Request, Response};
 
     #[test]
-    fn request_round_trips_through_json()
-    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn request_round_trips_through_json() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let request = Request {
             op: "unlock".to_string(),
             keystore_path: Some(std::path::PathBuf::from("/tmp/ks.enc")),
