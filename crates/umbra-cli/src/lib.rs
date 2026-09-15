@@ -6,6 +6,7 @@
 
 pub mod cli;
 pub mod clipboard;
+pub mod decoy_vault;
 pub mod group;
 #[cfg(test)]
 pub(crate) mod hwkey_test_support;

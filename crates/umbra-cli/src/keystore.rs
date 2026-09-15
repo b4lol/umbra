@@ -27,7 +27,7 @@ const MAGIC: [u8; 5] = *b"UMKS\x01";
 const BLOB_LEN: usize = 32 + 32 + 64 + 32; // x25519 + spk + kem seed + dsa seed
 
 /// Serializes the bundle's secret seeds into the keystore plaintext.
-fn seeds_to_plaintext(seeds: &IdentitySeeds) -> Zeroizing<Vec<u8>> {
+pub(crate) fn seeds_to_plaintext(seeds: &IdentitySeeds) -> Zeroizing<Vec<u8>> {
     let mut out = Zeroizing::new(Vec::with_capacity(BLOB_LEN));
     out.extend_from_slice(&seeds.x25519);
     out.extend_from_slice(&seeds.spk);
@@ -37,7 +37,7 @@ fn seeds_to_plaintext(seeds: &IdentitySeeds) -> Zeroizing<Vec<u8>> {
 }
 
 /// Parses the keystore plaintext back into seeds.
-fn seeds_from_plaintext(plaintext: &[u8]) -> Result<IdentitySeeds, CliError> {
+pub(crate) fn seeds_from_plaintext(plaintext: &[u8]) -> Result<IdentitySeeds, CliError> {
     if plaintext.len() != BLOB_LEN {
         return Err(CliError::Keystore(format!(
             "corrupt keystore plaintext: {} bytes, expected {BLOB_LEN}",
