@@ -81,9 +81,12 @@ jobs:
     # 30 min proved borderline once the PQ-MLS group increment added the
     # OpenMLS/libcrux tree to the ASan-instrumented build + full test run
     # (two consecutive cancellations at exactly 30m on the group branch;
-    # the same suite passes in ~28-29 min when the cache is warm). 60
-    # gives real headroom for dependency growth.
-    timeout-minutes: 60
+    # the same suite passes in ~28-29 min when the cache is warm). 60 was
+    # sufficient with a warm cache, but a lockfile-affecting dependency
+    # bump (e.g. the alpha.4 rustls/blake3 updates) invalidates the
+    # rust-cache entry and the cold full-instrumented rebuild exceeded
+    # 60 min twice in a row. 90 covers the cold-cache case.
+    timeout-minutes: 90
     env:
       # Override the pinned rust-toolchain.toml (stable) — `-Zsanitizer`
       # requires the nightly compiler.
