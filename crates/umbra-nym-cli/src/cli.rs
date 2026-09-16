@@ -191,6 +191,19 @@ fn emit_event(event: &str, data: Option<&[u8]>) -> std::io::Result<()> {
         .and_then(|()| stdout.flush())
 }
 
+/// Emits the `group-text` NDJSON event (two fields, so it cannot go
+/// through [`emit_event`]'s single-blob shape) — calls the shared
+/// `umbra_cli::group_inbound::group_text_line` (TODO B.2.4) rather
+/// than re-deriving the exact JSON shape.
+fn emit_group_text_event(group_name: &str, plaintext: &[u8]) -> std::io::Result<()> {
+    let line = umbra_cli::group_inbound::group_text_line(group_name, plaintext);
+    use std::io::Write as _;
+    let mut stdout = std::io::stdout().lock();
+    stdout
+        .write_all(line.as_bytes())
+        .and_then(|()| stdout.flush())
+}
+
 /// Runs the `send-nym` flow: loads the named peer's record (the
 /// caller's OWN keystore identity is never read — see the module docs
 /// and `SendNym`'s own doc comment), reads one message from `input`
@@ -350,6 +363,13 @@ pub fn run_serve_nym(
     let passphrase = load_passphrase(passphrase_file)?;
     let seeds = std::sync::Arc::new(umbra_cli::keystore::load_seeds(keystore, &passphrase)?);
 
+    // TODO B.2.4: group-state directories and context, captured
+    // pre-sandbox — mirrors `umbra_cli`'s own inbound flows' ordering
+    // exactly for the same reason (identity/group secrets are never
+    // re-read post-sandbox).
+    let (groups_dir, keypackages_dir) = umbra_cli::group_inbound::prepare_group_paths(keystore)?;
+    let group = umbra_cli::group_inbound::group_context_from_keystore(keystore, &passphrase)?;
+
     // Network selection resolved HERE, on the main thread, BEFORE the
     // Tokio runtime (and its worker threads) exists — see
     // `NymNetwork::details` and `run_send_nym`'s matching comment.
@@ -368,13 +388,16 @@ pub fn run_serve_nym(
             .create(nym_config)?;
     }
     umbra_cli::sandbox::restrict_filesystem_with_exceptions(
-        &[nym_config],
+        &[nym_config, groups_dir.as_path(), keypackages_dir.as_path()],
         // /etc is READ-ONLY: public resolver/config content only. Same
         // grant, and the same reason, as `run_send_nym` above and as
         // `umbra-cli`'s own `serve.rs`/`tor_send.rs`: `nym-sdk`'s
         // `reqwest` → `rustls-platform-verifier` → `rustls-native-certs`
         // chain reads the system TLS trust store (`/etc/ssl/certs`)
-        // during `NymClient::connect`.
+        // during `NymClient::connect`. `groups_dir`/`keypackages_dir`
+        // added TODO B.2.4, same rights as `nym_config` — inbound group
+        // frames need read+write there (see
+        // `umbra_cli::group_inbound::handle_group_frame`).
         &[std::path::Path::new("/etc")],
     )?;
     crate::sandbox::restrict_syscalls_nym()?;
@@ -391,10 +414,26 @@ pub fn run_serve_nym(
 
         loop {
             let bundle = IdentityBundle::from_seeds(&seeds);
-            match crate::bridge::receive_via_nym(&mut client, bundle).await {
-                Ok(plaintext) => {
+            match crate::bridge::receive_via_nym(&mut client, bundle, &group).await {
+                Ok(umbra_cli::group_inbound::InboundEvent::Text(plaintext)) => {
                     let plaintext = zeroize::Zeroizing::new(plaintext);
                     emit_event("text", Some(&plaintext))?;
+                }
+                Ok(umbra_cli::group_inbound::InboundEvent::GroupText {
+                    group_name,
+                    plaintext,
+                }) => {
+                    let plaintext = zeroize::Zeroizing::new(plaintext);
+                    emit_group_text_event(&group_name, &plaintext)?;
+                }
+                Ok(umbra_cli::group_inbound::InboundEvent::GroupJoined { group_name }) => {
+                    emit_event("group-joined", Some(group_name.as_bytes()))?;
+                }
+                Ok(umbra_cli::group_inbound::InboundEvent::GroupUpdated { group_name }) => {
+                    emit_event("group-updated", Some(group_name.as_bytes()))?;
+                }
+                Ok(umbra_cli::group_inbound::InboundEvent::GroupRosterSynced { group_name }) => {
+                    emit_event("group-roster-synced", Some(group_name.as_bytes()))?;
                 }
                 // The FATAL case: the SDK's own `MixnetClient` stream
                 // ended, so no further message will ever arrive.

@@ -111,7 +111,8 @@ pub async fn send_via_nym<T: NymTransport>(
 pub async fn receive_via_nym<T: NymTransport>(
     transport: &mut T,
     identity: IdentityBundle,
-) -> Result<Vec<u8>, TransportError> {
+    group: &umbra_cli::group_inbound::GroupInboundContext,
+) -> Result<umbra_cli::group_inbound::InboundEvent, TransportError> {
     let framed = transport.recv().await?;
     if framed.len() > DUPLEX_BUF {
         return Err(TransportError::Nym(
@@ -127,18 +128,20 @@ pub async fn receive_via_nym<T: NymTransport>(
         .shutdown()
         .await
         .map_err(|e| TransportError::Nym(format!("duplex shutdown: {e}")))?;
-    // Leading connection-type marker (TODO B.2 groundwork): no group
-    // path exists yet, so anything other than a PQXDH handshake is
-    // treated as a receive failure.
     match peek_connection_type(&mut reader).await? {
-        ConnectionType::PqxdhHandshake => {}
+        ConnectionType::PqxdhHandshake => {
+            let plaintext = receive_message(identity, &mut reader).await?;
+            Ok(umbra_cli::group_inbound::InboundEvent::Text(plaintext))
+        }
         ConnectionType::GroupFrame => {
-            return Err(TransportError::Nym(
-                "group frames are not yet handled by the Nym bridge".into(),
-            ));
+            // TODO B.2.4: routes through the SAME `handle_group_frame`
+            // Tor's inbound flow uses (`umbra_cli::group_inbound`) — no
+            // duplicated frame parsing or bounds-checking.
+            umbra_cli::group_inbound::handle_group_frame(&mut reader, group)
+                .await
+                .map_err(TransportError::Nym)
         }
     }
-    receive_message(identity, &mut reader).await
 }
 
 #[cfg(test)]
@@ -164,6 +167,28 @@ mod tests {
         Ok((bundle, keys))
     }
 
+    /// A throwaway `GroupInboundContext` pointed at a fresh temp
+    /// directory — none of these tests exercise real group state, but
+    /// `receive_via_nym`'s signature now requires one regardless (the
+    /// PQXDH path never touches it).
+    fn throwaway_group_context(
+        label: &str,
+    ) -> Result<
+        umbra_cli::group_inbound::GroupInboundContext,
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
+        let dir = std::env::temp_dir().join(format!(
+            "umbra-nym-bridge-test-{}-{label}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir)?;
+        let keystore = dir.join("keystore.enc");
+        Ok(umbra_cli::group_inbound::group_context_from_keystore(
+            &keystore,
+            b"unused-test-passphrase",
+        )?)
+    }
+
     #[tokio::test]
     async fn round_trips_a_pqxdh_message_through_two_fakes(
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -186,8 +211,12 @@ mod tests {
             .ok_or("nothing was sent")?;
         transport_b.inbox.push_back(sent.1);
 
-        let received = receive_via_nym(&mut transport_b, b_identity).await?;
-        assert_eq!(received, plaintext.to_vec());
+        let group = throwaway_group_context("roundtrip")?;
+        let received = receive_via_nym(&mut transport_b, b_identity, &group).await?;
+        assert_eq!(
+            received,
+            umbra_cli::group_inbound::InboundEvent::Text(plaintext.to_vec())
+        );
         Ok(())
     }
 
@@ -208,10 +237,11 @@ mod tests {
             .inbox
             .push_back(vec![0u8; DUPLEX_BUF.saturating_add(1)]);
         let (identity, _peer_keys) = identity_and_peer_keys()?;
+        let group = throwaway_group_context("oversized")?;
 
         let outcome = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            receive_via_nym(&mut transport, identity),
+            receive_via_nym(&mut transport, identity, &group),
         )
         .await
         .map_err(|_elapsed| "receive_via_nym hung on an oversized inbound message")?;
@@ -230,10 +260,11 @@ mod tests {
         let mut transport = FakeNymTransport::new(addr);
         transport.inbox.push_back(vec![0u8; DUPLEX_BUF]);
         let (identity, _peer_keys) = identity_and_peer_keys()?;
+        let group = throwaway_group_context("exact-buffer")?;
 
         let outcome = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            receive_via_nym(&mut transport, identity),
+            receive_via_nym(&mut transport, identity, &group),
         )
         .await
         .map_err(|_elapsed| "receive_via_nym hung on an exactly-buffer-sized message")?;
@@ -247,7 +278,46 @@ mod tests {
         let addr = NymPeerAddr::parse(crate::addr::tests_support::SAMPLE_VALID_ADDRESS)?;
         let mut transport = FakeNymTransport::new(addr);
         let (identity, _peer_keys) = identity_and_peer_keys()?;
-        assert!(receive_via_nym(&mut transport, identity).await.is_err());
+        let group = throwaway_group_context("transport-error")?;
+        assert!(receive_via_nym(&mut transport, identity, &group)
+            .await
+            .is_err());
+        Ok(())
+    }
+
+    /// TODO B.2.4: a `GroupFrame`-marked message now reaches REAL
+    /// processing (`handle_group_frame` /
+    /// `process_inbound_group_frame`) instead of being rejected
+    /// outright at the dispatch level. A garbage-but-well-formed group
+    /// frame (this test doesn't set up a real group, so
+    /// `process_inbound_group_frame` itself will fail) still proves the
+    /// routing changed: the error text is no longer the OLD
+    /// hard-coded "not yet handled" rejection.
+    #[tokio::test]
+    async fn receive_via_nym_routes_group_frames_to_real_processing(
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let addr = NymPeerAddr::parse(crate::addr::tests_support::SAMPLE_VALID_ADDRESS)?;
+        let mut transport = FakeNymTransport::new(addr);
+        // CONNECTION_TYPE_GROUP marker byte, then a minimal (empty
+        // group_id, empty MLS message) length-prefixed frame — garbage
+        // to `process_inbound_group_frame`, but well-formed enough to
+        // get PAST `peek_connection_type` and into real processing.
+        let mut framed = vec![umbra_net::messenger::CONNECTION_TYPE_GROUP];
+        framed.extend_from_slice(&0u32.to_be_bytes()); // group_id len = 0
+        framed.extend_from_slice(&0u32.to_be_bytes()); // mls message len = 0
+        transport.inbox.push_back(framed);
+        let (identity, _peer_keys) = identity_and_peer_keys()?;
+        let group = throwaway_group_context("group-routing")?;
+
+        let outcome = receive_via_nym(&mut transport, identity, &group).await;
+        let error = outcome
+            .err()
+            .ok_or("an empty group frame against no real group must fail")?;
+        let message = error.to_string();
+        assert!(
+            !message.contains("not yet handled"),
+            "must not still be the old hard-coded rejection: {message}"
+        );
         Ok(())
     }
 }
