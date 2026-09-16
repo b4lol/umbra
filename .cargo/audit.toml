@@ -5,5 +5,29 @@
 #   RSA-1024 identity keys. Umbra never uses RSA for its own cryptography.
 # - RUSTSEC-2024-0436 (paste): unmaintained proc-macro, build-time only.
 # Revisit on every dependabot arti bump.
+#
+# The four additional ignores below apply ONLY to umbra-nym-cli's
+# independent lockfile (`just audit-nym` scans it with this same config);
+# none of the affected crates exist in the root workspace's graph, so the
+# root audit is unaffected. All four are nym-sdk 1.21.6's own pinned
+# transitive tree with no fixed upgrade available (documented as the
+# accepted upstream-dependency residual in ADR-032; revisit at nym-sdk's
+# next version bump):
+# - RUSTSEC-2023-0071 (rsa 0.9.10 via nym-crypto's jwt-simple/superboring):
+#   Marvin timing attack, no patched rsa version exists at all.
+# - RUSTSEC-2026-0258 (h2 0.3.27 via reqwest 0.11 / tendermint-rpc):
+#   unbounded empty DATA frames; the fix exists only in h2 0.4, which
+#   reqwest 0.11 cannot use.
+# - RUSTSEC-2026-0098 / -0099 / -0104 (rustls-webpki 0.101.7 via rustls
+#   0.21, pulled by reqwest 0.11 / hyper-rustls 0.24): certificate
+#   name-constraint and CRL-parsing bugs; fixes exist only in webpki
+#   0.103+, which rustls 0.21 cannot use.
 [advisories]
-ignore = ["RUSTSEC-2023-0071", "RUSTSEC-2024-0436"]
+ignore = [
+  "RUSTSEC-2023-0071",
+  "RUSTSEC-2024-0436",
+  "RUSTSEC-2026-0098",
+  "RUSTSEC-2026-0099",
+  "RUSTSEC-2026-0104",
+  "RUSTSEC-2026-0258",
+]
