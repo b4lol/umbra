@@ -104,7 +104,7 @@ async fn self_send_once(base: &Path) -> Result<(), Box<dyn std::error::Error + S
     // The group branch is never exercised by this two-party self-send;
     // the context just has to exist (its keystore dir is this run's own
     // throwaway storage root).
-    let group = Arc::new(umbra_cli::serve::GroupInboundContext {
+    let group = Arc::new(umbra_cli::group_inbound::GroupInboundContext {
         keystore_dir: base.to_path_buf(),
         passphrase: zeroize::Zeroizing::new(b"live-test".to_vec()),
     });
@@ -127,7 +127,7 @@ async fn self_send_once(base: &Path) -> Result<(), Box<dyn std::error::Error + S
         .map_err(|_elapsed| "inbound delivery timed out")?
         .ok_or("inbound channel closed before delivery")?
         .map_err(|e| format!("inbound session: {e}"))?;
-    let umbra_cli::serve::InboundEvent::Text(delivered) = event else {
+    let umbra_cli::group_inbound::InboundEvent::Text(delivered) = event else {
         return Err("expected a two-party text event from the self-send".into());
     };
     loop_handle.abort();

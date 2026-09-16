@@ -449,7 +449,7 @@ pub fn run() -> Result<(), CliError> {
             // group branch decrypts `groups/*.enc` and
             // `keypackages/store.enc` AFTER the sandbox, so the passphrase is
             // captured here — pre-sandbox, mirroring `serve::run`.
-            let group = std::sync::Arc::new(crate::serve::group_context_from_keystore(
+            let group = std::sync::Arc::new(crate::group_inbound::group_context_from_keystore(
                 &keystore,
                 &passphrase,
             )?);
@@ -467,8 +467,9 @@ pub fn run() -> Result<(), CliError> {
             // rule-add time), same as `tor_base` above. The grant stays
             // narrow: directories only, and the keystore FILE itself is
             // still unreachable post-sandbox (see
-            // `serve::prepare_group_paths`).
-            let (groups_dir, keypackages_dir) = crate::serve::prepare_group_paths(&keystore)?;
+            // `group_inbound::prepare_group_paths`).
+            let (groups_dir, keypackages_dir) =
+                crate::group_inbound::prepare_group_paths(&keystore)?;
             crate::sandbox::restrict_filesystem_with_exceptions(
                 &[
                     tor_base.as_path(),
@@ -503,8 +504,14 @@ pub fn run() -> Result<(), CliError> {
         #[cfg(feature = "mesh")]
         Command::ServeMesh { ref wpa_ctrl } => {
             harden_memory()?;
+            let keystore = cli
+                .keystore
+                .as_ref()
+                .ok_or_else(|| CliError::Keystore("missing --keystore PATH".into()))?
+                .clone();
+            let passphrase = zeroize::Zeroizing::new(load_passphrase(&cli)?);
             let bundle = load_identity(&cli)?;
-            crate::mesh_serve::run(wpa_ctrl, bundle)
+            crate::mesh_serve::run(wpa_ctrl, &keystore, &passphrase, bundle)
         }
         Command::ExportPairing => export_pairing(),
         Command::Fingerprint { ref peer } => match peer {

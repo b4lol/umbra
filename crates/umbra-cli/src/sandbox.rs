@@ -130,6 +130,10 @@ pub fn restrict_filesystem_with_exceptions(
 /// exception grant must not gain `MakeSock` just because mesh needs it
 /// elsewhere.
 ///
+/// TODO B.2.4 extends this with an opt-in `group_dirs` grant for
+/// `serve-mesh`'s inbound group-frame handling — `send --mesh` passes
+/// `None` and keeps its original, narrower sandbox unchanged.
+///
 /// # Errors
 ///
 /// Returns [`CliError::Sandbox`] if the ruleset cannot be created, an
@@ -138,6 +142,18 @@ pub fn restrict_filesystem_with_exceptions(
 pub fn restrict_filesystem_for_mesh(
     wpa_ctrl_dir: &std::path::Path,
     own_ctrl_dir: &std::path::Path,
+    // `None` for `send --mesh` (outbound, `mesh_send.rs`), which never
+    // touches group state and must keep its narrower sandbox — this
+    // grant is deliberately opt-in per caller, not automatic, so the
+    // send path's sandbox cannot silently widen just because the serve
+    // path (TODO B.2.4) needs more (mirrors this function's own
+    // existing rationale for being SEPARATE from
+    // `restrict_filesystem_with_exceptions` in the first place).
+    // `Some((groups_dir, keypackages_dir))` for `serve-mesh` (inbound,
+    // `mesh_serve.rs`), granted the SAME rights Tor's own grant for
+    // these two directories uses (`restrict_filesystem_with_exceptions`'s
+    // `tor_grant`) — group state I/O needs are transport-independent.
+    group_dirs: Option<(&std::path::Path, &std::path::Path)>,
 ) -> Result<landlock::RestrictionStatus, CliError> {
     let created = Ruleset::default()
         .set_compatibility(CompatLevel::HardRequirement)
@@ -227,6 +243,34 @@ pub fn restrict_filesystem_for_mesh(
     created = created
         .add_rule(PathBeneath::new(sysfs_devices_fd, sysfs_rights))
         .map_err(CliError::Sandbox)?;
+
+    // TODO B.2.4: group-state directories, granted ONLY when the
+    // caller opts in (see this parameter's own doc comment above).
+    // Same rights as `restrict_filesystem_with_exceptions`'s
+    // `tor_grant`: `process_inbound_group_frame` creates/removes/
+    // truncates group-state and key-package files.
+    if let Some((groups_dir, keypackages_dir)) = group_dirs {
+        let group_rights = AccessFs::ReadFile
+            | AccessFs::WriteFile
+            | AccessFs::ReadDir
+            | AccessFs::MakeDir
+            | AccessFs::MakeReg
+            | AccessFs::RemoveDir
+            | AccessFs::RemoveFile
+            | AccessFs::Truncate
+            | AccessFs::Refer;
+        for dir in [groups_dir, keypackages_dir] {
+            let fd = PathFd::new(dir).map_err(|err| {
+                CliError::Io(std::io::Error::other(format!(
+                    "sandbox exception path {}: {err}",
+                    dir.display()
+                )))
+            })?;
+            created = created
+                .add_rule(PathBeneath::new(fd, group_rights))
+                .map_err(CliError::Sandbox)?;
+        }
+    }
 
     let status = created.restrict_self()?;
     Ok(status)

@@ -26,8 +26,8 @@ use umbra_net::tor::{PtProxyConfig, TorTransport};
 use zeroize::Zeroizing;
 
 use crate::cli::CliError;
+use crate::group_inbound::InboundEvent;
 use crate::pairing::PeerIdentity;
-use crate::serve::InboundEvent;
 
 use thiserror::Error;
 
@@ -61,7 +61,7 @@ pub struct TuiConfig {
     /// Keystore material the shared accept loop's group branch needs
     /// (TODO B.2): the keystore directory plus its passphrase, loaded
     /// pre-sandbox by the caller and Arc-shared with the accept loop.
-    pub group: Arc<crate::serve::GroupInboundContext>,
+    pub group: Arc<crate::group_inbound::GroupInboundContext>,
 }
 
 /// Events flowing from the background runtime to the UI loop.
