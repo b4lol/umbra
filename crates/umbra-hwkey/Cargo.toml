@@ -1,0 +1,16 @@
+[package]
+name = "umbra-hwkey"
+description = "PKCS#11 hardware-security-key backend for Umbra (TODO B.3): HMAC challenge-response against a token-held, non-extractable secret key."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cryptoki = "0.12"
+thiserror.workspace = true
+zeroize.workspace = true

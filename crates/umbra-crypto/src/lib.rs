@@ -16,6 +16,7 @@
 #![forbid(unsafe_code)]
 
 pub mod aead;
+pub mod decoy_vault;
 pub mod error;
 pub mod kdf;
 pub mod keys;

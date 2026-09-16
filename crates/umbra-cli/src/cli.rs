@@ -59,6 +59,33 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     pub passphrase_file: Option<std::path::PathBuf>,
 
+    /// PKCS#11 module path for hardware-key-gated keystores (e.g.
+    /// `/usr/lib64/pkcs11/libsofthsm2.so` for SoftHSM2, or the vendor
+    /// module path for a real hardware token). Required, together with
+    /// `--hw-pin-file` and `--hw-key-label`, for `init` to create a
+    /// hardware-gated keystore, or to unlock one that already exists.
+    /// Accepted as a trust boundary at the same level as
+    /// `--keystore`/`--passphrase-file` (ADR-034's addendum) — this flag
+    /// `dlopen`s whatever `.so` it points to, with no signature or
+    /// provenance verification. Loading a PKCS#11 module happens after
+    /// this process's `mlockall(MCL_FUTURE)` (ADR-025) runs — a
+    /// constrained `RLIMIT_MEMLOCK` may cause the module's `dlopen` to
+    /// fail with `ENOMEM`; raise the limit if that happens.
+    #[arg(long, global = true, value_name = "PATH")]
+    pub hw_module: Option<std::path::PathBuf>,
+
+    /// File containing the hardware token's PIN (first line; same
+    /// convention as `--passphrase-file` — never pass a PIN as a plain
+    /// argument, it would leak via shell history and
+    /// `/proc/<pid>/cmdline`).
+    #[arg(long, global = true, value_name = "PATH")]
+    pub hw_pin_file: Option<std::path::PathBuf>,
+
+    /// Label of the token-held HMAC key to use (as passed to
+    /// `umbra_hwkey::generate_hmac_key`/`challenge_response`).
+    #[arg(long, global = true, value_name = "LABEL")]
+    pub hw_key_label: Option<String>,
+
     /// Subcommand to execute.
     #[command(subcommand)]
     pub command: Command,
@@ -198,6 +225,12 @@ pub enum Command {
     /// later tasks of the same plan) invite/join/send/receive.
     #[command(subcommand)]
     Group(crate::group::GroupCommand),
+    /// Decoy Vault: hidden-volume identity storage under coercion
+    /// (TODO B.3). `create`/`add-hidden`/`unlock` — see
+    /// `crate::decoy_vault::DecoyVaultCommand`'s own doc comments,
+    /// especially `unlock`'s duress-safety guarantee.
+    #[command(subcommand)]
+    DecoyVault(crate::decoy_vault::DecoyVaultCommand),
 }
 
 /// Top-level CLI error.
@@ -230,6 +263,10 @@ pub enum CliError {
     /// Crypto-layer failure inside the keystore path.
     #[error(transparent)]
     Crypto(#[from] umbra_crypto::CryptoError),
+
+    /// Hardware-key (PKCS#11) layer failure.
+    #[error(transparent)]
+    HardwareKey(#[from] umbra_hwkey::HwKeyError),
 
     /// PQ-MLS group ("cell") layer failure (TODO B.2).
     #[error(transparent)]
@@ -412,7 +449,7 @@ pub fn run() -> Result<(), CliError> {
             // group branch decrypts `groups/*.enc` and
             // `keypackages/store.enc` AFTER the sandbox, so the passphrase is
             // captured here — pre-sandbox, mirroring `serve::run`.
-            let group = std::sync::Arc::new(crate::serve::group_context_from_keystore(
+            let group = std::sync::Arc::new(crate::group_inbound::group_context_from_keystore(
                 &keystore,
                 &passphrase,
             )?);
@@ -430,8 +467,9 @@ pub fn run() -> Result<(), CliError> {
             // rule-add time), same as `tor_base` above. The grant stays
             // narrow: directories only, and the keystore FILE itself is
             // still unreachable post-sandbox (see
-            // `serve::prepare_group_paths`).
-            let (groups_dir, keypackages_dir) = crate::serve::prepare_group_paths(&keystore)?;
+            // `group_inbound::prepare_group_paths`).
+            let (groups_dir, keypackages_dir) =
+                crate::group_inbound::prepare_group_paths(&keystore)?;
             crate::sandbox::restrict_filesystem_with_exceptions(
                 &[
                     tor_base.as_path(),
@@ -469,9 +507,11 @@ pub fn run() -> Result<(), CliError> {
             let keystore = cli
                 .keystore
                 .as_ref()
-                .ok_or_else(|| CliError::Keystore("missing --keystore PATH".into()))?;
-            let passphrase = load_passphrase(&cli)?;
-            crate::mesh_serve::run(wpa_ctrl, keystore, &passphrase)
+                .ok_or_else(|| CliError::Keystore("missing --keystore PATH".into()))?
+                .clone();
+            let passphrase = zeroize::Zeroizing::new(load_passphrase(&cli)?);
+            let bundle = load_identity(&cli)?;
+            crate::mesh_serve::run(wpa_ctrl, &keystore, &passphrase, bundle)
         }
         Command::ExportPairing => export_pairing(),
         Command::Fingerprint { ref peer } => match peer {
@@ -518,6 +558,7 @@ pub fn run() -> Result<(), CliError> {
             nym_addr.as_deref(),
         ),
         Command::Group(ref sub) => crate::group::dispatch(sub, &cli),
+        Command::DecoyVault(ref sub) => crate::decoy_vault::dispatch(sub, &cli),
     }
 }
 
@@ -565,6 +606,62 @@ pub(crate) fn load_passphrase(cli: &Cli) -> Result<zeroize::Zeroizing<Vec<u8>>, 
     Ok(zeroize::Zeroizing::new(line))
 }
 
+/// Reads the hardware token's PIN from `--hw-pin-file` (first line —
+/// same convention as [`load_passphrase`]).
+fn load_hw_pin(cli: &Cli) -> Result<zeroize::Zeroizing<Vec<u8>>, CliError> {
+    let path = cli
+        .hw_pin_file
+        .as_ref()
+        .ok_or_else(|| CliError::Keystore("missing --hw-pin-file".into()))?;
+    let contents = std::fs::read(path)
+        .map_err(|e| CliError::Keystore(format!("cannot read PIN file {}: {e}", path.display())))?;
+    let first_line_end = contents
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .unwrap_or(contents.len());
+    let line = contents.get(..first_line_end).unwrap_or(&contents).to_vec();
+    Ok(zeroize::Zeroizing::new(line))
+}
+
+/// Computes the hardware-key HMAC response from `--hw-module`,
+/// `--hw-pin-file`, and `--hw-key-label` — all three are required
+/// together; a single combined error names whichever are missing.
+fn hw_key_response(cli: &Cli) -> Result<zeroize::Zeroizing<[u8; 32]>, CliError> {
+    let mut missing = Vec::new();
+    if cli.hw_module.is_none() {
+        missing.push("--hw-module");
+    }
+    if cli.hw_pin_file.is_none() {
+        missing.push("--hw-pin-file");
+    }
+    if cli.hw_key_label.is_none() {
+        missing.push("--hw-key-label");
+    }
+    if !missing.is_empty() {
+        return Err(CliError::Keystore(format!(
+            "hardware-key keystore requires all of --hw-module, --hw-pin-file, \
+             --hw-key-label (missing: {})",
+            missing.join(", ")
+        )));
+    }
+    let module = cli
+        .hw_module
+        .as_ref()
+        .ok_or_else(|| CliError::Keystore("missing --hw-module".into()))?;
+    let label = cli
+        .hw_key_label
+        .as_ref()
+        .ok_or_else(|| CliError::Keystore("missing --hw-key-label".into()))?;
+    let pin = load_hw_pin(cli)?;
+    let response = umbra_hwkey::challenge_response(
+        module,
+        &pin,
+        label,
+        crate::keystore::HARDWARE_KEY_CHALLENGE,
+    )?;
+    Ok(zeroize::Zeroizing::new(response))
+}
+
 /// Loads a keystore path + passphrase, returning the identity bundle.
 fn load_identity(cli: &Cli) -> Result<IdentityBundle, CliError> {
     let path = cli
@@ -572,17 +669,41 @@ fn load_identity(cli: &Cli) -> Result<IdentityBundle, CliError> {
         .as_ref()
         .ok_or_else(|| CliError::Keystore("missing --keystore PATH".into()))?;
     let passphrase = load_passphrase(cli)?;
-    crate::keystore::load(path, &passphrase)
+    if crate::keystore::is_hardware_key_gated(path)? {
+        let response = hw_key_response(cli)?;
+        crate::keystore::load_with_hardware_key(path, &passphrase, response.as_slice())
+    } else {
+        crate::keystore::load(path, &passphrase)
+    }
 }
 
 /// Implements `umbra init`: new persistent identity keystore.
 fn init_with(cli: &Cli) -> Result<(), CliError> {
+    // Process hardening (mlockall) is intentionally NOT enforced here, for
+    // the same reason `keygen` skips it: constrained environments (CI
+    // sanitizers, hardened containers with low RLIMIT_MEMLOCK or pre-5.13
+    // kernels) must still be able to create an identity keystore. This was
+    // tried during this increment's final review and reverted after it
+    // broke `mlockall` with ENOMEM in this project's own CI-like sandbox —
+    // empirical confirmation, not just a hypothetical risk.
     let path = cli
         .keystore
         .as_ref()
         .ok_or_else(|| CliError::Keystore("missing --keystore PATH".into()))?;
     let passphrase = load_passphrase(cli)?;
-    crate::keystore::save(path, &passphrase, &IdentityBundle::generate())?;
+    let hw_flags_present =
+        cli.hw_module.is_some() || cli.hw_pin_file.is_some() || cli.hw_key_label.is_some();
+    if hw_flags_present {
+        let response = hw_key_response(cli)?;
+        crate::keystore::save_with_hardware_key(
+            path,
+            &passphrase,
+            response.as_slice(),
+            &IdentityBundle::generate(),
+        )?;
+    } else {
+        crate::keystore::save(path, &passphrase, &IdentityBundle::generate())?;
+    }
     Ok(())
 }
 
@@ -683,7 +804,7 @@ fn keygen(json: bool) -> Result<(), CliError> {
 
 #[cfg(test)]
 mod tests {
-    use super::Cli;
+    use super::*;
     use clap::Parser;
 
     /// Regression: base64url pairing payloads may legitimately START
@@ -715,5 +836,212 @@ mod tests {
             cli.is_ok(),
             "pairing-sas with hyphen-leading payloads must parse"
         );
+    }
+
+    /// Initializes a fresh SoftHSM2 token/key and returns a `Cli` value
+    /// (with a `Command::Init` case, unused by callers that only read
+    /// its fields) pre-populated with a fresh `--keystore`/
+    /// `--passphrase-file`/`--hw-module`/`--hw-pin-file`/
+    /// `--hw-key-label` set, plus the keystore path separately (so
+    /// callers never need `.unwrap()` on `cli.keystore`). Must run
+    /// under [`crate::hwkey_test_support::lock_token_dir`] — callers
+    /// hold the guard for their whole test body.
+    fn hardware_gated_test_cli(
+        unique: &str,
+    ) -> Result<(Cli, std::path::PathBuf), Box<dyn std::error::Error + Send + Sync>> {
+        const TOKEN_DIR: &str = "/tmp/umbra-hwkey-softhsm-test-tokens";
+        let _ = std::fs::remove_dir_all(TOKEN_DIR);
+        std::fs::create_dir_all(TOKEN_DIR)?;
+        let label = format!("umbra-cli-wiring-test-{unique}");
+        let init = std::process::Command::new("softhsm2-util")
+            .args([
+                "--init-token",
+                "--free",
+                "--label",
+                &label,
+                "--pin",
+                "1234",
+                "--so-pin",
+                "0000",
+            ])
+            .output()?;
+        if !init.status.success() {
+            return Err(format!(
+                "softhsm2-util --init-token failed: {}",
+                String::from_utf8_lossy(&init.stderr)
+            )
+            .into());
+        }
+        let module = crate::hwkey_test_support::softhsm2_module_path()?;
+        let key_label = format!("{label}-key");
+        umbra_hwkey::generate_hmac_key(&module, b"1234", &key_label)?;
+
+        let pid = std::process::id();
+        let passphrase_file =
+            std::env::temp_dir().join(format!("umbra-cli-wiring-{unique}-{pid}-passphrase.txt"));
+        std::fs::write(&passphrase_file, b"cli-wiring-test-passphrase\n")?;
+        let pin_file =
+            std::env::temp_dir().join(format!("umbra-cli-wiring-{unique}-{pid}-pin.txt"));
+        std::fs::write(&pin_file, b"1234\n")?;
+        let keystore_path =
+            std::env::temp_dir().join(format!("umbra-cli-wiring-{unique}-{pid}-keystore.enc"));
+        let _ = std::fs::remove_file(&keystore_path);
+
+        let cli = Cli {
+            json: false,
+            keystore: Some(keystore_path.clone()),
+            passphrase_file: Some(passphrase_file),
+            hw_module: Some(module),
+            hw_pin_file: Some(pin_file),
+            hw_key_label: Some(key_label),
+            command: Command::Init,
+        };
+        Ok((cli, keystore_path))
+    }
+
+    /// Round trip: `init_with` with all 3 hw flags creates a real
+    /// hardware-gated keystore; `load_identity` with the same flags
+    /// unlocks it twice, returning the same identity both times.
+    #[test]
+    fn hardware_key_cli_round_trip() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let _guard = crate::hwkey_test_support::lock_token_dir();
+        let (cli, keystore_path) = hardware_gated_test_cli("roundtrip")?;
+        init_with(&cli)?;
+        assert!(
+            crate::keystore::is_hardware_key_gated(&keystore_path)?,
+            "init_with with all 3 hw flags must create a hardware-gated keystore"
+        );
+
+        let bundle_a = load_identity(&cli)?;
+        let bundle_b = load_identity(&cli)?;
+        assert_eq!(
+            bundle_a.x25519.public_bytes(),
+            bundle_b.x25519.public_bytes(),
+            "loading the same hardware-gated file twice must return the same identity"
+        );
+
+        let _ = std::fs::remove_file(&keystore_path);
+        const TOKEN_DIR: &str = "/tmp/umbra-hwkey-softhsm-test-tokens";
+        let _ = std::fs::remove_dir_all(TOKEN_DIR);
+        Ok(())
+    }
+
+    /// Some-but-not-all hw flags on `init_with` must fail with one
+    /// combined, readable error naming every missing flag — and must
+    /// not leave a partial keystore file behind.
+    #[test]
+    fn hardware_key_cli_partial_flags_error() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+    {
+        let pid = std::process::id();
+        let passphrase_file =
+            std::env::temp_dir().join(format!("umbra-cli-wiring-partial-{pid}-passphrase.txt"));
+        std::fs::write(&passphrase_file, b"whatever\n")?;
+        let keystore_path =
+            std::env::temp_dir().join(format!("umbra-cli-wiring-partial-{pid}-keystore.enc"));
+        let _ = std::fs::remove_file(&keystore_path);
+
+        let cli = Cli {
+            json: false,
+            keystore: Some(keystore_path.clone()),
+            passphrase_file: Some(passphrase_file.clone()),
+            hw_module: Some(std::path::PathBuf::from("/nonexistent/module.so")),
+            hw_pin_file: None,
+            hw_key_label: None,
+            command: Command::Init,
+        };
+        let result = init_with(&cli);
+        let error = result
+            .err()
+            .ok_or("expected an error for partial hw flags")?;
+        let message = error.to_string();
+        assert!(
+            message.contains("missing: --hw-pin-file, --hw-key-label"),
+            "error must name exactly the missing flags, got: {message}"
+        );
+        assert!(
+            !keystore_path.exists(),
+            "a rejected init must not leave a partial keystore file behind"
+        );
+
+        let _ = std::fs::remove_file(&passphrase_file);
+        Ok(())
+    }
+
+    /// A plain keystore's `init_with`/`load_identity` behavior is
+    /// unaffected by stray hw flags — `load_identity` must succeed via
+    /// the passphrase-only path even when hw flags point at a module
+    /// that does not exist (proving they are truly unused, not merely
+    /// coincidentally valid).
+    #[test]
+    fn plain_keystore_ignores_stray_hw_flags()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let pid = std::process::id();
+        let passphrase_file =
+            std::env::temp_dir().join(format!("umbra-cli-wiring-plain-{pid}-passphrase.txt"));
+        std::fs::write(&passphrase_file, b"plain-test-passphrase\n")?;
+        let keystore_path =
+            std::env::temp_dir().join(format!("umbra-cli-wiring-plain-{pid}-keystore.enc"));
+        let _ = std::fs::remove_file(&keystore_path);
+
+        let cli_no_hw = Cli {
+            json: false,
+            keystore: Some(keystore_path.clone()),
+            passphrase_file: Some(passphrase_file.clone()),
+            hw_module: None,
+            hw_pin_file: None,
+            hw_key_label: None,
+            command: Command::Init,
+        };
+        init_with(&cli_no_hw)?;
+        assert!(
+            !crate::keystore::is_hardware_key_gated(&keystore_path)?,
+            "init_with with no hw flags must create a plain keystore"
+        );
+
+        let cli_with_stray_hw = Cli {
+            hw_module: Some(std::path::PathBuf::from("/nonexistent/module.so")),
+            hw_pin_file: Some(std::path::PathBuf::from("/nonexistent/pin.txt")),
+            hw_key_label: Some("nonexistent-label".to_string()),
+            ..cli_no_hw
+        };
+        let bundle = load_identity(&cli_with_stray_hw)?;
+        assert_eq!(bundle.x25519.public_bytes().len(), 32);
+
+        let _ = std::fs::remove_file(&keystore_path);
+        let _ = std::fs::remove_file(&passphrase_file);
+        Ok(())
+    }
+
+    /// `load_identity` against a hardware-gated file with NO hw flags
+    /// must fail with the missing-flags error (proving it checks the
+    /// file's own format before assuming passphrase-only), not a
+    /// generic decryption failure.
+    #[test]
+    fn hardware_key_cli_load_without_flags_errors()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let _guard = crate::hwkey_test_support::lock_token_dir();
+        let (cli, keystore_path) = hardware_gated_test_cli("noflags")?;
+        init_with(&cli)?;
+
+        let cli_no_hw = Cli {
+            hw_module: None,
+            hw_pin_file: None,
+            hw_key_label: None,
+            ..cli
+        };
+        let result = load_identity(&cli_no_hw);
+        let error = result
+            .err()
+            .ok_or("expected an error loading a hardware-gated file without hw flags")?;
+        let message = error.to_string();
+        assert!(
+            message.contains("missing: --hw-module, --hw-pin-file, --hw-key-label"),
+            "error must name every missing hw flag, got: {message}"
+        );
+
+        let _ = std::fs::remove_file(&keystore_path);
+        const TOKEN_DIR: &str = "/tmp/umbra-hwkey-softhsm-test-tokens";
+        let _ = std::fs::remove_dir_all(TOKEN_DIR);
+        Ok(())
     }
 }

@@ -1,0 +1,28 @@
+[package]
+name = "umbra-engine"
+description = "Umbra secret-handling Engine process (TODO B.3.1): sandboxed keystore/decoy-vault unlock served over AF_UNIX to umbra-gui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "umbra_engine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "umbra-engine"
+path = "src/main.rs"
+
+[dependencies]
+umbra-cli.workspace = true
+umbra-crypto.workspace = true
+umbra-hardware = { path = "../umbra-hardware" }
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+thiserror.workspace = true

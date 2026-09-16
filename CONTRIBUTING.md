@@ -17,6 +17,9 @@ Umbra is a zero-metadata, post-quantum-security-focused system developed for jou
 - **Linux Dependencies (Wayland & GUI):**
   - **Fedora:** `sudo dnf5 install gtk4-devel libadwaita-devel`
   - **Debian / Ubuntu:** `sudo apt install libgtk-4-dev libadwaita-1-dev`
+- **Linux Dependencies (Hardware Security Keys / PKCS#11):**
+  - **Fedora:** `sudo dnf install libfido2-devel pcsc-lite-devel opensc softhsm usbutils`
+  - **Debian / Ubuntu:** `sudo apt install libfido2-dev libpcsclite-dev opensc softhsm2 usbutils`
 
 ---
 

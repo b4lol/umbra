@@ -131,6 +131,7 @@ pub fn run(
     wpa_ctrl_path: &std::path::Path,
     keystore: &std::path::Path,
     passphrase: &[u8],
+    identity: IdentityBundle,
 ) -> Result<(), CliError> {
     // The operator must see the transport's privacy/trust profile
     // BEFORE anything else happens (always-on safety notice, stderr —
@@ -141,7 +142,8 @@ pub fn run(
         "umbra",
     );
 
-    let identity = crate::keystore::load(keystore, passphrase)?;
+    // The identity is loaded by the caller (`cli.rs`'s `load_identity`)
+    // so hardware-key-gated (UMKS\x02) keystores unlock here too.
     // Group state material (TODO B.2.4): mirrors `serve::run`'s step 2b
     // — captured pre-sandbox, since the inbound group branch decrypts
     // `groups/*.enc` and `keypackages/store.enc` AFTER the sandbox
