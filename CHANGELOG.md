@@ -6,7 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
-## [Unreleased]
+## [1.0.0-alpha.4] — 2026-09-16
+
+The off-grid and group increments land: Wi-Fi Direct mesh and Nym mixnet
+transports, PQ-MLS group cells with roster sync/removal/rotation, the
+Wayland GUI skeleton with Engine/UI process separation, Decoy Vault,
+hardware-key-gated keystores, per-transport privacy profiles shown at
+runtime, and secret-scanning CI. The repository layout was reorganized
+(topical docs under `docs/`, the C PT proxy under `components/pt-proxy/`).
 
 ### Added
 - **Large-group scalability benchmark** (TODO B.2.5, information-only —
