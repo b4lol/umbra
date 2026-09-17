@@ -78,6 +78,37 @@ fn send_request(socket_path: &Path, request: &Request) -> Result<Response, Strin
     serde_json::from_str(response_line.trim_end()).map_err(|error| error.to_string())
 }
 
+/// Sends multiple [`Request`]s in order over ONE freshly-opened
+/// connection, returning each decoded [`Response`] in order — unlike
+/// [`send_request`], which opens (and implicitly closes) a fresh
+/// connection per call. Needed to exercise session state (TODO B.3
+/// GUI messaging design, Phase 1): `list_peers`/pairing operations
+/// require a prior successful `"unlock"` on the SAME connection.
+fn send_requests_over_one_connection(
+    socket_path: &Path,
+    requests: &[Request],
+) -> Result<Vec<Response>, String> {
+    let stream = UnixStream::connect(socket_path).map_err(|error| error.to_string())?;
+    let mut writer = stream.try_clone().map_err(|error| error.to_string())?;
+    let mut reader = BufReader::new(stream);
+    let mut responses = Vec::with_capacity(requests.len());
+    for request in requests {
+        let mut line = serde_json::to_string(request).map_err(|error| error.to_string())?;
+        line.push('\n');
+        writer
+            .write_all(line.as_bytes())
+            .map_err(|error| error.to_string())?;
+        let mut response_line = String::new();
+        reader
+            .read_line(&mut response_line)
+            .map_err(|error| error.to_string())?;
+        responses.push(
+            serde_json::from_str(response_line.trim_end()).map_err(|error| error.to_string())?,
+        );
+    }
+    Ok(responses)
+}
+
 /// Fresh, unique temp directory for one test case's socket + keystore
 /// files (avoids collisions between parallel test threads — each test
 /// function in this file uses a distinct `label`, and `process::id()`
@@ -105,9 +136,7 @@ fn unlock_with_correct_passphrase_returns_the_fingerprint()
             op: "unlock".to_string(),
             keystore_path: Some(keystore_path),
             passphrase: Some("correct-passphrase".to_string()),
-            hw_module: None,
-            hw_pin: None,
-            hw_key_label: None,
+            ..Request::default()
         },
     )?;
 
@@ -132,9 +161,7 @@ fn unlock_with_wrong_passphrase_fails() -> Result<(), Box<dyn std::error::Error 
             op: "unlock".to_string(),
             keystore_path: Some(keystore_path),
             passphrase: Some("wrong-passphrase".to_string()),
-            hw_module: None,
-            hw_pin: None,
-            hw_key_label: None,
+            ..Request::default()
         },
     )?;
 
@@ -162,9 +189,7 @@ fn unlock_with_decoy_vault_outer_and_hidden_passphrase_both_work()
             op: "unlock".to_string(),
             keystore_path: Some(keystore_path.clone()),
             passphrase: Some("outer-pw".to_string()),
-            hw_module: None,
-            hw_pin: None,
-            hw_key_label: None,
+            ..Request::default()
         },
     )?;
 
@@ -191,9 +216,7 @@ fn keystore_path_outside_sandboxed_directory_is_rejected_cleanly()
             op: "unlock".to_string(),
             keystore_path: Some(outside_path),
             passphrase: Some("irrelevant".to_string()),
-            hw_module: None,
-            hw_pin: None,
-            hw_key_label: None,
+            ..Request::default()
         },
     )?;
 
@@ -217,11 +240,7 @@ fn unknown_op_over_the_wire_fails_cleanly() -> Result<(), Box<dyn std::error::Er
         &socket_path,
         &Request {
             op: "future-op".to_string(),
-            keystore_path: None,
-            passphrase: None,
-            hw_module: None,
-            hw_pin: None,
-            hw_key_label: None,
+            ..Request::default()
         },
     )?;
 
@@ -310,6 +329,7 @@ fn unlock_with_hardware_key_over_a_real_socket_returns_the_fingerprint()
             hw_module: Some(module_path),
             hw_pin: Some("1234".to_string()),
             hw_key_label: Some(label.to_string()),
+            ..Request::default()
         },
     )?;
     // The token must survive until the Engine subprocess has actually
@@ -322,5 +342,66 @@ fn unlock_with_hardware_key_over_a_real_socket_returns_the_fingerprint()
     let _ = std::fs::remove_dir_all(&dir);
     assert!(response.ok, "expected Ok, got: {response:?}");
     assert_eq!(response.fingerprint.map(|f| f.len()), Some(64));
+    Ok(())
+}
+
+#[test]
+fn session_state_persists_across_requests_on_one_connection()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let dir = temp_case_dir("session-peers");
+    let keystore_path = dir.join("keystore.enc");
+    let socket_path = dir.join("engine.sock");
+    let bundle = IdentityBundle::generate();
+    umbra_cli::keystore::save(&keystore_path, b"pw", &bundle)?;
+    let peer_bundle = IdentityBundle::generate();
+    let peer_payload = umbra_cli::pairing::payload_for(&peer_bundle)?;
+
+    let _engine = spawn_engine(&socket_path, &dir, None)?;
+    let responses = send_requests_over_one_connection(
+        &socket_path,
+        &[
+            Request {
+                op: "unlock".to_string(),
+                keystore_path: Some(keystore_path.clone()),
+                passphrase: Some("pw".to_string()),
+                ..Request::default()
+            },
+            Request {
+                op: "list_peers".to_string(),
+                ..Request::default()
+            },
+            Request {
+                op: "pair_payload".to_string(),
+                ..Request::default()
+            },
+            Request {
+                op: "pair_import".to_string(),
+                peer_payload: Some(peer_payload.clone()),
+                ..Request::default()
+            },
+            Request {
+                op: "pair_confirm".to_string(),
+                peer_name: Some("alice".to_string()),
+                peer_payload: Some(peer_payload),
+                ..Request::default()
+            },
+            Request {
+                op: "list_peers".to_string(),
+                ..Request::default()
+            },
+        ],
+    )?;
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(responses[0].ok, "unlock: {:?}", responses[0]);
+    assert!(responses[1].ok, "list_peers before: {:?}", responses[1]);
+    assert_eq!(responses[1].peer_names, Some(Vec::<String>::new()));
+    assert!(responses[2].ok, "pair_payload: {:?}", responses[2]);
+    assert!(responses[2].payload.is_some());
+    assert!(responses[3].ok, "pair_import: {:?}", responses[3]);
+    assert_eq!(responses[3].sas.as_ref().map(String::len), Some(6));
+    assert!(responses[4].ok, "pair_confirm: {:?}", responses[4]);
+    assert!(responses[5].ok, "list_peers after: {:?}", responses[5]);
+    assert_eq!(responses[5].peer_names, Some(vec!["alice".to_string()]));
     Ok(())
 }

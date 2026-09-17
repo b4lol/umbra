@@ -224,8 +224,18 @@ pub fn run(
     {
         read_only.push(conf_dir);
     }
-    let _status = umbra_cli::sandbox::restrict_filesystem_with_exceptions(&[], &read_only)
-        .map_err(|error| EngineError::Sandbox(error.to_string()))?;
+    // TODO B.3 GUI messaging design, Phase 1: `keystore_dir/peers` must
+    // exist and be READ-WRITE before Landlock installs (it can only
+    // narrow access afterward, never widen it later) — `"pair_confirm"`
+    // writes new peer-record files here for the rest of this
+    // connection's life, and `"list_peers"`/`"pair_import"` read them
+    // back. Unconditional (unlike the hardware-key grants above): every
+    // session may pair a peer, not just hardware-key-gated ones.
+    let peers_dir = keystore_dir.join("peers");
+    std::fs::create_dir_all(&peers_dir)?;
+    let _status =
+        umbra_cli::sandbox::restrict_filesystem_with_exceptions(&[peers_dir.as_path()], &read_only)
+            .map_err(|error| EngineError::Sandbox(error.to_string()))?;
     umbra_cli::sandbox::restrict_syscalls()
         .map_err(|error| EngineError::Sandbox(error.to_string()))?;
 
@@ -265,6 +275,7 @@ fn serve_connection(
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut writer = stream;
     let mut line = String::new();
+    let mut session = dispatch::Session::default();
     loop {
         line.clear();
         let bytes_read = reader.read_line(&mut line)?;
@@ -272,7 +283,7 @@ fn serve_connection(
             return Ok(());
         }
         let response = match serde_json::from_str::<Request>(line.trim_end()) {
-            Ok(request) => dispatch_checked(&request, keystore_dir, hw_module_dir),
+            Ok(request) => dispatch_checked(&request, keystore_dir, hw_module_dir, &mut session),
             Err(error) => protocol::Response::err(format!("malformed request: {error}")),
         };
         let mut encoded = serde_json::to_string(&response)?;
@@ -285,11 +296,13 @@ fn serve_connection(
 /// sandboxed `keystore_dir` with a clean [`protocol::Response`] error
 /// (rather than letting it fall through to a Landlock `EACCES`
 /// surprise inside `dispatch::dispatch`), then delegates to
-/// `dispatch::dispatch` for everything else.
+/// `dispatch::dispatch` (threading this connection's `session`) for
+/// everything else.
 fn dispatch_checked(
     request: &Request,
     keystore_dir: &Path,
     hw_module_dir: Option<&Path>,
+    session: &mut dispatch::Session,
 ) -> protocol::Response {
     if let Some(path) = request.keystore_path.as_deref() {
         match path.parent() {
@@ -311,5 +324,5 @@ fn dispatch_checked(
             );
         }
     }
-    dispatch::dispatch(request)
+    dispatch::dispatch(request, session)
 }

@@ -187,8 +187,20 @@ pub fn save_peer(
         contents.push_str(&format!("nym {address}\n"));
     }
     let path = record_path(peers_dir, name)?;
-    fs::create_dir_all(peers_dir)
-        .map_err(|e| CliError::Keystore(format!("cannot create {}: {e}", peers_dir.display())))?;
+    // Skip the `mkdir` entirely when `peers_dir` already exists (e.g. the
+    // sandboxed `umbra-engine` Engine pre-creates it — see its own
+    // `run()` — before installing Landlock, which only grants MAKE_DIR
+    // on `peers_dir` itself, not on its parent; re-issuing `mkdir` on an
+    // already-existing directory still needs MAKE_DIR on the PARENT to
+    // even attempt the syscall, so calling it unconditionally would fail
+    // closed with EPERM under that sandbox even though nothing actually
+    // needs creating). `Path::is_dir` is a plain `stat`, which Landlock
+    // never gates, so this check itself is always safe to run first.
+    if !peers_dir.is_dir() {
+        fs::create_dir_all(peers_dir).map_err(|e| {
+            CliError::Keystore(format!("cannot create {}: {e}", peers_dir.display()))
+        })?;
+    }
     fs::write(&path, contents)
         .map_err(|e| CliError::Keystore(format!("cannot write {}: {e}", path.display())))
 }
