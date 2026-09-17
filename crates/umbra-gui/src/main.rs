@@ -389,18 +389,34 @@ fn open_pairing_dialog(
     stack.set_visible_child_name("import");
     dialog.set_child(Some(&stack));
 
+    // Holds the EXACT payload string a successful `pair_import` call
+    // was made with, so `pair_confirm` below is structurally bound to
+    // computing its SAS over the same bytes rather than re-reading
+    // `peer_payload_entry` a second time (which today happens to still
+    // hold the same text only because the import page becomes
+    // unreachable once the confirm page is shown — a UI-reachability
+    // argument, not a structural guarantee, and fragile to future
+    // refactors).
+    let imported_payload: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+
     let stack_for_import = stack.clone();
     let engine_client_for_import = engine_client.clone();
     let peer_payload_entry_for_import = peer_payload_entry.clone();
     let sas_label_for_import = sas_label.clone();
     let import_error_label_for_import = import_error_label.clone();
+    let imported_payload_for_import = imported_payload.clone();
     import_button.connect_clicked(move |_button| {
         let peer_payload = peer_payload_entry_for_import.text().to_string();
-        match engine_client_for_import
+        // Bind the owned `Result` to a local first (same reasoning as
+        // `confirm_button`'s handler below): keeps the `RefCell`
+        // borrow scoped to this `let`, so it's released before the
+        // `Ok` arm below borrows `imported_payload_for_import`.
+        let import_result = engine_client_for_import
             .borrow_mut()
-            .pair_import(&peer_payload)
-        {
+            .pair_import(&peer_payload);
+        match import_result {
             Ok(sas) => {
+                *imported_payload_for_import.borrow_mut() = Some(peer_payload);
                 import_error_label_for_import.set_visible(false);
                 sas_label_for_import.set_label(&sas);
                 stack_for_import.set_visible_child_name("confirm");
@@ -413,14 +429,23 @@ fn open_pairing_dialog(
     });
 
     let engine_client_for_confirm = engine_client.clone();
-    let peer_payload_entry_for_confirm = peer_payload_entry.clone();
     let peer_name_entry_for_confirm = peer_name_entry.clone();
     let peer_onion_entry_for_confirm = peer_onion_entry.clone();
     let confirm_error_label_for_confirm = confirm_error_label.clone();
     let dialog_for_confirm = dialog.clone();
     let refresh_peers_for_confirm = refresh_peers.clone();
+    let imported_payload_for_confirm = imported_payload.clone();
     confirm_button.connect_clicked(move |_button| {
-        let peer_payload = peer_payload_entry_for_confirm.text().to_string();
+        // Scoped tightly to this `let` so the borrow is released before
+        // any of the branches below run (mirrors the `RefCell`-borrow
+        // care already taken for `engine_client` in this same handler).
+        let peer_payload = imported_payload_for_confirm.borrow().clone();
+        let Some(peer_payload) = peer_payload else {
+            confirm_error_label_for_confirm
+                .set_label("no successfully imported payload to confirm");
+            confirm_error_label_for_confirm.set_visible(true);
+            return;
+        };
         let peer_name = peer_name_entry_for_confirm.text().to_string();
         let peer_onion = peer_onion_entry_for_confirm.text().to_string();
         let peer_onion = if peer_onion.is_empty() {

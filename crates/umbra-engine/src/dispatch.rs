@@ -1,7 +1,10 @@
-//! Request dispatch (TODO B.3.1): the Engine's only implemented
-//! operation, `"unlock"` — auto-detects a Decoy Vault file (TODO B.3)
-//! by its fixed size, exactly like `umbra-gui`'s own unlock flow did
-//! before this increment moved the computation here.
+//! Request dispatch (TODO B.3.1): routes each decoded [`Request`] to
+//! its operation — `"unlock"` (auto-detects a Decoy Vault file, TODO
+//! B.3, by its fixed size, exactly like `umbra-gui`'s own unlock flow
+//! did before this increment moved the computation here), plus the
+//! per-session `"list_peers"`, `"pair_payload"`, `"pair_import"`, and
+//! `"pair_confirm"` operations added for TODO B.3's GUI messaging
+//! design, Phase 1.
 
 use std::path::{Path, PathBuf};
 
@@ -207,11 +210,22 @@ mod tests {
     use umbra_cli::keystore::{HARDWARE_KEY_CHALLENGE, save_with_hardware_key};
     use umbra_crypto::keys::IdentityBundle;
 
+    /// Unique-per-test-case keystore file path. Deliberately places the
+    /// file under its OWN PID+label-scoped DIRECTORY (created here),
+    /// not directly in the bare system temp dir: `dispatch_unlock`
+    /// derives its `Session`'s peers directory from `keystore_path`'s
+    /// PARENT, so a bare-temp-dir file would give every test in this
+    /// module the SAME parent (and thus the same, colliding, peers
+    /// directory) under Rust's default parallel test harness — the
+    /// scoped directory here keeps each test's `Session`-internal
+    /// peers directory, not just its keystore file, genuinely unique.
     fn temp_keystore_path(label: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "umbra-engine-dispatch-test-{}-{label}.enc",
+        let dir = std::env::temp_dir().join(format!(
+            "umbra-engine-dispatch-test-{}-{label}",
             std::process::id()
-        ))
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join("keystore.enc")
     }
 
     #[test]
@@ -406,7 +420,11 @@ mod tests {
             };
             let response = dispatch(&request, &mut session);
             assert!(!response.ok, "op {op} unexpectedly succeeded");
-            assert_eq!(response.error.as_deref(), Some("not unlocked yet"), "op {op}");
+            assert_eq!(
+                response.error.as_deref(),
+                Some("not unlocked yet"),
+                "op {op}"
+            );
         }
     }
 
@@ -483,7 +501,10 @@ mod tests {
 
         assert!(response.ok, "expected Ok, got: {response:?}");
         let sas = response.sas.ok_or("expected a sas code")?;
-        assert_eq!(sas, umbra_cli::pairing::pairing_sas(&own_payload, &peer_payload).to_string());
+        assert_eq!(
+            sas,
+            umbra_cli::pairing::pairing_sas(&own_payload, &peer_payload).to_string()
+        );
         assert!(no_peers_saved, "pair_import must not persist a peer record");
         Ok(())
     }
@@ -531,7 +552,10 @@ mod tests {
         std::fs::remove_file(&path)?;
         let _ = std::fs::remove_dir_all(&peers_dir);
 
-        assert!(confirm_response.ok, "expected Ok, got: {confirm_response:?}");
+        assert!(
+            confirm_response.ok,
+            "expected Ok, got: {confirm_response:?}"
+        );
         assert!(list_response.ok, "expected Ok, got: {list_response:?}");
         assert_eq!(list_response.peer_names, Some(vec!["alice".to_string()]));
         Ok(())

@@ -20,7 +20,8 @@ use serde::{Deserialize, Serialize};
 /// deserialize at all.
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Request {
-    /// The requested operation. Only `"unlock"` exists today.
+    /// The requested operation: `"unlock"`, `"list_peers"`,
+    /// `"pair_payload"`, `"pair_import"`, or `"pair_confirm"`.
     pub op: String,
     /// The keystore or decoy-vault file to operate on (required for
     /// `"unlock"`). Its parent directory must equal the Engine's own
@@ -73,8 +74,10 @@ pub struct Request {
 /// One response line, `umbra-engine` -> `umbra-gui`.
 ///
 /// A plain struct (not a tagged enum) matching the wire format
-/// verbatim: exactly one of `fingerprint`/`error` is populated,
-/// selected by `ok`.
+/// verbatim: exactly one of `fingerprint`/`peer_names`/`payload`/`sas`/
+/// `error` is populated (or none, for a bare `"pair_confirm"`
+/// success), selected by `ok` together with which operation was
+/// requested.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Response {
     /// Whether the operation succeeded.

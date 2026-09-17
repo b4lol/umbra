@@ -564,10 +564,8 @@ mod tests {
     #[test]
     fn list_peers_parses_a_successful_response()
     -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut connection = connect_to_fake_engine(
-            "list-peers",
-            r#"{"ok":true,"peer_names":["alice","bob"]}"#,
-        )?;
+        let mut connection =
+            connect_to_fake_engine("list-peers", r#"{"ok":true,"peer_names":["alice","bob"]}"#)?;
         let names = connection
             .list_peers()
             .map_err(|error| format!("expected Ok, got Err: {error}"))?;

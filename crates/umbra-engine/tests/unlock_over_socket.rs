@@ -393,15 +393,27 @@ fn session_state_persists_across_requests_on_one_connection()
     )?;
     let _ = std::fs::remove_dir_all(&dir);
 
-    assert!(responses[0].ok, "unlock: {:?}", responses[0]);
-    assert!(responses[1].ok, "list_peers before: {:?}", responses[1]);
-    assert_eq!(responses[1].peer_names, Some(Vec::<String>::new()));
-    assert!(responses[2].ok, "pair_payload: {:?}", responses[2]);
-    assert!(responses[2].payload.is_some());
-    assert!(responses[3].ok, "pair_import: {:?}", responses[3]);
-    assert_eq!(responses[3].sas.as_ref().map(String::len), Some(6));
-    assert!(responses[4].ok, "pair_confirm: {:?}", responses[4]);
-    assert!(responses[5].ok, "list_peers after: {:?}", responses[5]);
-    assert_eq!(responses[5].peer_names, Some(vec!["alice".to_string()]));
+    let [
+        unlock,
+        list_before,
+        pair_payload,
+        pair_import,
+        pair_confirm,
+        list_after,
+    ] = responses.as_slice()
+    else {
+        return Err("expected exactly 6 responses".into());
+    };
+
+    assert!(unlock.ok, "unlock: {unlock:?}");
+    assert!(list_before.ok, "list_peers before: {list_before:?}");
+    assert_eq!(list_before.peer_names, Some(Vec::<String>::new()));
+    assert!(pair_payload.ok, "pair_payload: {pair_payload:?}");
+    assert!(pair_payload.payload.is_some());
+    assert!(pair_import.ok, "pair_import: {pair_import:?}");
+    assert_eq!(pair_import.sas.as_ref().map(String::len), Some(6));
+    assert!(pair_confirm.ok, "pair_confirm: {pair_confirm:?}");
+    assert!(list_after.ok, "list_peers after: {list_after:?}");
+    assert_eq!(list_after.peer_names, Some(vec!["alice".to_string()]));
     Ok(())
 }
