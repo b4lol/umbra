@@ -26,9 +26,9 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 /// One request line, mirrors `umbra_engine::protocol::Request`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Default)]
 struct Request {
-    /// The requested operation. Only `"unlock"` is ever sent today.
+    /// The requested operation.
     op: String,
     /// The keystore or decoy-vault file to operate on.
     keystore_path: Option<PathBuf>,
@@ -44,6 +44,14 @@ struct Request {
     hw_pin: Option<String>,
     /// Label of the token-held HMAC key, from `--hw-key-label`.
     hw_key_label: Option<String>,
+    /// Local display name to save a peer under (`"pair_confirm"`).
+    peer_name: Option<String>,
+    /// A peer's base64url pairing payload (`"pair_import"` and
+    /// `"pair_confirm"`).
+    peer_payload: Option<String>,
+    /// The peer's `.onion` service address, if recorded now
+    /// (`"pair_confirm"`, optional).
+    peer_onion: Option<String>,
 }
 
 /// One response line, mirrors `umbra_engine::protocol::Response`.
@@ -57,6 +65,15 @@ struct Response {
     /// A display-ready error message, present only when not `ok`.
     #[serde(default)]
     error: Option<String>,
+    /// Paired peer names (`"list_peers"`), sorted.
+    #[serde(default)]
+    peer_names: Option<Vec<String>>,
+    /// This session's own pairing payload (`"pair_payload"`).
+    #[serde(default)]
+    payload: Option<String>,
+    /// The shared SAS code (`"pair_import"`).
+    #[serde(default)]
+    sas: Option<String>,
 }
 
 /// A protocol-level connection to the Engine, independent of how that
@@ -70,6 +87,23 @@ struct EngineConnection {
 }
 
 impl EngineConnection {
+    /// Sends one [`Request`] and returns the decoded [`Response`] —
+    /// the shared write/read half of every operation below.
+    fn request(&mut self, request: &Request) -> Result<Response, String> {
+        let mut line = serde_json::to_string(request).map_err(|error| error.to_string())?;
+        line.push('\n');
+        self.stream
+            .write_all(line.as_bytes())
+            .map_err(|error| error.to_string())?;
+
+        let mut reader = BufReader::new(&self.stream);
+        let mut response_line = String::new();
+        reader
+            .read_line(&mut response_line)
+            .map_err(|error| error.to_string())?;
+        serde_json::from_str(response_line.trim_end()).map_err(|error| error.to_string())
+    }
+
     /// Sends an `"unlock"` request for `keystore_path` with
     /// `passphrase`, and returns the unlocked identity's fingerprint
     /// as lowercase hex on success.
@@ -85,7 +119,7 @@ impl EngineConnection {
             .map_err(|_error| "passphrase must be valid UTF-8".to_string())?;
         let hw_pin = std::str::from_utf8(hw_pin)
             .map_err(|_error| "hardware key PIN must be valid UTF-8".to_string())?;
-        let request = Request {
+        let response = self.request(&Request {
             op: "unlock".to_string(),
             keystore_path: Some(keystore_path.to_path_buf()),
             passphrase: Some(passphrase.to_string()),
@@ -96,24 +130,90 @@ impl EngineConnection {
                 Some(hw_pin.to_string())
             },
             hw_key_label: hw_key_label.map(str::to_string),
-        };
-        let mut line = serde_json::to_string(&request).map_err(|error| error.to_string())?;
-        line.push('\n');
-        self.stream
-            .write_all(line.as_bytes())
-            .map_err(|error| error.to_string())?;
-
-        let mut reader = BufReader::new(&self.stream);
-        let mut response_line = String::new();
-        reader
-            .read_line(&mut response_line)
-            .map_err(|error| error.to_string())?;
-        let response: Response =
-            serde_json::from_str(response_line.trim_end()).map_err(|error| error.to_string())?;
+            ..Request::default()
+        })?;
         if response.ok {
             response
                 .fingerprint
                 .ok_or_else(|| "Engine returned ok without a fingerprint".to_string())
+        } else {
+            Err(response
+                .error
+                .unwrap_or_else(|| "Engine returned an error with no message".to_string()))
+        }
+    }
+
+    /// Sends a `"list_peers"` request and returns the sorted peer
+    /// names.
+    fn list_peers(&mut self) -> Result<Vec<String>, String> {
+        let response = self.request(&Request {
+            op: "list_peers".to_string(),
+            ..Request::default()
+        })?;
+        if response.ok {
+            Ok(response.peer_names.unwrap_or_default())
+        } else {
+            Err(response
+                .error
+                .unwrap_or_else(|| "Engine returned an error with no message".to_string()))
+        }
+    }
+
+    /// Sends a `"pair_payload"` request and returns this identity's
+    /// own base64url pairing payload.
+    fn pair_payload(&mut self) -> Result<String, String> {
+        let response = self.request(&Request {
+            op: "pair_payload".to_string(),
+            ..Request::default()
+        })?;
+        if response.ok {
+            response
+                .payload
+                .ok_or_else(|| "Engine returned ok without a payload".to_string())
+        } else {
+            Err(response
+                .error
+                .unwrap_or_else(|| "Engine returned an error with no message".to_string()))
+        }
+    }
+
+    /// Sends a `"pair_import"` request for `peer_payload` and returns
+    /// the shared SAS code for out-of-band verification.
+    fn pair_import(&mut self, peer_payload: &str) -> Result<String, String> {
+        let response = self.request(&Request {
+            op: "pair_import".to_string(),
+            peer_payload: Some(peer_payload.to_string()),
+            ..Request::default()
+        })?;
+        if response.ok {
+            response
+                .sas
+                .ok_or_else(|| "Engine returned ok without a SAS code".to_string())
+        } else {
+            Err(response
+                .error
+                .unwrap_or_else(|| "Engine returned an error with no message".to_string()))
+        }
+    }
+
+    /// Sends a `"pair_confirm"` request, persisting the peer record
+    /// under `peer_name` with `peer_payload` and an optional
+    /// `peer_onion` address.
+    fn pair_confirm(
+        &mut self,
+        peer_name: &str,
+        peer_payload: &str,
+        peer_onion: Option<&str>,
+    ) -> Result<(), String> {
+        let response = self.request(&Request {
+            op: "pair_confirm".to_string(),
+            peer_name: Some(peer_name.to_string()),
+            peer_payload: Some(peer_payload.to_string()),
+            peer_onion: peer_onion.map(str::to_string),
+            ..Request::default()
+        })?;
+        if response.ok {
+            Ok(())
         } else {
             Err(response
                 .error
@@ -251,6 +351,58 @@ impl EngineClient {
     ) -> Result<String, String> {
         self.connection
             .unlock(keystore_path, passphrase, hw_module, hw_pin, hw_key_label)
+    }
+
+    /// Lists the current session's paired peer names.
+    ///
+    /// # Errors
+    ///
+    /// Returns a display-ready error message if this connection was
+    /// never unlocked, or on any I/O failure talking to the Engine.
+    pub fn list_peers(&mut self) -> Result<Vec<String>, String> {
+        self.connection.list_peers()
+    }
+
+    /// Returns this session's own base64url pairing payload, to hand
+    /// to a peer out of band.
+    ///
+    /// # Errors
+    ///
+    /// Returns a display-ready error message if this connection was
+    /// never unlocked, or on any I/O failure talking to the Engine.
+    pub fn pair_payload(&mut self) -> Result<String, String> {
+        self.connection.pair_payload()
+    }
+
+    /// Validates a peer's pairing payload and returns the shared SAS
+    /// code for out-of-band verification. Does not persist a peer
+    /// record — see [`EngineClient::pair_confirm`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a display-ready error message on an invalid payload,
+    /// if this connection was never unlocked, or on any I/O failure.
+    pub fn pair_import(&mut self, peer_payload: &str) -> Result<String, String> {
+        self.connection.pair_import(peer_payload)
+    }
+
+    /// Persists a peer record under `peer_name`, once the operator has
+    /// confirmed the SAS code from [`EngineClient::pair_import`]
+    /// matches out of band.
+    ///
+    /// # Errors
+    ///
+    /// Returns a display-ready error message on an invalid name/
+    /// payload/address, if this connection was never unlocked, or on
+    /// any I/O failure.
+    pub fn pair_confirm(
+        &mut self,
+        peer_name: &str,
+        peer_payload: &str,
+        peer_onion: Option<&str>,
+    ) -> Result<(), String> {
+        self.connection
+            .pair_confirm(peer_name, peer_payload, peer_onion)
     }
 }
 
@@ -406,6 +558,66 @@ mod tests {
         assert!(echoed.contains("\"hw_module\":\"/usr/lib64/pkcs11/libsofthsm2.so\""));
         assert!(echoed.contains("\"hw_pin\":\"1234\""));
         assert!(echoed.contains("\"hw_key_label\":\"my-key\""));
+        Ok(())
+    }
+
+    #[test]
+    fn list_peers_parses_a_successful_response()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut connection = connect_to_fake_engine(
+            "list-peers",
+            r#"{"ok":true,"peer_names":["alice","bob"]}"#,
+        )?;
+        let names = connection
+            .list_peers()
+            .map_err(|error| format!("expected Ok, got Err: {error}"))?;
+        assert_eq!(names, vec!["alice".to_string(), "bob".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn pair_payload_parses_a_successful_response()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut connection =
+            connect_to_fake_engine("pair-payload", r#"{"ok":true,"payload":"own-payload"}"#)?;
+        let payload = connection
+            .pair_payload()
+            .map_err(|error| format!("expected Ok, got Err: {error}"))?;
+        assert_eq!(payload, "own-payload");
+        Ok(())
+    }
+
+    #[test]
+    fn pair_import_parses_a_successful_response()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut connection =
+            connect_to_fake_engine("pair-import", r#"{"ok":true,"sas":"123456"}"#)?;
+        let sas = connection
+            .pair_import("peer-payload")
+            .map_err(|error| format!("expected Ok, got Err: {error}"))?;
+        assert_eq!(sas, "123456");
+        Ok(())
+    }
+
+    #[test]
+    fn pair_confirm_parses_a_successful_response()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut connection = connect_to_fake_engine("pair-confirm", r#"{"ok":true}"#)?;
+        connection
+            .pair_confirm("alice", "peer-payload", Some("a".repeat(56).as_str()))
+            .map_err(|error| format!("expected Ok, got Err: {error}"))?;
+        Ok(())
+    }
+
+    #[test]
+    fn pair_confirm_parses_a_failure_response()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut connection = connect_to_fake_engine(
+            "pair-confirm-fail",
+            r#"{"ok":false,"error":"not unlocked yet"}"#,
+        )?;
+        let result = connection.pair_confirm("alice", "peer-payload", None);
+        assert_eq!(result, Err("not unlocked yet".to_string()));
         Ok(())
     }
 }
