@@ -219,14 +219,26 @@ fn build_window(
                 .map(|entry| entry.text().as_bytes().to_vec())
                 .unwrap_or_default(),
         );
-        let mut engine_client = engine_client.borrow_mut();
-        match engine_client.unlock(
-            &keystore_path,
-            &passphrase,
-            hw_module.as_deref(),
-            &hw_pin,
-            hw_key_label.as_deref(),
-        ) {
+        // The `RefMut` from `borrow_mut()` must be dropped before the
+        // `Ok` arm below calls `build_peer_panel`, which borrows the
+        // same `RefCell` again (via `engine_client_for_peers`, an
+        // `Rc::clone` of it) — a named local's `Drop` runs at the end
+        // of its enclosing block, not its last use, so without this
+        // scope the guard would still be held through the whole
+        // `match` and the second borrow would panic with
+        // `BorrowMutError`. Scoping the borrow to just this block lets
+        // it drop before `unlock_result` is matched.
+        let unlock_result = {
+            let mut engine_client = engine_client.borrow_mut();
+            engine_client.unlock(
+                &keystore_path,
+                &passphrase,
+                hw_module.as_deref(),
+                &hw_pin,
+                hw_key_label.as_deref(),
+            )
+        };
+        match unlock_result {
             Ok(fingerprint) => {
                 let reveal_widget = umbra_gui::scratch_reveal::build_scratch_reveal(&format!(
                     "Fingerprint: {fingerprint}"
@@ -416,11 +428,21 @@ fn open_pairing_dialog(
         } else {
             Some(peer_onion.as_str())
         };
-        match engine_client_for_confirm.borrow_mut().pair_confirm(
+        // As in `unlock_button`'s handler above: `match`'s scrutinee
+        // temporary lives for the whole match statement, so calling
+        // `.borrow_mut()` directly in the scrutinee would keep the
+        // `RefCell` borrowed through the `Ok` arm below, where
+        // `refresh_peers_for_confirm` (the `build_peer_panel` refresh
+        // closure) borrows the same `RefCell` again — panicking with
+        // `BorrowMutError`. Binding the call's owned `Result` to a
+        // named local first drops the `RefMut` at the end of this
+        // `let` statement, before the `match` runs.
+        let confirm_result = engine_client_for_confirm.borrow_mut().pair_confirm(
             &peer_name,
             &peer_payload,
             peer_onion,
-        ) {
+        );
+        match confirm_result {
             Ok(()) => {
                 refresh_peers_for_confirm();
                 dialog_for_confirm.close();
