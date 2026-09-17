@@ -24,13 +24,22 @@ struct Cli {
     /// launched with `--hw-module`.
     #[arg(long, value_name = "PATH")]
     hw_module_dir: Option<PathBuf>,
+    /// Directory for this identity's Tor storage (persistent onion
+    /// service keys + descriptor cache). Granted read-write in the
+    /// Engine's Landlock ruleset at startup (TODO B.3 GUI messaging
+    /// design, Phase 2).
+    #[arg(long, value_name = "PATH")]
+    tor_dir: PathBuf,
 }
 
 fn main() {
     let cli = <Cli as clap::Parser>::parse();
-    if let Err(error) =
-        umbra_engine::run(&cli.socket, &cli.keystore_dir, cli.hw_module_dir.as_deref())
-    {
+    if let Err(error) = umbra_engine::run(
+        &cli.socket,
+        &cli.keystore_dir,
+        cli.hw_module_dir.as_deref(),
+        &cli.tor_dir,
+    ) {
         eprintln!("umbra-engine: {error}");
         std::process::exit(1);
     }

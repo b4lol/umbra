@@ -40,6 +40,7 @@ pub fn dispatch(request: &Request, session: &mut Session) -> Response {
         "pair_payload" => dispatch_pair_payload(session),
         "pair_import" => dispatch_pair_import(request, session),
         "pair_confirm" => dispatch_pair_confirm(request, session),
+        "send" => Response::err("not yet implemented"),
         other => Response::err(format!("unknown operation: {other}")),
     }
 }
@@ -393,6 +394,20 @@ mod tests {
             }
         }
         Err("no SoftHSM2 PKCS#11 module found at any known path; set UMBRA_SOFTHSM2_MODULE".into())
+    }
+
+    #[test]
+    fn send_is_a_not_yet_implemented_stub() {
+        let mut session = Session::default();
+        let response = dispatch(
+            &Request {
+                op: "send".to_string(),
+                ..Request::default()
+            },
+            &mut session,
+        );
+        assert!(!response.ok);
+        assert_eq!(response.error.as_deref(), Some("not yet implemented"));
     }
 
     #[test]

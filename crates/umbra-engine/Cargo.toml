@@ -19,8 +19,13 @@ name = "umbra-engine"
 path = "src/main.rs"
 
 [dependencies]
-umbra-cli.workspace = true
+# `tor`: TODO B.3 GUI messaging design, Phase 2's background bootstrap
+# task calls `umbra_cli::serve::wait_for_address` (gated behind this
+# feature on `umbra-cli` itself) and `umbra_net::tor::TorTransport`
+# directly (see the `umbra-net` dependency below).
+umbra-cli = { workspace = true, features = ["tor"] }
 umbra-crypto.workspace = true
+umbra-net = { workspace = true, features = ["tor"] }
 umbra-hardware = { path = "../umbra-hardware" }
 umbra-hwkey = { path = "../umbra-hwkey" }
 serde.workspace = true

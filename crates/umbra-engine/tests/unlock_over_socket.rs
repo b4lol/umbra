@@ -29,19 +29,22 @@ impl Drop for EngineGuard {
 }
 
 /// Spawns `umbra-engine --socket <socket_path> --keystore-dir
-/// <keystore_dir>` (plus `--hw-module-dir`, if given) and blocks
-/// (bounded) until its socket file exists.
+/// <keystore_dir> --tor-dir <tor_dir>` (plus `--hw-module-dir`, if
+/// given) and blocks (bounded) until its socket file exists.
 fn spawn_engine(
     socket_path: &Path,
     keystore_dir: &Path,
     hw_module_dir: Option<&Path>,
+    tor_dir: &Path,
 ) -> Result<EngineGuard, String> {
     let mut command = Command::new(env!("CARGO_BIN_EXE_umbra-engine"));
     command
         .arg("--socket")
         .arg(socket_path)
         .arg("--keystore-dir")
-        .arg(keystore_dir);
+        .arg(keystore_dir)
+        .arg("--tor-dir")
+        .arg(tor_dir);
     if let Some(hw_module_dir) = hw_module_dir {
         command.arg("--hw-module-dir").arg(hw_module_dir);
     }
@@ -129,7 +132,7 @@ fn unlock_with_correct_passphrase_returns_the_fingerprint()
     let bundle = IdentityBundle::generate();
     umbra_cli::keystore::save(&keystore_path, b"correct-passphrase", &bundle)?;
 
-    let _engine = spawn_engine(&socket_path, &dir, None)?;
+    let _engine = spawn_engine(&socket_path, &dir, None, &dir.join("tor"))?;
     let response = send_request(
         &socket_path,
         &Request {
@@ -154,7 +157,7 @@ fn unlock_with_wrong_passphrase_fails() -> Result<(), Box<dyn std::error::Error 
     let bundle = IdentityBundle::generate();
     umbra_cli::keystore::save(&keystore_path, b"correct-passphrase", &bundle)?;
 
-    let _engine = spawn_engine(&socket_path, &dir, None)?;
+    let _engine = spawn_engine(&socket_path, &dir, None, &dir.join("tor"))?;
     let response = send_request(
         &socket_path,
         &Request {
@@ -182,7 +185,7 @@ fn unlock_with_decoy_vault_outer_and_hidden_passphrase_both_work()
     umbra_cli::decoy_vault::create(&keystore_path, b"outer-pw", &outer_bundle)?;
     umbra_cli::decoy_vault::write_hidden(&keystore_path, b"hidden-pw", &hidden_bundle)?;
 
-    let _engine = spawn_engine(&socket_path, &dir, None)?;
+    let _engine = spawn_engine(&socket_path, &dir, None, &dir.join("tor"))?;
     let outer_response = send_request(
         &socket_path,
         &Request {
@@ -209,7 +212,7 @@ fn keystore_path_outside_sandboxed_directory_is_rejected_cleanly()
     // even attempted, with a clean error rather than a crash.
     let outside_path = std::env::temp_dir().join("definitely-not-under-dir.enc");
 
-    let _engine = spawn_engine(&socket_path, &dir, None)?;
+    let _engine = spawn_engine(&socket_path, &dir, None, &dir.join("tor"))?;
     let response = send_request(
         &socket_path,
         &Request {
@@ -235,7 +238,7 @@ fn unknown_op_over_the_wire_fails_cleanly() -> Result<(), Box<dyn std::error::Er
     let dir = temp_case_dir("unknown-op");
     let socket_path = dir.join("engine.sock");
 
-    let _engine = spawn_engine(&socket_path, &dir, None)?;
+    let _engine = spawn_engine(&socket_path, &dir, None, &dir.join("tor"))?;
     let response = send_request(
         &socket_path,
         &Request {
@@ -319,7 +322,7 @@ fn unlock_with_hardware_key_over_a_real_socket_returns_the_fingerprint()
     let module_dir = module_path
         .parent()
         .ok_or("SoftHSM2 module path has no parent directory")?;
-    let _engine = spawn_engine(&socket_path, &dir, Some(module_dir))?;
+    let _engine = spawn_engine(&socket_path, &dir, Some(module_dir), &dir.join("tor"))?;
     let response = send_request(
         &socket_path,
         &Request {
@@ -356,7 +359,7 @@ fn session_state_persists_across_requests_on_one_connection()
     let peer_bundle = IdentityBundle::generate();
     let peer_payload = umbra_cli::pairing::payload_for(&peer_bundle)?;
 
-    let _engine = spawn_engine(&socket_path, &dir, None)?;
+    let _engine = spawn_engine(&socket_path, &dir, None, &dir.join("tor"))?;
     let responses = send_requests_over_one_connection(
         &socket_path,
         &[

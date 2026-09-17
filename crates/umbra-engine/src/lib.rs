@@ -73,6 +73,7 @@ pub fn run(
     socket_path: &Path,
     keystore_dir: &Path,
     hw_module_dir: Option<&Path>,
+    tor_dir: &Path,
 ) -> Result<(), EngineError> {
     // Core-dump suppression only — NOT `umbra_hardware::process::
     // harden_process()`'s full bundle, which also calls `mlockall
@@ -232,9 +233,19 @@ pub fn run(
     // session may pair a peer, not just hardware-key-gated ones.
     let peers_dir = keystore_dir.join("peers");
     std::fs::create_dir_all(&peers_dir)?;
-    let _status =
-        umbra_cli::sandbox::restrict_filesystem_with_exceptions(&[peers_dir.as_path()], &read_only)
-            .map_err(|error| EngineError::Sandbox(error.to_string()))?;
+    // TODO B.3 GUI messaging design, Phase 2: `tor_dir` must exist and
+    // be READ-WRITE before Landlock installs (it can only narrow
+    // access afterward) — the background bootstrap task spawned after
+    // a successful unlock (below) persists the onion service's own
+    // identity keys and descriptor cache here for the rest of this
+    // connection's life. Unconditional, same reasoning as `peers_dir`
+    // above: every session may start messaging.
+    std::fs::create_dir_all(tor_dir)?;
+    let _status = umbra_cli::sandbox::restrict_filesystem_with_exceptions(
+        &[peers_dir.as_path(), tor_dir],
+        &read_only,
+    )
+    .map_err(|error| EngineError::Sandbox(error.to_string()))?;
     umbra_cli::sandbox::restrict_syscalls()
         .map_err(|error| EngineError::Sandbox(error.to_string()))?;
 
@@ -244,7 +255,12 @@ pub fn run(
         .enable_all()
         .build()
         .map_err(|error| EngineError::Io(std::io::Error::other(error.to_string())))?;
-    runtime.block_on(serve_connection(stream, keystore_dir, hw_module_dir))
+    runtime.block_on(serve_connection(
+        stream,
+        keystore_dir,
+        hw_module_dir,
+        tor_dir.to_path_buf(),
+    ))
 }
 
 /// Reads `SOFTHSM2_CONF`'s configured `directories.tokendir` value, if
@@ -268,19 +284,40 @@ fn softhsm2_tokendir_from_env() -> Option<std::path::PathBuf> {
     })
 }
 
-/// Serves one connection: reads one NDJSON [`Request`] line at a time,
-/// dispatches it, writes back one NDJSON line, until the peer
-/// disconnects (EOF). A dedicated writer task owns the socket's write
-/// half exclusively (fed by an internal channel) so that a future
-/// background task (TODO B.3 GUI messaging design, Phase 2's Tor
-/// bootstrap, wired in the next task) can also produce outgoing lines
-/// without racing this loop's own responses. This task changes ONLY
-/// how the socket is served — every response for every existing op
-/// stays byte-for-byte identical to before this change.
+/// Serves one connection: reads one NDJSON [`Request`] line at a
+/// time, dispatches it, writes back one NDJSON line, until the peer
+/// disconnects (EOF). Before the first successful `"unlock"`, every
+/// response is a bare, untagged [`protocol::Response`] line, exactly
+/// as before TODO B.3 GUI messaging design's Phase 2. On a
+/// SUCCESSFUL `"unlock"`, this function spawns a background Tor
+/// bootstrap task (writing the `"ready"` [`protocol::SessionLine`]
+/// event once bootstrap completes) and, from that point on, wraps
+/// EVERY later response in a tagged [`protocol::SessionLine`] too —
+/// matching the spec's "in the session phase, every line the Engine
+/// writes is tagged" rule for all five session-phase ops, not just
+/// the new `"send"` stub.
+///
+/// A dedicated writer task owns the socket's write half exclusively
+/// (fed by an internal channel), so both this loop's own responses
+/// and the background bootstrap task's unprompted `"ready"` event can
+/// write without racing each other.
+///
+/// Every exit path (EOF, a read/JSON-encode error, or the writer
+/// task's own receiver having already closed) funnels through the
+/// same `loop { ... break Err(_)/Ok(()) }` structure and shared
+/// cleanup tail below — matching Task 2's own fixed version, whose
+/// first draft skipped this on early-return paths (write failures
+/// silently swallowed, `writer_handle` not always awaited) and had to
+/// be corrected in a second round. This version has MORE exit paths
+/// than Task 2's (the pre-session/session-phase branch adds two more
+/// `line_tx.send` call sites), so preserving "every path breaks out
+/// of the loop rather than returning early" is what keeps `drop
+/// (line_tx)` / `writer_handle.await` unconditional here too.
 async fn serve_connection(
     stream: UnixStream,
     keystore_dir: &Path,
     hw_module_dir: Option<&Path>,
+    tor_dir: std::path::PathBuf,
 ) -> Result<(), EngineError> {
     stream.set_nonblocking(true)?;
     let tokio_stream = tokio::net::UnixStream::from_std(stream)?;
@@ -299,6 +336,7 @@ async fn serve_connection(
         });
 
     let mut session = dispatch::Session::default();
+    let mut session_started = false;
     let mut read_buf = String::new();
     let loop_result: Result<(), EngineError> = loop {
         read_buf.clear();
@@ -310,22 +348,68 @@ async fn serve_connection(
         if bytes_read == 0 {
             break Ok(());
         }
-        let response = match serde_json::from_str::<Request>(read_buf.trim_end()) {
-            Ok(request) => dispatch_checked(&request, keystore_dir, hw_module_dir, &mut session),
-            Err(error) => protocol::Response::err(format!("malformed request: {error}")),
-        };
-        let encoded = match serde_json::to_string(&response) {
-            Ok(mut encoded) => {
-                encoded.push('\n');
-                encoded
+        let request = match serde_json::from_str::<Request>(read_buf.trim_end()) {
+            Ok(request) => request,
+            Err(error) => {
+                // A malformed line can't carry a trustworthy
+                // request_id, so it always gets a bare, untagged
+                // Response, regardless of session phase.
+                let response = protocol::Response::err(format!("malformed request: {error}"));
+                let encoded = match serde_json::to_string(&response) {
+                    Ok(mut encoded) => {
+                        encoded.push('\n');
+                        encoded
+                    }
+                    Err(error) => break Err(EngineError::Json(error)),
+                };
+                if line_tx.send(encoded).is_err() {
+                    break Ok(());
+                }
+                continue;
             }
-            Err(error) => break Err(EngineError::Json(error)),
         };
-        // A closed receiver means the writer task already exited
-        // (its own write_all failed) — stop reading further requests;
-        // the writer's own error is picked up below via writer_handle.
-        if line_tx.send(encoded).is_err() {
-            break Ok(());
+        let request_id = request.request_id;
+        let is_unlock = request.op == "unlock";
+        let response = dispatch_checked(&request, keystore_dir, hw_module_dir, &mut session);
+
+        if session_started {
+            // Session phase: every response is tagged.
+            let session_line = protocol::SessionLine::from_response(request_id, response);
+            let encoded = match serde_json::to_string(&session_line) {
+                Ok(mut encoded) => {
+                    encoded.push('\n');
+                    encoded
+                }
+                Err(error) => break Err(EngineError::Json(error)),
+            };
+            if line_tx.send(encoded).is_err() {
+                break Ok(());
+            }
+        } else {
+            // Pre-session: untagged, exactly as before Phase 2.
+            let response_ok = response.ok;
+            let encoded = match serde_json::to_string(&response) {
+                Ok(mut encoded) => {
+                    encoded.push('\n');
+                    encoded
+                }
+                Err(error) => break Err(EngineError::Json(error)),
+            };
+            if line_tx.send(encoded).is_err() {
+                break Ok(());
+            }
+            // Captured before encoding (rather than re-reading
+            // `response.ok` here) purely for symmetry with the
+            // session-phase branch above, which moves `response` into
+            // `SessionLine::from_response`.
+            if is_unlock && response_ok {
+                session_started = true;
+                let bootstrap_tor_dir = tor_dir.clone();
+                let bootstrap_line_tx = line_tx.clone();
+                tokio::spawn(async move {
+                    run_tor_bootstrap(bootstrap_tor_dir, bootstrap_line_tx).await;
+                });
+            }
         }
     };
 
@@ -342,6 +426,51 @@ async fn serve_connection(
         // inventing a new EngineError variant for an unreachable case.
         Err(_join_error) => Ok(()),
     }
+}
+
+/// Bootstraps Tor under `tor_dir` and, on success, publishes the
+/// `"ready"` event over `line_tx`. Honest scope (TODO B.3 GUI
+/// messaging design, Phase 2): a bootstrap FAILURE is only logged to
+/// stderr, not surfaced as a wire event yet — Phase 2's own stated
+/// scope is exactly one event (`"ready"`); a `"session-error"` event
+/// for bootstrap failure is real, tracked future work (Phase 4's own
+/// event set), not silently dropped.
+async fn run_tor_bootstrap(
+    tor_dir: std::path::PathBuf,
+    line_tx: tokio::sync::mpsc::UnboundedSender<String>,
+) {
+    // Fixed, not operator-configurable: the Engine's onion-service
+    // identity lives under `tor_dir`, which is already scoped
+    // per-keystore (one `keystore_dir/tor` per identity) — the
+    // nickname only needs to be a valid identifier WITHIN that
+    // directory, not globally unique or user-visible.
+    const ENGINE_ONION_NICKNAME: &str = "umbra-gui";
+
+    let mut transport =
+        match umbra_net::tor::TorTransport::bootstrap_persistent_with_pt(&tor_dir, None).await {
+            Ok(transport) => transport,
+            Err(error) => {
+                eprintln!("umbra-engine: Tor bootstrap failed: {error}");
+                return;
+            }
+        };
+    if let Err(error) = transport.spawn_inbound(ENGINE_ONION_NICKNAME).await {
+        eprintln!("umbra-engine: onion inbound service failed: {error}");
+        return;
+    }
+    let address = match umbra_cli::serve::wait_for_address(&transport).await {
+        Ok(address) => address,
+        Err(error) => {
+            eprintln!("umbra-engine: onion address publication failed: {error}");
+            return;
+        }
+    };
+    let session_line = protocol::SessionLine::ready(address);
+    let Ok(mut encoded) = serde_json::to_string(&session_line) else {
+        return;
+    };
+    encoded.push('\n');
+    let _ = line_tx.send(encoded);
 }
 
 /// Rejects a request whose `keystore_path` falls outside the
