@@ -36,6 +36,22 @@ pub struct Request {
     /// needs it (YAGNI).
     #[serde(default)]
     pub passphrase: Option<String>,
+    /// Path to the hardware token's PKCS#11 module (TODO B.3 FIDO2
+    /// wiring). Required, together with `hw_pin`/`hw_key_label`, ONLY
+    /// if the target `keystore_path` turns out to be hardware-key-gated
+    /// (`umbra_cli::keystore::is_hardware_key_gated`) — the Engine
+    /// decides this by inspecting the file, not from this field's mere
+    /// presence. Its parent directory must equal the Engine's own
+    /// `--hw-module-dir` startup argument.
+    #[serde(default)]
+    pub hw_module: Option<std::path::PathBuf>,
+    /// The hardware token's PIN.
+    #[serde(default)]
+    pub hw_pin: Option<String>,
+    /// Label of the token-held HMAC key (as passed to
+    /// `umbra_hwkey::challenge_response`).
+    #[serde(default)]
+    pub hw_key_label: Option<String>,
 }
 
 /// One response line, `umbra-engine` -> `umbra-gui`.
@@ -89,6 +105,9 @@ mod tests {
             op: "unlock".to_string(),
             keystore_path: Some(std::path::PathBuf::from("/tmp/ks.enc")),
             passphrase: Some("secret".to_string()),
+            hw_module: None,
+            hw_pin: None,
+            hw_key_label: None,
         };
         let line = serde_json::to_string(&request)?;
         let decoded: Request = serde_json::from_str(&line)?;
@@ -98,6 +117,28 @@ mod tests {
             Some(std::path::PathBuf::from("/tmp/ks.enc"))
         );
         assert_eq!(decoded.passphrase.as_deref(), Some("secret"));
+        Ok(())
+    }
+
+    #[test]
+    fn request_with_hardware_key_fields_round_trips_through_json()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let request = Request {
+            op: "unlock".to_string(),
+            keystore_path: Some(std::path::PathBuf::from("/tmp/ks.enc")),
+            passphrase: Some("secret".to_string()),
+            hw_module: Some(std::path::PathBuf::from("/usr/lib64/pkcs11/libsofthsm2.so")),
+            hw_pin: Some("1234".to_string()),
+            hw_key_label: Some("my-key".to_string()),
+        };
+        let line = serde_json::to_string(&request)?;
+        let decoded: Request = serde_json::from_str(&line)?;
+        assert_eq!(
+            decoded.hw_module,
+            Some(std::path::PathBuf::from("/usr/lib64/pkcs11/libsofthsm2.so"))
+        );
+        assert_eq!(decoded.hw_pin.as_deref(), Some("1234"));
+        assert_eq!(decoded.hw_key_label.as_deref(), Some("my-key"));
         Ok(())
     }
 

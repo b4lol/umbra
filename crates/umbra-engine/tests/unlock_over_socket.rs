@@ -29,15 +29,23 @@ impl Drop for EngineGuard {
 }
 
 /// Spawns `umbra-engine --socket <socket_path> --keystore-dir
-/// <keystore_dir>` and blocks (bounded) until its socket file exists.
-fn spawn_engine(socket_path: &Path, keystore_dir: &Path) -> Result<EngineGuard, String> {
-    let child = Command::new(env!("CARGO_BIN_EXE_umbra-engine"))
+/// <keystore_dir>` (plus `--hw-module-dir`, if given) and blocks
+/// (bounded) until its socket file exists.
+fn spawn_engine(
+    socket_path: &Path,
+    keystore_dir: &Path,
+    hw_module_dir: Option<&Path>,
+) -> Result<EngineGuard, String> {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_umbra-engine"));
+    command
         .arg("--socket")
         .arg(socket_path)
         .arg("--keystore-dir")
-        .arg(keystore_dir)
-        .spawn()
-        .map_err(|error| error.to_string())?;
+        .arg(keystore_dir);
+    if let Some(hw_module_dir) = hw_module_dir {
+        command.arg("--hw-module-dir").arg(hw_module_dir);
+    }
+    let child = command.spawn().map_err(|error| error.to_string())?;
     let deadline = std::time::Instant::now()
         .checked_add(Duration::from_secs(2))
         .unwrap_or_else(std::time::Instant::now);
@@ -90,13 +98,16 @@ fn unlock_with_correct_passphrase_returns_the_fingerprint()
     let bundle = IdentityBundle::generate();
     umbra_cli::keystore::save(&keystore_path, b"correct-passphrase", &bundle)?;
 
-    let _engine = spawn_engine(&socket_path, &dir)?;
+    let _engine = spawn_engine(&socket_path, &dir, None)?;
     let response = send_request(
         &socket_path,
         &Request {
             op: "unlock".to_string(),
             keystore_path: Some(keystore_path),
             passphrase: Some("correct-passphrase".to_string()),
+            hw_module: None,
+            hw_pin: None,
+            hw_key_label: None,
         },
     )?;
 
@@ -114,13 +125,16 @@ fn unlock_with_wrong_passphrase_fails() -> Result<(), Box<dyn std::error::Error 
     let bundle = IdentityBundle::generate();
     umbra_cli::keystore::save(&keystore_path, b"correct-passphrase", &bundle)?;
 
-    let _engine = spawn_engine(&socket_path, &dir)?;
+    let _engine = spawn_engine(&socket_path, &dir, None)?;
     let response = send_request(
         &socket_path,
         &Request {
             op: "unlock".to_string(),
             keystore_path: Some(keystore_path),
             passphrase: Some("wrong-passphrase".to_string()),
+            hw_module: None,
+            hw_pin: None,
+            hw_key_label: None,
         },
     )?;
 
@@ -141,13 +155,16 @@ fn unlock_with_decoy_vault_outer_and_hidden_passphrase_both_work()
     umbra_cli::decoy_vault::create(&keystore_path, b"outer-pw", &outer_bundle)?;
     umbra_cli::decoy_vault::write_hidden(&keystore_path, b"hidden-pw", &hidden_bundle)?;
 
-    let _engine = spawn_engine(&socket_path, &dir)?;
+    let _engine = spawn_engine(&socket_path, &dir, None)?;
     let outer_response = send_request(
         &socket_path,
         &Request {
             op: "unlock".to_string(),
             keystore_path: Some(keystore_path.clone()),
             passphrase: Some("outer-pw".to_string()),
+            hw_module: None,
+            hw_pin: None,
+            hw_key_label: None,
         },
     )?;
 
@@ -167,13 +184,16 @@ fn keystore_path_outside_sandboxed_directory_is_rejected_cleanly()
     // even attempted, with a clean error rather than a crash.
     let outside_path = std::env::temp_dir().join("definitely-not-under-dir.enc");
 
-    let _engine = spawn_engine(&socket_path, &dir)?;
+    let _engine = spawn_engine(&socket_path, &dir, None)?;
     let response = send_request(
         &socket_path,
         &Request {
             op: "unlock".to_string(),
             keystore_path: Some(outside_path),
             passphrase: Some("irrelevant".to_string()),
+            hw_module: None,
+            hw_pin: None,
+            hw_key_label: None,
         },
     )?;
 
@@ -192,13 +212,16 @@ fn unknown_op_over_the_wire_fails_cleanly() -> Result<(), Box<dyn std::error::Er
     let dir = temp_case_dir("unknown-op");
     let socket_path = dir.join("engine.sock");
 
-    let _engine = spawn_engine(&socket_path, &dir)?;
+    let _engine = spawn_engine(&socket_path, &dir, None)?;
     let response = send_request(
         &socket_path,
         &Request {
             op: "future-op".to_string(),
             keystore_path: None,
             passphrase: None,
+            hw_module: None,
+            hw_pin: None,
+            hw_key_label: None,
         },
     )?;
 
@@ -208,5 +231,96 @@ fn unknown_op_over_the_wire_fails_cleanly() -> Result<(), Box<dyn std::error::Er
         response.error.as_deref(),
         Some("unknown operation: future-op")
     );
+    Ok(())
+}
+
+#[test]
+fn unlock_with_hardware_key_over_a_real_socket_returns_the_fingerprint()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Must match `crates/umbra-hwkey/tests/fixtures/softhsm2-test.conf`'s
+    // `directories.tokendir` — this workspace's root `.cargo/config.toml`
+    // FORCES `SOFTHSM2_CONF` to that fixture for every `cargo test`
+    // invocation (see its own comment), so SoftHSM2 writes here
+    // regardless of what directory name this test might otherwise have
+    // picked.
+    const TOKEN_DIR: &str = "/tmp/umbra-hwkey-softhsm-test-tokens";
+    let _ = std::fs::remove_dir_all(TOKEN_DIR);
+    std::fs::create_dir_all(TOKEN_DIR)?;
+    let init = std::process::Command::new("softhsm2-util")
+        .args([
+            "--init-token",
+            "--free",
+            "--label",
+            "umbra-engine-e2e-test",
+            "--pin",
+            "1234",
+            "--so-pin",
+            "0000",
+        ])
+        .output()?;
+    if !init.status.success() {
+        return Err(format!(
+            "softhsm2-util --init-token failed: {}",
+            String::from_utf8_lossy(&init.stderr)
+        )
+        .into());
+    }
+    let module_path = if let Ok(path) = std::env::var("UMBRA_SOFTHSM2_MODULE") {
+        PathBuf::from(path)
+    } else {
+        [
+            "/usr/lib64/pkcs11/libsofthsm2.so",
+            "/usr/lib/softhsm/libsofthsm2.so",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|candidate| candidate.exists())
+        .ok_or("no SoftHSM2 PKCS#11 module found; set UMBRA_SOFTHSM2_MODULE")?
+    };
+    let label = "umbra-engine-e2e-test-key";
+    umbra_hwkey::generate_hmac_key(&module_path, b"1234", label)?;
+    let hmac_response = umbra_hwkey::challenge_response(
+        &module_path,
+        b"1234",
+        label,
+        umbra_cli::keystore::HARDWARE_KEY_CHALLENGE,
+    )?;
+
+    let dir = temp_case_dir("hwkey");
+    let keystore_path = dir.join("keystore.enc");
+    let socket_path = dir.join("engine.sock");
+    let bundle = IdentityBundle::generate();
+    umbra_cli::keystore::save_with_hardware_key(
+        &keystore_path,
+        b"hw-e2e-passphrase",
+        &hmac_response,
+        &bundle,
+    )?;
+
+    let module_dir = module_path
+        .parent()
+        .ok_or("SoftHSM2 module path has no parent directory")?;
+    let _engine = spawn_engine(&socket_path, &dir, Some(module_dir))?;
+    let response = send_request(
+        &socket_path,
+        &Request {
+            op: "unlock".to_string(),
+            keystore_path: Some(keystore_path),
+            passphrase: Some("hw-e2e-passphrase".to_string()),
+            hw_module: Some(module_path),
+            hw_pin: Some("1234".to_string()),
+            hw_key_label: Some(label.to_string()),
+        },
+    )?;
+    // The token must survive until the Engine subprocess has actually
+    // used it: `send_request` blocks until the Engine's own
+    // `dispatch::unlock` has independently re-derived the HMAC response
+    // via a fresh `challenge_response` PKCS#11 call against the live
+    // token (never trusting a caller-supplied response) — removing the
+    // token any earlier fails every real run, not just a narrow check.
+    let _ = std::fs::remove_dir_all(TOKEN_DIR);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(response.ok, "expected Ok, got: {response:?}");
+    assert_eq!(response.fingerprint.map(|f| f.len()), Some(64));
     Ok(())
 }

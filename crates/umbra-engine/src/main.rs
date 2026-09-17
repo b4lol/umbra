@@ -18,11 +18,19 @@ struct Cli {
     /// read-only scope.
     #[arg(long, value_name = "PATH")]
     keystore_dir: PathBuf,
+    /// The canonicalized parent directory of the hardware-key PKCS#11
+    /// module (TODO B.3 FIDO2 wiring), granted read-only alongside
+    /// `--keystore-dir`. Omit if this session's `umbra-gui` wasn't
+    /// launched with `--hw-module`.
+    #[arg(long, value_name = "PATH")]
+    hw_module_dir: Option<PathBuf>,
 }
 
 fn main() {
     let cli = <Cli as clap::Parser>::parse();
-    if let Err(error) = umbra_engine::run(&cli.socket, &cli.keystore_dir) {
+    if let Err(error) =
+        umbra_engine::run(&cli.socket, &cli.keystore_dir, cli.hw_module_dir.as_deref())
+    {
         eprintln!("umbra-engine: {error}");
         std::process::exit(1);
     }
