@@ -17,7 +17,7 @@ default = []
 # free of GTK4's heavy system-library requirement (libgtk-4-dev,
 # libadwaita-1-dev) — those are only pulled in when this feature is
 # explicitly enabled, e.g. `cargo test -p umbra-gui --features gui`.
-gui = ["dep:gtk4", "dep:adw", "dep:clap", "dep:zeroize"]
+gui = ["dep:gtk4", "dep:adw", "dep:clap", "dep:zeroize", "dep:async-channel"]
 
 [[bin]]
 name = "umbra-gui"
@@ -51,6 +51,12 @@ umbra-hardware = { path = "../umbra-hardware" }
 serde.workspace = true
 serde_json.workspace = true
 gtk4 = { version = "0.11.4", optional = true }
+# Channel to the GTK main loop for Engine events (`engine_client.rs`'s
+# session-phase reader thread -> `main.rs`). glib 0.22 removed
+# `glib::MainContext::channel`/`glib::Sender`; the glib-endorsed
+# replacement is an `async-channel` pair whose receiver is consumed by
+# a future spawned via `glib::MainContext::spawn_local`.
+async-channel = { version = "2", optional = true }
 # Aliased to `adw` (its own conventional short name throughout the
 # gtk4-rs/libadwaita ecosystem, matching its `adw::prelude`/`adw::Application`
 # usage in main.rs) since the crate's own library name is `libadwaita`, not

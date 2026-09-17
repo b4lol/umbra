@@ -201,6 +201,7 @@ fn build_window(
     stack.add_named(&unlock_box, Some("unlock"));
 
     let identity_container = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    let status_label = gtk4::Label::new(Some("bootstrapping Tor (up to ~3 minutes)…"));
     stack.add_named(&identity_container, Some("identity"));
     stack.set_visible_child_name("unlock");
 
@@ -244,6 +245,31 @@ fn build_window(
                     "Fingerprint: {fingerprint}"
                 ));
                 identity_container.append(&reveal_widget);
+                identity_container.append(&status_label);
+                // Session phase (TODO B.3 GUI messaging, Phase 2):
+                // `start_session` MUST complete before
+                // `build_peer_panel` below, whose initial refresh calls
+                // `list_peers` — that now requires an active session.
+                let (event_tx, event_rx) = async_channel::unbounded();
+                if let Err(message) = engine_client_for_peers.borrow_mut().start_session(event_tx) {
+                    error_label.set_label(&format!("session start failed: {message}"));
+                    error_label.set_visible(true);
+                }
+                let status_label_for_events = status_label.clone();
+                // glib 0.22 removed `MainContext::channel`; the event
+                // receiver is consumed by a future on the default main
+                // context instead (dropping the returned `JoinHandle`
+                // detaches the task, which is what we want — it lives
+                // until the channel closes at Engine exit).
+                gtk4::glib::MainContext::default().spawn_local(async move {
+                    while let Ok(event) = event_rx.recv().await {
+                        let umbra_gui::engine_client::EngineEvent::Ready(address) = event;
+                        status_label_for_events.set_label(
+                            "bootstrapped — onion service ready (address redacted client-side)",
+                        );
+                        let _ = address; // Phase 2: not yet displayed/copyable; Phase 3+ UI work.
+                    }
+                });
                 let (peer_panel, _refresh) =
                     build_peer_panel(engine_client_for_peers.clone(), &window_for_peers);
                 identity_container.append(&peer_panel);

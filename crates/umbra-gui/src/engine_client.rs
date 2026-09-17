@@ -5,7 +5,7 @@
 //!
 //! # Duplicated wire types (deliberate)
 //!
-//! [`Request`]/[`Response`] below are field-for-field identical to
+//! [`Request`]/[`Response`]/[`SessionLine`] below are field-for-field identical to
 //! `umbra_engine::protocol`'s types, copied rather than imported via a
 //! Cargo dependency on `umbra-engine`: that crate unconditionally
 //! depends on `umbra-cli`/`umbra-crypto`/`landlock`/`seccompiler`
@@ -16,11 +16,17 @@
 //! trip immediately (this module's own tests, plus
 //! `crates/umbra-engine/tests/unlock_over_socket.rs`).
 
+#[cfg(feature = "gui")]
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Child;
+#[cfg(feature = "gui")]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "gui")]
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -52,9 +58,17 @@ struct Request {
     /// The peer's `.onion` service address, if recorded now
     /// (`"pair_confirm"`, optional).
     peer_onion: Option<String>,
+    /// Present for every session-phase request once `start_session`
+    /// has been called on this connection.
+    request_id: Option<u64>,
+    /// Message text for `"send"` (Phase 2: the Engine always answers
+    /// `"not yet implemented"`; real sending is Phase 3).
+    text: Option<String>,
 }
 
 /// One response line, mirrors `umbra_engine::protocol::Response`.
+/// Used ONLY for the pre-session `"unlock"` exchange — session-phase
+/// ops read tagged [`SessionLine`]s instead.
 #[derive(Debug, Deserialize)]
 struct Response {
     /// Whether the operation succeeded.
@@ -62,6 +76,31 @@ struct Response {
     /// The unlocked identity's fingerprint, present only when `ok`.
     #[serde(default)]
     fingerprint: Option<String>,
+    /// A display-ready error message, present only when not `ok`.
+    #[serde(default)]
+    error: Option<String>,
+}
+
+/// One line the Engine writes during the session phase, mirrors
+/// `umbra_engine::protocol::SessionLine`. Gated behind `gui`: the
+/// whole session phase is wired to a GTK-bound event sink, so a
+/// feature-less build (unlock-exchange only) never reads it.
+#[cfg(feature = "gui")]
+#[derive(Debug, Deserialize, Clone)]
+struct SessionLine {
+    /// `"response"` (carries `request_id`) or `"event"` (unprompted).
+    kind: String,
+    /// Present when `kind == "response"`: echoes the request's own
+    /// `request_id`.
+    #[serde(default)]
+    request_id: Option<u64>,
+    /// Present when `kind == "event"`: which event. `"ready"` (the
+    /// only one in Phase 2) means Tor bootstrap finished.
+    #[serde(default)]
+    event: Option<String>,
+    /// Whether the operation succeeded (`kind == "response"`).
+    #[serde(default)]
+    ok: Option<bool>,
     /// A display-ready error message, present only when not `ok`.
     #[serde(default)]
     error: Option<String>,
@@ -74,6 +113,18 @@ struct Response {
     /// The shared SAS code (`"pair_import"`).
     #[serde(default)]
     sas: Option<String>,
+    /// The identity's own onion address (`"ready"` event).
+    #[serde(default)]
+    address: Option<String>,
+}
+
+/// An event the GTK main loop can react to — the subset of
+/// [`SessionLine`]'s `"event"` shapes this crate knows about.
+#[derive(Debug, Clone)]
+pub enum EngineEvent {
+    /// Tor bootstrap finished; this is the identity's own onion
+    /// address.
+    Ready(String),
 }
 
 /// A protocol-level connection to the Engine, independent of how that
@@ -143,83 +194,111 @@ impl EngineConnection {
         }
     }
 
-    /// Sends a `"list_peers"` request and returns the sorted peer
-    /// names.
-    fn list_peers(&mut self) -> Result<Vec<String>, String> {
-        let response = self.request(&Request {
-            op: "list_peers".to_string(),
-            ..Request::default()
-        })?;
-        if response.ok {
-            Ok(response.peer_names.unwrap_or_default())
-        } else {
-            Err(response
-                .error
-                .unwrap_or_else(|| "Engine returned an error with no message".to_string()))
-        }
-    }
-
-    /// Sends a `"pair_payload"` request and returns this identity's
-    /// own base64url pairing payload.
-    fn pair_payload(&mut self) -> Result<String, String> {
-        let response = self.request(&Request {
-            op: "pair_payload".to_string(),
-            ..Request::default()
-        })?;
-        if response.ok {
-            response
-                .payload
-                .ok_or_else(|| "Engine returned ok without a payload".to_string())
-        } else {
-            Err(response
-                .error
-                .unwrap_or_else(|| "Engine returned an error with no message".to_string()))
-        }
-    }
-
-    /// Sends a `"pair_import"` request for `peer_payload` and returns
-    /// the shared SAS code for out-of-band verification.
-    fn pair_import(&mut self, peer_payload: &str) -> Result<String, String> {
-        let response = self.request(&Request {
-            op: "pair_import".to_string(),
-            peer_payload: Some(peer_payload.to_string()),
-            ..Request::default()
-        })?;
-        if response.ok {
-            response
-                .sas
-                .ok_or_else(|| "Engine returned ok without a SAS code".to_string())
-        } else {
-            Err(response
-                .error
-                .unwrap_or_else(|| "Engine returned an error with no message".to_string()))
-        }
-    }
-
-    /// Sends a `"pair_confirm"` request, persisting the peer record
-    /// under `peer_name` with `peer_payload` and an optional
-    /// `peer_onion` address.
-    fn pair_confirm(
+    /// Sends a tagged session-phase request (assigning `request_id`
+    /// via `session`) and blocks until the reader thread delivers the
+    /// matching tagged response. Panics-in-spirit avoided: if the
+    /// reader thread has already exited (the Engine died), this
+    /// blocks until `session` itself is dropped — the same
+    /// no-timeout behavior this crate's pre-Phase-2 `request` already
+    /// had for a hung Engine (accepted, unchanged trade — see the
+    /// spec's own Honest Scope section).
+    #[cfg(feature = "gui")]
+    fn session_request(
         &mut self,
-        peer_name: &str,
-        peer_payload: &str,
-        peer_onion: Option<&str>,
-    ) -> Result<(), String> {
-        let response = self.request(&Request {
-            op: "pair_confirm".to_string(),
-            peer_name: Some(peer_name.to_string()),
-            peer_payload: Some(peer_payload.to_string()),
-            peer_onion: peer_onion.map(str::to_string),
-            ..Request::default()
-        })?;
-        if response.ok {
-            Ok(())
-        } else {
-            Err(response
-                .error
-                .unwrap_or_else(|| "Engine returned an error with no message".to_string()))
+        session: &EngineSession,
+        request: Request,
+    ) -> Result<SessionLine, String> {
+        let request_id = session.next_request_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = std::sync::mpsc::channel();
+        {
+            let mut pending = session
+                .pending
+                .lock()
+                .map_err(|_error| "session state poisoned".to_string())?;
+            pending.insert(request_id, tx);
         }
+        let mut tagged_request = request;
+        tagged_request.request_id = Some(request_id);
+        let mut line = serde_json::to_string(&tagged_request).map_err(|error| error.to_string())?;
+        line.push('\n');
+        self.stream
+            .write_all(line.as_bytes())
+            .map_err(|error| error.to_string())?;
+        rx.recv()
+            .map_err(|_error| "Engine connection closed before responding".to_string())
     }
+}
+
+/// Live session-phase state, created once `unlock` succeeds
+/// (TODO B.3 GUI messaging design, Phase 2): the background reader
+/// thread's join handle plus the bookkeeping it shares with the GTK
+/// thread to route tagged `"response"` lines back to their caller.
+#[cfg(feature = "gui")]
+struct EngineSession {
+    /// Monotonically increasing, shared with the reader thread only
+    /// for uniqueness (never read there).
+    next_request_id: Arc<AtomicU64>,
+    /// One entry per in-flight session request: `request_id` ->
+    /// the one-shot sender the reader thread uses to deliver that
+    /// request's matching `SessionLine` once it arrives.
+    pending: Arc<Mutex<HashMap<u64, std::sync::mpsc::Sender<SessionLine>>>>,
+    /// Kept alive for the session's lifetime; the thread exits on its
+    /// own once the socket closes (EOF) or errors.
+    _reader_thread: std::thread::JoinHandle<()>,
+}
+
+/// Spawns the background reader thread: reads tagged NDJSON lines off
+/// `read_stream` forever, routing `"response"` lines to their waiting
+/// caller (via `pending`) and `"event"` lines to the GTK main loop
+/// (via `event_sender`). Exits cleanly on EOF or any I/O/parse error
+/// on this stream (the Engine process going away).
+///
+/// `event_sender` is an [`async_channel::Sender`] rather than glib's
+/// removed-in-0.22 `glib::Sender`: `send_blocking` works from this
+/// non-async thread, and the GTK side consumes the paired receiver in
+/// a `glib::MainContext::spawn_local` future (see `main.rs`).
+#[cfg(feature = "gui")]
+fn spawn_reader_thread(
+    read_stream: UnixStream,
+    pending: Arc<Mutex<HashMap<u64, std::sync::mpsc::Sender<SessionLine>>>>,
+    event_sender: async_channel::Sender<EngineEvent>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(read_stream);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {}
+            }
+            let Ok(parsed) = serde_json::from_str::<SessionLine>(line.trim_end()) else {
+                continue;
+            };
+            match parsed.kind.as_str() {
+                "response" => {
+                    let Some(request_id) = parsed.request_id else {
+                        continue;
+                    };
+                    let waiter = pending
+                        .lock()
+                        .ok()
+                        .and_then(|mut map| map.remove(&request_id));
+                    if let Some(waiter) = waiter {
+                        let _ = waiter.send(parsed);
+                    }
+                }
+                "event" => {
+                    if parsed.event.as_deref() == Some("ready")
+                        && let Some(address) = parsed.address.clone()
+                    {
+                        let _ = event_sender.send_blocking(EngineEvent::Ready(address));
+                    }
+                }
+                _ => {}
+            }
+        }
+    })
 }
 
 /// A live connection to a spawned `umbra-engine` process.
@@ -233,6 +312,10 @@ pub struct EngineClient {
     connection: EngineConnection,
     /// The spawned `umbra-engine` child process, killed on [`Drop`].
     child: Child,
+    /// Session-phase state, `Some` once [`EngineClient::start_session`]
+    /// has been called after a successful unlock.
+    #[cfg(feature = "gui")]
+    session: Option<EngineSession>,
 }
 
 impl Drop for EngineClient {
@@ -300,6 +383,8 @@ impl EngineClient {
             .arg(&socket_path)
             .arg("--keystore-dir")
             .arg(&keystore_dir);
+        let tor_dir = keystore_dir.join("tor");
+        command.arg("--tor-dir").arg(&tor_dir);
         if let Some(hw_module) = hw_module {
             let canonical_hw_module =
                 std::fs::canonicalize(hw_module).map_err(|error| error.to_string())?;
@@ -326,6 +411,8 @@ impl EngineClient {
             Self {
                 connection: EngineConnection { stream },
                 child,
+                #[cfg(feature = "gui")]
+                session: None,
             },
             canonical_keystore_path,
         ))
@@ -353,14 +440,69 @@ impl EngineClient {
             .unlock(keystore_path, passphrase, hw_module, hw_pin, hw_key_label)
     }
 
+    /// Transitions this connection into the session phase after a
+    /// successful `unlock`: spawns the background reader thread and
+    /// wires it to forward events through `event_sender` (create one
+    /// via `async_channel::unbounded()`; the GTK main loop consumes
+    /// the paired receiver in a `glib::MainContext::spawn_local`
+    /// future on its own thread — glib 0.22 removed
+    /// `glib::MainContext::channel`, see `Cargo.toml`'s note).
+    /// Must be called before any of `list_peers`/`pair_payload`/
+    /// `pair_import`/`pair_confirm`/`send_stub` (TODO B.3 GUI
+    /// messaging design, Phase 2 — those methods now require an
+    /// active session).
+    ///
+    /// # Errors
+    ///
+    /// Returns a display-ready error message if the socket's read
+    /// half cannot be cloned.
+    #[cfg(feature = "gui")]
+    pub fn start_session(
+        &mut self,
+        event_sender: async_channel::Sender<EngineEvent>,
+    ) -> Result<(), String> {
+        let read_stream = self
+            .connection
+            .stream
+            .try_clone()
+            .map_err(|error| error.to_string())?;
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let reader_thread = spawn_reader_thread(read_stream, pending.clone(), event_sender);
+        self.session = Some(EngineSession {
+            next_request_id: Arc::new(AtomicU64::new(1)),
+            pending,
+            _reader_thread: reader_thread,
+        });
+        Ok(())
+    }
+
     /// Lists the current session's paired peer names.
     ///
     /// # Errors
     ///
-    /// Returns a display-ready error message if this connection was
-    /// never unlocked, or on any I/O failure talking to the Engine.
+    /// Returns a display-ready error message if the session was never
+    /// started (see [`EngineClient::start_session`]), or on any I/O
+    /// failure talking to the Engine.
+    #[cfg(feature = "gui")]
     pub fn list_peers(&mut self) -> Result<Vec<String>, String> {
-        self.connection.list_peers()
+        let session = self
+            .session
+            .as_ref()
+            .ok_or_else(|| "session not started".to_string())?;
+        let response = self.connection.session_request(
+            session,
+            Request {
+                op: "list_peers".to_string(),
+                ..Request::default()
+            },
+        )?;
+        if response.ok == Some(true) {
+            Ok(response.peer_names.unwrap_or_default())
+        } else {
+            Err(response
+                .error
+                .unwrap_or_else(|| "Engine returned an error with no message".to_string()))
+        }
     }
 
     /// Returns this session's own base64url pairing payload, to hand
@@ -368,10 +510,30 @@ impl EngineClient {
     ///
     /// # Errors
     ///
-    /// Returns a display-ready error message if this connection was
-    /// never unlocked, or on any I/O failure talking to the Engine.
+    /// Returns a display-ready error message if the session was never
+    /// started, or on any I/O failure talking to the Engine.
+    #[cfg(feature = "gui")]
     pub fn pair_payload(&mut self) -> Result<String, String> {
-        self.connection.pair_payload()
+        let session = self
+            .session
+            .as_ref()
+            .ok_or_else(|| "session not started".to_string())?;
+        let response = self.connection.session_request(
+            session,
+            Request {
+                op: "pair_payload".to_string(),
+                ..Request::default()
+            },
+        )?;
+        if response.ok == Some(true) {
+            response
+                .payload
+                .ok_or_else(|| "Engine returned ok without a payload".to_string())
+        } else {
+            Err(response
+                .error
+                .unwrap_or_else(|| "Engine returned an error with no message".to_string()))
+        }
     }
 
     /// Validates a peer's pairing payload and returns the shared SAS
@@ -381,9 +543,30 @@ impl EngineClient {
     /// # Errors
     ///
     /// Returns a display-ready error message on an invalid payload,
-    /// if this connection was never unlocked, or on any I/O failure.
+    /// if the session was never started, or on any I/O failure.
+    #[cfg(feature = "gui")]
     pub fn pair_import(&mut self, peer_payload: &str) -> Result<String, String> {
-        self.connection.pair_import(peer_payload)
+        let session = self
+            .session
+            .as_ref()
+            .ok_or_else(|| "session not started".to_string())?;
+        let response = self.connection.session_request(
+            session,
+            Request {
+                op: "pair_import".to_string(),
+                peer_payload: Some(peer_payload.to_string()),
+                ..Request::default()
+            },
+        )?;
+        if response.ok == Some(true) {
+            response
+                .sas
+                .ok_or_else(|| "Engine returned ok without a SAS code".to_string())
+        } else {
+            Err(response
+                .error
+                .unwrap_or_else(|| "Engine returned an error with no message".to_string()))
+        }
     }
 
     /// Persists a peer record under `peer_name`, once the operator has
@@ -393,16 +576,70 @@ impl EngineClient {
     /// # Errors
     ///
     /// Returns a display-ready error message on an invalid name/
-    /// payload/address, if this connection was never unlocked, or on
+    /// payload/address, if the session was never started, or on
     /// any I/O failure.
+    #[cfg(feature = "gui")]
     pub fn pair_confirm(
         &mut self,
         peer_name: &str,
         peer_payload: &str,
         peer_onion: Option<&str>,
     ) -> Result<(), String> {
-        self.connection
-            .pair_confirm(peer_name, peer_payload, peer_onion)
+        let session = self
+            .session
+            .as_ref()
+            .ok_or_else(|| "session not started".to_string())?;
+        let response = self.connection.session_request(
+            session,
+            Request {
+                op: "pair_confirm".to_string(),
+                peer_name: Some(peer_name.to_string()),
+                peer_payload: Some(peer_payload.to_string()),
+                peer_onion: peer_onion.map(str::to_string),
+                ..Request::default()
+            },
+        )?;
+        if response.ok == Some(true) {
+            Ok(())
+        } else {
+            Err(response
+                .error
+                .unwrap_or_else(|| "Engine returned an error with no message".to_string()))
+        }
+    }
+
+    /// Sends a `"send"` session request. Phase 2: the Engine always
+    /// answers `"not yet implemented"` — this exists to prove the
+    /// session-phase wire round trip for a genuinely new op, not to
+    /// deliver anything yet. Real sending is Phase 3.
+    ///
+    /// # Errors
+    ///
+    /// Returns a display-ready error message — for Phase 2, always
+    /// `"not yet implemented"` on success-shaped calls, or a
+    /// connection failure message.
+    #[cfg(feature = "gui")]
+    pub fn send_stub(&mut self, peer_name: &str, text: &str) -> Result<(), String> {
+        let session = self
+            .session
+            .as_ref()
+            .ok_or_else(|| "session not started".to_string())?;
+        let response = self.connection.session_request(
+            session,
+            Request {
+                op: "send".to_string(),
+                peer_name: Some(peer_name.to_string()),
+                text: Some(text.to_string()),
+                ..Request::default()
+            },
+        )?;
+        if response.ok == Some(true) {
+            Ok(())
+        } else {
+            Err(response
+                .error
+                .unwrap_or_else(|| "Engine returned an error with no message".to_string()))
+        }
     }
 }
 
@@ -420,8 +657,20 @@ fn sibling_engine_binary_path() -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::EngineConnection;
+    #[cfg(feature = "gui")]
+    use super::{EngineEvent, EngineSession, Request, spawn_reader_thread};
+    #[cfg(feature = "gui")]
+    use std::cell::RefCell;
+    #[cfg(feature = "gui")]
+    use std::collections::HashMap;
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::{UnixListener, UnixStream};
+    #[cfg(feature = "gui")]
+    use std::rc::Rc;
+    #[cfg(feature = "gui")]
+    use std::sync::atomic::AtomicU64;
+    #[cfg(feature = "gui")]
+    use std::sync::{Arc, Mutex};
 
     /// Spins up a plain `UnixListener` fixture (a scripted fake
     /// Engine, no real `umbra-engine` subprocess) that accepts one
@@ -561,61 +810,254 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "gui")]
     #[test]
-    fn list_peers_parses_a_successful_response()
+    fn list_peers_parses_a_successful_tagged_response()
     -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut connection =
-            connect_to_fake_engine("list-peers", r#"{"ok":true,"peer_names":["alice","bob"]}"#)?;
-        let names = connection
-            .list_peers()
-            .map_err(|error| format!("expected Ok, got Err: {error}"))?;
-        assert_eq!(names, vec!["alice".to_string(), "bob".to_string()]);
-        Ok(())
-    }
-
-    #[test]
-    fn pair_payload_parses_a_successful_response()
-    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut connection =
-            connect_to_fake_engine("pair-payload", r#"{"ok":true,"payload":"own-payload"}"#)?;
-        let payload = connection
-            .pair_payload()
-            .map_err(|error| format!("expected Ok, got Err: {error}"))?;
-        assert_eq!(payload, "own-payload");
-        Ok(())
-    }
-
-    #[test]
-    fn pair_import_parses_a_successful_response()
-    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut connection =
-            connect_to_fake_engine("pair-import", r#"{"ok":true,"sas":"123456"}"#)?;
-        let sas = connection
-            .pair_import("peer-payload")
-            .map_err(|error| format!("expected Ok, got Err: {error}"))?;
-        assert_eq!(sas, "123456");
-        Ok(())
-    }
-
-    #[test]
-    fn pair_confirm_parses_a_successful_response()
-    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut connection = connect_to_fake_engine("pair-confirm", r#"{"ok":true}"#)?;
-        connection
-            .pair_confirm("alice", "peer-payload", Some("a".repeat(56).as_str()))
-            .map_err(|error| format!("expected Ok, got Err: {error}"))?;
-        Ok(())
-    }
-
-    #[test]
-    fn pair_confirm_parses_a_failure_response()
-    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut connection = connect_to_fake_engine(
-            "pair-confirm-fail",
-            r#"{"ok":false,"error":"not unlocked yet"}"#,
+        let (mut connection, session) = connect_to_fake_session_engine(
+            "list-peers",
+            r#"{"kind":"response","request_id":1,"ok":true,"peer_names":["alice","bob"]}"#,
         )?;
-        let result = connection.pair_confirm("alice", "peer-payload", None);
-        assert_eq!(result, Err("not unlocked yet".to_string()));
+        let response = connection.session_request(
+            &session,
+            Request {
+                op: "list_peers".to_string(),
+                ..Request::default()
+            },
+        )?;
+        assert_eq!(response.ok, Some(true));
+        assert_eq!(
+            response.peer_names,
+            Some(vec!["alice".to_string(), "bob".to_string()])
+        );
         Ok(())
+    }
+
+    #[cfg(feature = "gui")]
+    #[test]
+    fn pair_payload_parses_a_successful_tagged_response()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let (mut connection, session) = connect_to_fake_session_engine(
+            "pair-payload",
+            r#"{"kind":"response","request_id":1,"ok":true,"payload":"own-payload"}"#,
+        )?;
+        let response = connection.session_request(
+            &session,
+            Request {
+                op: "pair_payload".to_string(),
+                ..Request::default()
+            },
+        )?;
+        assert_eq!(response.payload, Some("own-payload".to_string()));
+        Ok(())
+    }
+
+    #[cfg(feature = "gui")]
+    #[test]
+    fn pair_import_parses_a_successful_tagged_response()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let (mut connection, session) = connect_to_fake_session_engine(
+            "pair-import",
+            r#"{"kind":"response","request_id":1,"ok":true,"sas":"123456"}"#,
+        )?;
+        let response = connection.session_request(
+            &session,
+            Request {
+                op: "pair_import".to_string(),
+                peer_payload: Some("peer-payload".to_string()),
+                ..Request::default()
+            },
+        )?;
+        assert_eq!(response.sas, Some("123456".to_string()));
+        Ok(())
+    }
+
+    #[cfg(feature = "gui")]
+    #[test]
+    fn pair_confirm_parses_a_successful_tagged_response()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let (mut connection, session) = connect_to_fake_session_engine(
+            "pair-confirm",
+            r#"{"kind":"response","request_id":1,"ok":true}"#,
+        )?;
+        let response = connection.session_request(
+            &session,
+            Request {
+                op: "pair_confirm".to_string(),
+                peer_name: Some("alice".to_string()),
+                peer_payload: Some("peer-payload".to_string()),
+                peer_onion: Some("a".repeat(56)),
+                ..Request::default()
+            },
+        )?;
+        assert_eq!(response.ok, Some(true));
+        Ok(())
+    }
+
+    #[cfg(feature = "gui")]
+    #[test]
+    fn pair_confirm_parses_a_failure_tagged_response()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let (mut connection, session) = connect_to_fake_session_engine(
+            "pair-confirm-fail",
+            r#"{"kind":"response","request_id":1,"ok":false,"error":"not unlocked yet"}"#,
+        )?;
+        let response = connection.session_request(
+            &session,
+            Request {
+                op: "pair_confirm".to_string(),
+                peer_name: Some("alice".to_string()),
+                peer_payload: Some("peer-payload".to_string()),
+                ..Request::default()
+            },
+        )?;
+        assert_eq!(response.ok, Some(false));
+        assert_eq!(response.error, Some("not unlocked yet".to_string()));
+        Ok(())
+    }
+
+    /// Session-phase variant of [`connect_to_fake_engine`]: the fake
+    /// Engine writes ONE tagged `response_line` back (which must carry
+    /// `"request_id":1`, the first id a fresh [`EngineSession`] hands
+    /// out), and the returned [`EngineSession`] has the background
+    /// reader thread already running against a cloned read stream.
+    /// Requires the `gui` feature: the reader thread's event sink is a
+    /// `gtk4::glib` channel.
+    #[cfg(feature = "gui")]
+    fn connect_to_fake_session_engine(
+        label: &str,
+        response_line: &'static str,
+    ) -> Result<(EngineConnection, EngineSession), Box<dyn std::error::Error + Send + Sync>> {
+        let socket_path = std::env::temp_dir().join(format!(
+            "umbra-gui-engine-client-test-{}-{label}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = UnixListener::bind(&socket_path)?;
+        std::thread::spawn(move || -> Result<(), std::io::Error> {
+            let (stream, _peer_addr) = listener.accept()?;
+            let mut reader = BufReader::new(stream.try_clone()?);
+            let mut writer = stream;
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line)?;
+            writer.write_all(response_line.as_bytes())?;
+            writer.write_all(b"\n")
+        });
+        let stream = UnixStream::connect(&socket_path)?;
+        let _ = std::fs::remove_file(&socket_path);
+        let read_stream = stream.try_clone()?;
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let (event_tx, _event_rx) = async_channel::unbounded();
+        let reader_thread = spawn_reader_thread(read_stream, pending.clone(), event_tx);
+        let session = EngineSession {
+            next_request_id: Arc::new(AtomicU64::new(1)),
+            pending,
+            _reader_thread: reader_thread,
+        };
+        Ok((EngineConnection { stream }, session))
+    }
+
+    #[cfg(feature = "gui")]
+    #[test]
+    fn session_request_receives_a_tagged_response_via_the_reader_thread()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // A fake Engine that reads one request line, then writes back
+        // ONE tagged response line whose request_id echoes whatever
+        // the client sent (extracted by a crude but sufficient scan,
+        // since the fixture never needs a real JSON parser here).
+        let socket_path = std::env::temp_dir().join(format!(
+            "umbra-gui-engine-client-test-{}-session-request.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = UnixListener::bind(&socket_path)?;
+        std::thread::spawn(move || -> Result<(), std::io::Error> {
+            let (stream, _peer_addr) = listener.accept()?;
+            let mut reader = BufReader::new(stream.try_clone()?);
+            let mut writer = stream;
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line)?;
+            writer.write_all(
+                br#"{"kind":"response","request_id":1,"ok":true,"peer_names":["alice"]}"#,
+            )?;
+            writer.write_all(b"\n")
+        });
+        let stream = UnixStream::connect(&socket_path)?;
+        let _ = std::fs::remove_file(&socket_path);
+        let read_stream = stream.try_clone()?;
+        let mut connection = EngineConnection { stream };
+
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let (event_tx, _event_rx) = async_channel::unbounded();
+        let reader_thread = spawn_reader_thread(read_stream, pending.clone(), event_tx);
+        let session = EngineSession {
+            next_request_id: Arc::new(AtomicU64::new(1)),
+            pending,
+            _reader_thread: reader_thread,
+        };
+
+        let response = connection.session_request(
+            &session,
+            Request {
+                op: "list_peers".to_string(),
+                ..Request::default()
+            },
+        )?;
+        assert_eq!(response.kind, "response");
+        assert_eq!(response.request_id, Some(1));
+        assert_eq!(response.peer_names, Some(vec!["alice".to_string()]));
+        Ok(())
+    }
+
+    #[cfg(feature = "gui")]
+    #[test]
+    fn event_lines_are_forwarded_to_the_glib_channel_not_the_pending_map()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let socket_path = std::env::temp_dir().join(format!(
+            "umbra-gui-engine-client-test-{}-event-forward.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = UnixListener::bind(&socket_path)?;
+        std::thread::spawn(move || -> Result<(), std::io::Error> {
+            let (stream, _peer_addr) = listener.accept()?;
+            let mut writer = stream;
+            writer.write_all(br#"{"kind":"event","event":"ready","address":"test-address"}"#)?;
+            writer.write_all(b"\n")
+        });
+        let stream = UnixStream::connect(&socket_path)?;
+        let _ = std::fs::remove_file(&socket_path);
+
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let (event_tx, event_rx) = async_channel::unbounded();
+        let _reader_thread = spawn_reader_thread(stream, pending, event_tx);
+
+        // No GTK main loop is running in this test, so the receiver is
+        // consumed by a future spawned ONCE onto the default main
+        // context, which is then pumped manually via
+        // `iteration(false)`. The future hands the event back out
+        // through a shared `Rc<RefCell<_>>` — this crate's own
+        // established pattern for GTK closures needing to report a
+        // result (see `main.rs`).
+        let context = gtk4::glib::MainContext::default();
+        let observed: Rc<RefCell<Option<EngineEvent>>> = Rc::new(RefCell::new(None));
+        let observed_for_task = observed.clone();
+        context.spawn_local(async move {
+            while let Ok(event) = event_rx.recv().await {
+                *observed_for_task.borrow_mut() = Some(event);
+            }
+        });
+        let deadline = std::time::Instant::now()
+            .checked_add(std::time::Duration::from_secs(2))
+            .ok_or("system clock error computing test deadline")?;
+        while std::time::Instant::now() < deadline {
+            context.iteration(false);
+            if let Some(EngineEvent::Ready(address)) = observed.borrow_mut().take() {
+                assert_eq!(address, "test-address");
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        Err("timed out waiting for the Ready event on the glib channel".into())
     }
 }
