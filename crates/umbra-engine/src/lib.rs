@@ -284,44 +284,64 @@ async fn serve_connection(
 ) -> Result<(), EngineError> {
     stream.set_nonblocking(true)?;
     let tokio_stream = tokio::net::UnixStream::from_std(stream)?;
-    let (read_half, write_half) = tokio::io::split(tokio_stream);
+    let (read_half, write_half) = tokio_stream.into_split();
     let mut reader = tokio::io::BufReader::new(read_half);
 
     let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    let writer_handle = tokio::spawn(async move {
-        use tokio::io::AsyncWriteExt as _;
-        let mut write_half = write_half;
-        while let Some(line) = line_rx.recv().await {
-            if write_half.write_all(line.as_bytes()).await.is_err() {
-                break;
+    let writer_handle: tokio::task::JoinHandle<Result<(), std::io::Error>> =
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt as _;
+            let mut write_half = write_half;
+            while let Some(line) = line_rx.recv().await {
+                write_half.write_all(line.as_bytes()).await?;
             }
-        }
-    });
+            Ok(())
+        });
 
     let mut session = dispatch::Session::default();
     let mut read_buf = String::new();
-    loop {
+    let loop_result: Result<(), EngineError> = loop {
         read_buf.clear();
         use tokio::io::AsyncBufReadExt as _;
-        let bytes_read = reader.read_line(&mut read_buf).await?;
+        let bytes_read = match reader.read_line(&mut read_buf).await {
+            Ok(n) => n,
+            Err(error) => break Err(EngineError::Io(error)),
+        };
         if bytes_read == 0 {
-            break;
+            break Ok(());
         }
         let response = match serde_json::from_str::<Request>(read_buf.trim_end()) {
             Ok(request) => dispatch_checked(&request, keystore_dir, hw_module_dir, &mut session),
             Err(error) => protocol::Response::err(format!("malformed request: {error}")),
         };
-        let mut encoded = serde_json::to_string(&response)?;
-        encoded.push('\n');
+        let encoded = match serde_json::to_string(&response) {
+            Ok(mut encoded) => {
+                encoded.push('\n');
+                encoded
+            }
+            Err(error) => break Err(EngineError::Json(error)),
+        };
         // A closed receiver means the writer task already exited
-        // (e.g. a prior write failed) — nothing more to do.
+        // (its own write_all failed) — stop reading further requests;
+        // the writer's own error is picked up below via writer_handle.
         if line_tx.send(encoded).is_err() {
-            break;
+            break Ok(());
         }
-    }
+    };
+
     drop(line_tx);
-    let _ = writer_handle.await;
-    Ok(())
+    let writer_result = writer_handle.await;
+
+    loop_result?;
+    match writer_result {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(io_error)) => Err(EngineError::Io(io_error)),
+        // The writer task can only panic on a bug this workspace's
+        // own lints already forbid (no unwrap/expect/panic in
+        // non-test code) — treated as a clean exit rather than
+        // inventing a new EngineError variant for an unreachable case.
+        Err(_join_error) => Ok(()),
+    }
 }
 
 /// Rejects a request whose `keystore_path` falls outside the
