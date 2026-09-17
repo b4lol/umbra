@@ -20,6 +20,7 @@ use crate::protocol::{Request, Response};
 /// tagged event/response protocol that phase adds).
 #[derive(Default)]
 pub struct Session {
+    /// Unlocked identity bundle and its derived peers directory, populated after successful unlock.
     identity: Option<(IdentityBundle, PathBuf)>,
 }
 
