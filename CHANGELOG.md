@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [Unreleased]
+
+### Added
+- **`docs/SECURITY_PHASES.md`**: a single-page index over the full security lifecycle (Phases 0-12), cross-referencing every phase to its authoritative source document and `DECISIONS.md` ADR(s). Phase 12 (active resilience testing against a local Chutney Tor testnet) and Phase 6's Kani/TLA+ formal-verification addition are genuinely new, not-yet-landed work, now tracked as TODO B.8.
+
+---
+
 ## [1.0.0-alpha.4] — 2026-09-16
 
 The off-grid and group increments land: Wi-Fi Direct mesh and Nym mixnet
