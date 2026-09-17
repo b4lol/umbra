@@ -158,6 +158,19 @@ fn build_window(
 ) {
     let stack = gtk4::Stack::new();
 
+    let header_bar = adw::HeaderBar::new();
+    let content = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    content.append(&header_bar);
+    content.append(&stack);
+
+    let window = adw::ApplicationWindow::builder()
+        .application(application)
+        .title("Umbra")
+        .default_width(480)
+        .default_height(320)
+        .content(&content)
+        .build();
+
     let password_entry = gtk4::PasswordEntry::builder().show_peek_icon(true).build();
     // TODO B.3 FIDO2 wiring: a second masked field for the hardware
     // token's PIN — only shown when this GUI was launched with BOTH
@@ -196,6 +209,8 @@ fn build_window(
     let hw_key_label = hw_key_label.map(str::to_string);
     let hw_pin_entry_for_closure = hw_pin_entry.clone();
     let stack_for_closure = stack.clone();
+    let window_for_peers = window.clone();
+    let engine_client_for_peers = engine_client.clone();
     unlock_button.connect_clicked(move |_button| {
         let passphrase = zeroize::Zeroizing::new(password_entry.text().as_bytes().to_vec());
         let hw_pin = zeroize::Zeroizing::new(
@@ -217,6 +232,9 @@ fn build_window(
                     "Fingerprint: {fingerprint}"
                 ));
                 identity_container.append(&reveal_widget);
+                let (peer_panel, _refresh) =
+                    build_peer_panel(engine_client_for_peers.clone(), &window_for_peers);
+                identity_container.append(&peer_panel);
                 stack_for_closure.set_visible_child_name("identity");
             }
             Err(message) => {
@@ -230,17 +248,194 @@ fn build_window(
         }
     });
 
-    let header_bar = adw::HeaderBar::new();
-    let content = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-    content.append(&header_bar);
-    content.append(&stack);
-
-    let window = adw::ApplicationWindow::builder()
-        .application(application)
-        .title("Umbra")
-        .default_width(480)
-        .default_height(320)
-        .content(&content)
-        .build();
     window.present();
+}
+
+/// Builds the peer-list panel: a heading, a `ListBox` of paired peer
+/// names, and an "Add peer" button. Returns the panel widget and a
+/// `Rc<dyn Fn()>` that re-fetches `list_peers` and repopulates the
+/// `ListBox` — called once here to populate it initially, and again
+/// after a successful pairing (Step 3).
+fn build_peer_panel(
+    engine_client: Rc<RefCell<EngineClient>>,
+    window: &adw::ApplicationWindow,
+) -> (gtk4::Box, Rc<dyn Fn()>) {
+    let panel = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+    let heading = gtk4::Label::builder()
+        .label("Peers")
+        .halign(gtk4::Align::Start)
+        .build();
+    let list_box = gtk4::ListBox::new();
+    let peer_error_label = gtk4::Label::builder().visible(false).build();
+    let add_button = gtk4::Button::builder().label("+ Add peer").build();
+    panel.append(&heading);
+    panel.append(&list_box);
+    panel.append(&peer_error_label);
+    panel.append(&add_button);
+
+    let list_box_for_refresh = list_box.clone();
+    let peer_error_label_for_refresh = peer_error_label.clone();
+    let engine_client_for_refresh = engine_client.clone();
+    let refresh: Rc<dyn Fn()> = Rc::new(move || {
+        while let Some(row) = list_box_for_refresh.row_at_index(0) {
+            list_box_for_refresh.remove(&row);
+        }
+        match engine_client_for_refresh.borrow_mut().list_peers() {
+            Ok(names) => {
+                peer_error_label_for_refresh.set_visible(false);
+                for name in names {
+                    list_box_for_refresh.append(&gtk4::Label::new(Some(&name)));
+                }
+            }
+            Err(message) => {
+                peer_error_label_for_refresh.set_label(&message);
+                peer_error_label_for_refresh.set_visible(true);
+            }
+        }
+    });
+    refresh();
+
+    let window_for_dialog = window.clone();
+    let engine_client_for_dialog = engine_client.clone();
+    let refresh_for_dialog = refresh.clone();
+    add_button.connect_clicked(move |_button| {
+        open_pairing_dialog(
+            &window_for_dialog,
+            engine_client_for_dialog.clone(),
+            refresh_for_dialog.clone(),
+        );
+    });
+
+    (panel, refresh)
+}
+
+/// Opens a modal pairing dialog: shows this identity's own payload,
+/// takes the peer's payload + a chosen local name, computes and shows
+/// the SAS code, and on explicit confirmation saves the peer record —
+/// deliberately never saving before that confirmation (see the design
+/// spec's note on this being a disclosed improvement over `umbra
+/// pair`'s own save-then-show-SAS order, not a mirror of it).
+fn open_pairing_dialog(
+    parent: &adw::ApplicationWindow,
+    engine_client: Rc<RefCell<EngineClient>>,
+    refresh_peers: Rc<dyn Fn()>,
+) {
+    let dialog = gtk4::Window::builder()
+        .transient_for(parent)
+        .modal(true)
+        .title("Add peer")
+        .default_width(420)
+        .default_height(320)
+        .build();
+
+    let stack = gtk4::Stack::new();
+
+    let own_payload_entry = gtk4::Entry::builder().editable(false).build();
+    match engine_client.borrow_mut().pair_payload() {
+        Ok(payload) => own_payload_entry.set_text(&payload),
+        Err(message) => own_payload_entry.set_text(&format!("error: {message}")),
+    }
+    let peer_payload_entry = gtk4::Entry::builder()
+        .placeholder_text("Paste the peer's payload")
+        .build();
+    let peer_name_entry = gtk4::Entry::builder()
+        .placeholder_text("Local name for this peer")
+        .build();
+    let peer_onion_entry = gtk4::Entry::builder()
+        .placeholder_text("Peer's .onion address (optional)")
+        .build();
+    let import_error_label = gtk4::Label::builder().visible(false).build();
+    let import_button = gtk4::Button::builder().label("Import").build();
+
+    let import_page = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+    import_page.append(&gtk4::Label::new(Some("Your payload (share out of band):")));
+    import_page.append(&own_payload_entry);
+    import_page.append(&peer_payload_entry);
+    import_page.append(&peer_name_entry);
+    import_page.append(&peer_onion_entry);
+    import_page.append(&import_button);
+    import_page.append(&import_error_label);
+    stack.add_named(&import_page, Some("import"));
+
+    let sas_label = gtk4::Label::new(None);
+    let confirm_error_label = gtk4::Label::builder().visible(false).build();
+    let confirm_button = gtk4::Button::builder()
+        .label("Confirm — SAS matches")
+        .build();
+    let cancel_button = gtk4::Button::builder().label("Cancel").build();
+
+    let confirm_page = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+    confirm_page.append(&gtk4::Label::new(Some(
+        "Compare this code with your peer over a trusted channel:",
+    )));
+    confirm_page.append(&sas_label);
+    confirm_page.append(&confirm_button);
+    confirm_page.append(&cancel_button);
+    confirm_page.append(&confirm_error_label);
+    stack.add_named(&confirm_page, Some("confirm"));
+
+    stack.set_visible_child_name("import");
+    dialog.set_child(Some(&stack));
+
+    let stack_for_import = stack.clone();
+    let engine_client_for_import = engine_client.clone();
+    let peer_payload_entry_for_import = peer_payload_entry.clone();
+    let sas_label_for_import = sas_label.clone();
+    let import_error_label_for_import = import_error_label.clone();
+    import_button.connect_clicked(move |_button| {
+        let peer_payload = peer_payload_entry_for_import.text().to_string();
+        match engine_client_for_import
+            .borrow_mut()
+            .pair_import(&peer_payload)
+        {
+            Ok(sas) => {
+                import_error_label_for_import.set_visible(false);
+                sas_label_for_import.set_label(&sas);
+                stack_for_import.set_visible_child_name("confirm");
+            }
+            Err(message) => {
+                import_error_label_for_import.set_label(&message);
+                import_error_label_for_import.set_visible(true);
+            }
+        }
+    });
+
+    let engine_client_for_confirm = engine_client.clone();
+    let peer_payload_entry_for_confirm = peer_payload_entry.clone();
+    let peer_name_entry_for_confirm = peer_name_entry.clone();
+    let peer_onion_entry_for_confirm = peer_onion_entry.clone();
+    let confirm_error_label_for_confirm = confirm_error_label.clone();
+    let dialog_for_confirm = dialog.clone();
+    let refresh_peers_for_confirm = refresh_peers.clone();
+    confirm_button.connect_clicked(move |_button| {
+        let peer_payload = peer_payload_entry_for_confirm.text().to_string();
+        let peer_name = peer_name_entry_for_confirm.text().to_string();
+        let peer_onion = peer_onion_entry_for_confirm.text().to_string();
+        let peer_onion = if peer_onion.is_empty() {
+            None
+        } else {
+            Some(peer_onion.as_str())
+        };
+        match engine_client_for_confirm.borrow_mut().pair_confirm(
+            &peer_name,
+            &peer_payload,
+            peer_onion,
+        ) {
+            Ok(()) => {
+                refresh_peers_for_confirm();
+                dialog_for_confirm.close();
+            }
+            Err(message) => {
+                confirm_error_label_for_confirm.set_label(&message);
+                confirm_error_label_for_confirm.set_visible(true);
+            }
+        }
+    });
+
+    let dialog_for_cancel = dialog.clone();
+    cancel_button.connect_clicked(move |_button| {
+        dialog_for_cancel.close();
+    });
+
+    dialog.present();
 }
