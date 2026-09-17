@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// `op`-tagged enum so an unrecognized `op` can still be PARSED (and
 /// answered with a clean [`Response`] error) instead of failing to
 /// deserialize at all.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Request {
     /// The requested operation. Only `"unlock"` exists today.
     pub op: String,
@@ -52,6 +52,22 @@ pub struct Request {
     /// `umbra_hwkey::challenge_response`).
     #[serde(default)]
     pub hw_key_label: Option<String>,
+    /// Local display name to save a peer under (required for
+    /// `"pair_confirm"`), `[A-Za-z0-9_-]+` — validated by
+    /// `umbra_cli::peers::save_peer`.
+    #[serde(default)]
+    pub peer_name: Option<String>,
+    /// A peer's base64url pairing payload (required for
+    /// `"pair_import"` and `"pair_confirm"`) — received out of band
+    /// (QR / copy-paste) from the peer's own `"pair_payload"`
+    /// response.
+    #[serde(default)]
+    pub peer_payload: Option<String>,
+    /// The peer's `.onion` service address, if the operator has one to
+    /// record now (optional, `"pair_confirm"` only — mirrors `umbra
+    /// pair --onion`'s own optional flag).
+    #[serde(default)]
+    pub peer_onion: Option<String>,
 }
 
 /// One response line, `umbra-engine` -> `umbra-gui`.
@@ -71,16 +87,68 @@ pub struct Response {
     /// `false`.
     #[serde(default)]
     pub error: Option<String>,
+    /// Paired peer names (`"list_peers"` only), sorted.
+    #[serde(default)]
+    pub peer_names: Option<Vec<String>>,
+    /// This session's own base64url pairing payload (`"pair_payload"`
+    /// only).
+    #[serde(default)]
+    pub payload: Option<String>,
+    /// The shared 6-digit SAS code for out-of-band verification
+    /// (`"pair_import"` only).
+    #[serde(default)]
+    pub sas: Option<String>,
 }
 
 impl Response {
-    /// Builds a success response.
+    /// Builds a bare successful response with no operation-specific
+    /// payload (`"pair_confirm"`, and the shared base every other
+    /// success builder below starts from).
+    #[must_use]
+    pub fn success() -> Self {
+        Self {
+            ok: true,
+            fingerprint: None,
+            error: None,
+            peer_names: None,
+            payload: None,
+            sas: None,
+        }
+    }
+
+    /// Builds a successful `"unlock"` response.
     #[must_use]
     pub fn ok(fingerprint: String) -> Self {
         Self {
-            ok: true,
             fingerprint: Some(fingerprint),
-            error: None,
+            ..Self::success()
+        }
+    }
+
+    /// Builds a successful `"list_peers"` response.
+    #[must_use]
+    pub fn peers(names: Vec<String>) -> Self {
+        Self {
+            peer_names: Some(names),
+            ..Self::success()
+        }
+    }
+
+    /// Builds a successful `"pair_payload"` response.
+    #[must_use]
+    pub fn payload(payload: String) -> Self {
+        Self {
+            payload: Some(payload),
+            ..Self::success()
+        }
+    }
+
+    /// Builds a successful `"pair_import"` response.
+    #[must_use]
+    pub fn sas(sas: String) -> Self {
+        Self {
+            sas: Some(sas),
+            ..Self::success()
         }
     }
 
@@ -89,8 +157,8 @@ impl Response {
     pub fn err(message: impl Into<String>) -> Self {
         Self {
             ok: false,
-            fingerprint: None,
             error: Some(message.into()),
+            ..Self::success()
         }
     }
 }
@@ -105,9 +173,7 @@ mod tests {
             op: "unlock".to_string(),
             keystore_path: Some(std::path::PathBuf::from("/tmp/ks.enc")),
             passphrase: Some("secret".to_string()),
-            hw_module: None,
-            hw_pin: None,
-            hw_key_label: None,
+            ..Request::default()
         };
         let line = serde_json::to_string(&request)?;
         let decoded: Request = serde_json::from_str(&line)?;
@@ -130,6 +196,7 @@ mod tests {
             hw_module: Some(std::path::PathBuf::from("/usr/lib64/pkcs11/libsofthsm2.so")),
             hw_pin: Some("1234".to_string()),
             hw_key_label: Some("my-key".to_string()),
+            ..Request::default()
         };
         let line = serde_json::to_string(&request)?;
         let decoded: Request = serde_json::from_str(&line)?;
@@ -177,6 +244,61 @@ mod tests {
         assert_eq!(decoded.op, "future-op");
         assert_eq!(decoded.keystore_path, None);
         assert_eq!(decoded.passphrase, None);
+        Ok(())
+    }
+
+    #[test]
+    fn pairing_request_fields_round_trip_through_json()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let request = Request {
+            op: "pair_confirm".to_string(),
+            peer_name: Some("alice".to_string()),
+            peer_payload: Some("payload-bytes".to_string()),
+            peer_onion: Some("a".repeat(56)),
+            ..Request::default()
+        };
+        let line = serde_json::to_string(&request)?;
+        let decoded: Request = serde_json::from_str(&line)?;
+        assert_eq!(decoded.op, "pair_confirm");
+        assert_eq!(decoded.peer_name.as_deref(), Some("alice"));
+        assert_eq!(decoded.peer_payload.as_deref(), Some("payload-bytes"));
+        assert_eq!(decoded.peer_onion, Some("a".repeat(56)));
+        Ok(())
+    }
+
+    #[test]
+    fn list_peers_response_round_trips_through_json()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let response = Response::peers(vec!["alice".to_string(), "bob".to_string()]);
+        let line = serde_json::to_string(&response)?;
+        let decoded: Response = serde_json::from_str(&line)?;
+        assert!(decoded.ok);
+        assert_eq!(
+            decoded.peer_names,
+            Some(vec!["alice".to_string(), "bob".to_string()])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pair_payload_response_round_trips_through_json()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let response = Response::payload("own-payload-bytes".to_string());
+        let line = serde_json::to_string(&response)?;
+        let decoded: Response = serde_json::from_str(&line)?;
+        assert!(decoded.ok);
+        assert_eq!(decoded.payload.as_deref(), Some("own-payload-bytes"));
+        Ok(())
+    }
+
+    #[test]
+    fn pair_import_response_round_trips_through_json()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let response = Response::sas("123456".to_string());
+        let line = serde_json::to_string(&response)?;
+        let decoded: Response = serde_json::from_str(&line)?;
+        assert!(decoded.ok);
+        assert_eq!(decoded.sas.as_deref(), Some("123456"));
         Ok(())
     }
 }
