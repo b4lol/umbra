@@ -28,7 +28,6 @@
 pub mod dispatch;
 pub mod protocol;
 
-use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
@@ -240,7 +239,12 @@ pub fn run(
         .map_err(|error| EngineError::Sandbox(error.to_string()))?;
 
     let (stream, _peer_addr) = listener.accept()?;
-    serve_connection(stream, keystore_dir, hw_module_dir)
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| EngineError::Io(std::io::Error::other(error.to_string())))?;
+    runtime.block_on(serve_connection(stream, keystore_dir, hw_module_dir))
 }
 
 /// Reads `SOFTHSM2_CONF`'s configured `directories.tokendir` value, if
@@ -265,31 +269,59 @@ fn softhsm2_tokendir_from_env() -> Option<std::path::PathBuf> {
 }
 
 /// Serves one connection: reads one NDJSON [`Request`] line at a time,
-/// dispatches it, writes back one NDJSON [`protocol::Response`] line,
-/// until the peer disconnects (EOF).
-fn serve_connection(
+/// dispatches it, writes back one NDJSON line, until the peer
+/// disconnects (EOF). A dedicated writer task owns the socket's write
+/// half exclusively (fed by an internal channel) so that a future
+/// background task (TODO B.3 GUI messaging design, Phase 2's Tor
+/// bootstrap, wired in the next task) can also produce outgoing lines
+/// without racing this loop's own responses. This task changes ONLY
+/// how the socket is served — every response for every existing op
+/// stays byte-for-byte identical to before this change.
+async fn serve_connection(
     stream: UnixStream,
     keystore_dir: &Path,
     hw_module_dir: Option<&Path>,
 ) -> Result<(), EngineError> {
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut writer = stream;
-    let mut line = String::new();
-    let mut session = dispatch::Session::default();
-    loop {
-        line.clear();
-        let bytes_read = reader.read_line(&mut line)?;
-        if bytes_read == 0 {
-            return Ok(());
+    stream.set_nonblocking(true)?;
+    let tokio_stream = tokio::net::UnixStream::from_std(stream)?;
+    let (read_half, write_half) = tokio::io::split(tokio_stream);
+    let mut reader = tokio::io::BufReader::new(read_half);
+
+    let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let writer_handle = tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt as _;
+        let mut write_half = write_half;
+        while let Some(line) = line_rx.recv().await {
+            if write_half.write_all(line.as_bytes()).await.is_err() {
+                break;
+            }
         }
-        let response = match serde_json::from_str::<Request>(line.trim_end()) {
+    });
+
+    let mut session = dispatch::Session::default();
+    let mut read_buf = String::new();
+    loop {
+        read_buf.clear();
+        use tokio::io::AsyncBufReadExt as _;
+        let bytes_read = reader.read_line(&mut read_buf).await?;
+        if bytes_read == 0 {
+            break;
+        }
+        let response = match serde_json::from_str::<Request>(read_buf.trim_end()) {
             Ok(request) => dispatch_checked(&request, keystore_dir, hw_module_dir, &mut session),
             Err(error) => protocol::Response::err(format!("malformed request: {error}")),
         };
         let mut encoded = serde_json::to_string(&response)?;
         encoded.push('\n');
-        writer.write_all(encoded.as_bytes())?;
+        // A closed receiver means the writer task already exited
+        // (e.g. a prior write failed) — nothing more to do.
+        if line_tx.send(encoded).is_err() {
+            break;
+        }
     }
+    drop(line_tx);
+    let _ = writer_handle.await;
+    Ok(())
 }
 
 /// Rejects a request whose `keystore_path` falls outside the
