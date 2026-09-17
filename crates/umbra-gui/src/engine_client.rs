@@ -34,6 +34,16 @@ struct Request {
     keystore_path: Option<PathBuf>,
     /// The passphrase to unlock with.
     passphrase: Option<String>,
+    /// Path to the hardware token's PKCS#11 module (TODO B.3 FIDO2
+    /// wiring), sent whenever this GUI process was launched with
+    /// `--hw-module` — the Engine decides whether it's actually
+    /// needed by inspecting the target file itself.
+    hw_module: Option<PathBuf>,
+    /// The hardware token's PIN, typed into the unlock screen's second
+    /// masked field.
+    hw_pin: Option<String>,
+    /// Label of the token-held HMAC key, from `--hw-key-label`.
+    hw_key_label: Option<String>,
 }
 
 /// One response line, mirrors `umbra_engine::protocol::Response`.
@@ -63,13 +73,29 @@ impl EngineConnection {
     /// Sends an `"unlock"` request for `keystore_path` with
     /// `passphrase`, and returns the unlocked identity's fingerprint
     /// as lowercase hex on success.
-    fn unlock(&mut self, keystore_path: &Path, passphrase: &[u8]) -> Result<String, String> {
+    fn unlock(
+        &mut self,
+        keystore_path: &Path,
+        passphrase: &[u8],
+        hw_module: Option<&Path>,
+        hw_pin: &[u8],
+        hw_key_label: Option<&str>,
+    ) -> Result<String, String> {
         let passphrase = std::str::from_utf8(passphrase)
             .map_err(|_error| "passphrase must be valid UTF-8".to_string())?;
+        let hw_pin = std::str::from_utf8(hw_pin)
+            .map_err(|_error| "hardware key PIN must be valid UTF-8".to_string())?;
         let request = Request {
             op: "unlock".to_string(),
             keystore_path: Some(keystore_path.to_path_buf()),
             passphrase: Some(passphrase.to_string()),
+            hw_module: hw_module.map(std::path::Path::to_path_buf),
+            hw_pin: if hw_pin.is_empty() {
+                None
+            } else {
+                Some(hw_pin.to_string())
+            },
+            hw_key_label: hw_key_label.map(str::to_string),
         };
         let mut line = serde_json::to_string(&request).map_err(|error| error.to_string())?;
         line.push('\n');
@@ -140,7 +166,10 @@ impl EngineClient {
     /// Engine binary cannot be spawned, its socket never appears
     /// within a 2-second bound, or the connection cannot be
     /// established.
-    pub fn spawn(keystore_path: &Path) -> Result<(Self, PathBuf), String> {
+    pub fn spawn(
+        keystore_path: &Path,
+        hw_module: Option<&Path>,
+    ) -> Result<(Self, PathBuf), String> {
         let canonical_keystore_path =
             std::fs::canonicalize(keystore_path).map_err(|error| error.to_string())?;
         let keystore_dir = canonical_keystore_path
@@ -165,11 +194,21 @@ impl EngineClient {
         let socket_path = socket_dir.join(format!("engine-{}.sock", std::process::id()));
 
         let engine_binary = sibling_engine_binary_path()?;
-        let child = std::process::Command::new(&engine_binary)
+        let mut command = std::process::Command::new(&engine_binary);
+        command
             .arg("--socket")
             .arg(&socket_path)
             .arg("--keystore-dir")
-            .arg(&keystore_dir)
+            .arg(&keystore_dir);
+        if let Some(hw_module) = hw_module {
+            let canonical_hw_module =
+                std::fs::canonicalize(hw_module).map_err(|error| error.to_string())?;
+            let hw_module_dir = canonical_hw_module
+                .parent()
+                .ok_or_else(|| "hw-module path has no parent directory".to_string())?;
+            command.arg("--hw-module-dir").arg(hw_module_dir);
+        }
+        let child = command
             .spawn()
             .map_err(|error| format!("failed to spawn {}: {error}", engine_binary.display()))?;
 
@@ -202,8 +241,16 @@ impl EngineClient {
     /// Returns a display-ready error message on a wrong passphrase, a
     /// missing/corrupt keystore file, a non-UTF-8 passphrase, or any
     /// I/O failure talking to the Engine.
-    pub fn unlock(&mut self, keystore_path: &Path, passphrase: &[u8]) -> Result<String, String> {
-        self.connection.unlock(keystore_path, passphrase)
+    pub fn unlock(
+        &mut self,
+        keystore_path: &Path,
+        passphrase: &[u8],
+        hw_module: Option<&Path>,
+        hw_pin: &[u8],
+        hw_key_label: Option<&str>,
+    ) -> Result<String, String> {
+        self.connection
+            .unlock(keystore_path, passphrase, hw_module, hw_pin, hw_key_label)
     }
 }
 
@@ -263,7 +310,13 @@ mod tests {
             r#"{"ok":true,"fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
         )?;
         let fingerprint = connection
-            .unlock(std::path::Path::new("/tmp/ks.enc"), b"whatever")
+            .unlock(
+                std::path::Path::new("/tmp/ks.enc"),
+                b"whatever",
+                None,
+                b"",
+                None,
+            )
             .map_err(|error| format!("expected Ok, got Err: {error}"))?;
         assert_eq!(fingerprint.len(), 64);
         Ok(())
@@ -275,7 +328,13 @@ mod tests {
             "failure",
             r#"{"ok":false,"error":"wrong passphrase or corrupted keystore"}"#,
         )?;
-        let result = connection.unlock(std::path::Path::new("/tmp/ks.enc"), b"whatever");
+        let result = connection.unlock(
+            std::path::Path::new("/tmp/ks.enc"),
+            b"whatever",
+            None,
+            b"",
+            None,
+        );
         assert_eq!(
             result,
             Err("wrong passphrase or corrupted keystore".to_string())
@@ -291,8 +350,62 @@ mod tests {
         // any well-formed response line works here.
         let mut connection =
             connect_to_fake_engine("non-utf8", r#"{"ok":true,"fingerprint":"x"}"#)?;
-        let result = connection.unlock(std::path::Path::new("/tmp/ks.enc"), &[0xFF, 0xFE]);
+        let result = connection.unlock(
+            std::path::Path::new("/tmp/ks.enc"),
+            &[0xFF, 0xFE],
+            None,
+            b"",
+            None,
+        );
         assert_eq!(result, Err("passphrase must be valid UTF-8".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn unlock_sends_hardware_key_fields_when_present()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // The fake engine ECHOES the request line back as the response
+        // line's `error` field, so this test can assert on exactly
+        // what was sent over the wire without a real Engine parsing it.
+        let socket_path = std::env::temp_dir().join(format!(
+            "umbra-gui-engine-client-test-{}-hw-fields.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = UnixListener::bind(&socket_path)?;
+        std::thread::spawn(move || -> Result<(), std::io::Error> {
+            let (stream, _peer_addr) = listener.accept()?;
+            let mut reader = BufReader::new(stream.try_clone()?);
+            let mut writer = stream;
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line)?;
+            let escaped = request_line.trim_end().replace('"', "\\\"");
+            writer.write_all(format!("{{\"ok\":false,\"error\":\"{escaped}\"}}\n").as_bytes())?;
+            Ok(())
+        });
+        let stream = UnixStream::connect(&socket_path)?;
+        let _ = std::fs::remove_file(&socket_path);
+        let mut connection = EngineConnection { stream };
+
+        let result = connection.unlock(
+            std::path::Path::new("/tmp/ks.enc"),
+            b"whatever",
+            Some(std::path::Path::new("/usr/lib64/pkcs11/libsofthsm2.so")),
+            b"1234",
+            Some("my-key"),
+        );
+        // The fake engine's own `.replace('"', "\\\"")` above embeds the
+        // raw request JSON as a properly-escaped JSON STRING VALUE; once
+        // THIS side's `serde_json::from_str::<Response>` decodes that
+        // response, `response.error` (and so `echoed` here) holds the
+        // request JSON back in its PLAIN, un-escaped form — JSON
+        // decoding is exactly what undoes the fake engine's own
+        // escaping. So the substrings checked for below use plain `"`,
+        // not `\"`.
+        let echoed = result.err().ok_or("expected an Err")?;
+        assert!(echoed.contains("\"hw_module\":\"/usr/lib64/pkcs11/libsofthsm2.so\""));
+        assert!(echoed.contains("\"hw_pin\":\"1234\""));
+        assert!(echoed.contains("\"hw_key_label\":\"my-key\""));
         Ok(())
     }
 }

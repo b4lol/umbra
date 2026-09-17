@@ -30,6 +30,16 @@ struct Cli {
     /// Path to the keystore file (see `umbra keygen`/`umbra init`).
     #[arg(long, value_name = "PATH")]
     keystore: PathBuf,
+    /// Path to the hardware token's PKCS#11 module (TODO B.3 FIDO2
+    /// wiring). Required together with `--hw-key-label` to unlock a
+    /// hardware-key-gated keystore; omit both for a plain or Decoy
+    /// Vault keystore.
+    #[arg(long, value_name = "PATH")]
+    hw_module: Option<PathBuf>,
+    /// Label of the token-held HMAC key (as passed to
+    /// `umbra_hwkey::challenge_response`).
+    #[arg(long, value_name = "LABEL")]
+    hw_key_label: Option<String>,
 }
 
 fn main() -> gtk4::glib::ExitCode {
@@ -87,20 +97,29 @@ fn main() -> gtk4::glib::ExitCode {
     // increment's spec, "no in-process fallback to the old direct-
     // unlock code path, since that would defeat the separation
     // entirely."
-    let (engine_client, canonical_keystore_path) = match EngineClient::spawn(&cli.keystore) {
-        Ok(result) => result,
-        Err(message) => {
-            eprintln!("umbra-gui: failed to start the Engine process: {message}");
-            std::process::exit(1);
-        }
-    };
+    let (engine_client, canonical_keystore_path) =
+        match EngineClient::spawn(&cli.keystore, cli.hw_module.as_deref()) {
+            Ok(result) => result,
+            Err(message) => {
+                eprintln!("umbra-gui: failed to start the Engine process: {message}");
+                std::process::exit(1);
+            }
+        };
     let engine_client = Rc::new(RefCell::new(engine_client));
 
     let application = adw::Application::builder()
         .application_id(APPLICATION_ID)
         .build();
+    let hw_module = cli.hw_module.clone();
+    let hw_key_label = cli.hw_key_label.clone();
     application.connect_activate(move |application| {
-        build_window(application, &canonical_keystore_path, engine_client.clone());
+        build_window(
+            application,
+            &canonical_keystore_path,
+            engine_client.clone(),
+            hw_module.as_deref(),
+            hw_key_label.as_deref(),
+        );
     });
     // `run()` would re-parse the PROCESS'S OWN argv through GLib's option
     // parser (`ApplicationExtManual::run()` forwards `std::env::args_os()`
@@ -134,15 +153,36 @@ fn build_window(
     application: &adw::Application,
     keystore_path: &Path,
     engine_client: Rc<RefCell<EngineClient>>,
+    hw_module: Option<&Path>,
+    hw_key_label: Option<&str>,
 ) {
     let stack = gtk4::Stack::new();
 
     let password_entry = gtk4::PasswordEntry::builder().show_peek_icon(true).build();
+    // TODO B.3 FIDO2 wiring: a second masked field for the hardware
+    // token's PIN — only shown when this GUI was launched with BOTH
+    // `--hw-module`/`--hw-key-label` (mirrors the CLI's own "all three
+    // hw flags required together" rule, minus the PIN itself, which
+    // this GUI collects interactively rather than via `--hw-pin-file`
+    // — see this increment's spec for why).
+    let hw_pin_entry = if hw_module.is_some() && hw_key_label.is_some() {
+        Some(
+            gtk4::PasswordEntry::builder()
+                .show_peek_icon(true)
+                .placeholder_text("Hardware token PIN")
+                .build(),
+        )
+    } else {
+        None
+    };
     let error_label = gtk4::Label::builder().visible(false).build();
     let unlock_button = gtk4::Button::builder().label("Unlock").build();
 
     let unlock_box = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
     unlock_box.append(&password_entry);
+    if let Some(hw_pin_entry) = hw_pin_entry.as_ref() {
+        unlock_box.append(hw_pin_entry);
+    }
     unlock_box.append(&unlock_button);
     unlock_box.append(&error_label);
     stack.add_named(&unlock_box, Some("unlock"));
@@ -152,11 +192,26 @@ fn build_window(
     stack.set_visible_child_name("unlock");
 
     let keystore_path = keystore_path.to_path_buf();
+    let hw_module = hw_module.map(std::path::Path::to_path_buf);
+    let hw_key_label = hw_key_label.map(str::to_string);
+    let hw_pin_entry_for_closure = hw_pin_entry.clone();
     let stack_for_closure = stack.clone();
     unlock_button.connect_clicked(move |_button| {
         let passphrase = zeroize::Zeroizing::new(password_entry.text().as_bytes().to_vec());
+        let hw_pin = zeroize::Zeroizing::new(
+            hw_pin_entry_for_closure
+                .as_ref()
+                .map(|entry| entry.text().as_bytes().to_vec())
+                .unwrap_or_default(),
+        );
         let mut engine_client = engine_client.borrow_mut();
-        match engine_client.unlock(&keystore_path, &passphrase) {
+        match engine_client.unlock(
+            &keystore_path,
+            &passphrase,
+            hw_module.as_deref(),
+            &hw_pin,
+            hw_key_label.as_deref(),
+        ) {
             Ok(fingerprint) => {
                 let reveal_widget = umbra_gui::scratch_reveal::build_scratch_reveal(&format!(
                     "Fingerprint: {fingerprint}"
@@ -168,6 +223,9 @@ fn build_window(
                 error_label.set_label(&message);
                 error_label.set_visible(true);
                 password_entry.set_text("");
+                if let Some(hw_pin_entry) = hw_pin_entry_for_closure.as_ref() {
+                    hw_pin_entry.set_text("");
+                }
             }
         }
     });
