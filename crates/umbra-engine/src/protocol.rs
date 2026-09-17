@@ -75,8 +75,8 @@ pub struct Request {
     /// absent for `"unlock"` itself, whose exchange stays untagged
     /// (TODO B.3 GUI messaging design, Phase 2). The GUI assigns and
     /// increments this per request on one connection; the Engine
-    /// echoes it back in the tagged [`SessionLine::Response`]
-    /// variant... see [`SessionLine`] doc.
+    /// echoes it back in the tagged [`SessionLine`] it writes;
+    /// see [`SessionLine`] doc.
     #[serde(default)]
     pub request_id: Option<u64>,
     /// Message text for `"send"` (Phase 2: the op is a no-op stub
@@ -199,33 +199,33 @@ pub struct SessionLine {
     pub kind: String,
     /// Present when `kind == "response"`: echoes the request's own
     /// `request_id`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<u64>,
     /// Present when `kind == "event"`: which event. `"ready"` (the
     /// published onion address) is Phase 2's only one; later phases
     /// add `"inbound-text"`, `"sent"`, `"send-error"`,
     /// `"session-error"`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event: Option<String>,
     /// A `"response"` line's success flag (absent/irrelevant for
     /// `"event"` lines).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ok: Option<bool>,
     /// A `"response"` line's error message, present when
     /// `ok == Some(false)`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     /// `"list_peers"` response payload.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peer_names: Option<Vec<String>>,
     /// `"pair_payload"` response payload.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<String>,
     /// `"pair_import"` response payload.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sas: Option<String>,
     /// The `"ready"` event's own onion address.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
 }
 
@@ -429,8 +429,7 @@ mod tests {
         let session_line =
             SessionLine::from_response(Some(3), Response::payload("own-payload".to_string()));
         let line = serde_json::to_string(&session_line)?;
-        assert!(line.contains("\"kind\":\"response\""));
-        assert!(line.contains("\"request_id\":3"));
+        assert_eq!(line, r#"{"kind":"response","request_id":3,"ok":true,"payload":"own-payload"}"#);
         let decoded: SessionLine = serde_json::from_str(&line)?;
         assert_eq!(decoded.kind, "response");
         assert_eq!(decoded.request_id, Some(3));
@@ -444,8 +443,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let session_line = SessionLine::ready("onion-address-placeholder".to_string());
         let line = serde_json::to_string(&session_line)?;
-        assert!(line.contains("\"kind\":\"event\""));
-        assert!(line.contains("\"event\":\"ready\""));
+        assert_eq!(line, r#"{"kind":"event","event":"ready","address":"onion-address-placeholder"}"#);
         let decoded: SessionLine = serde_json::from_str(&line)?;
         assert_eq!(decoded.kind, "event");
         assert_eq!(decoded.event.as_deref(), Some("ready"));
