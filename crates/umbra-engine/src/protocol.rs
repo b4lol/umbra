@@ -69,6 +69,21 @@ pub struct Request {
     /// pair --onion`'s own optional flag).
     #[serde(default)]
     pub peer_onion: Option<String>,
+    /// Present for every session-phase request (`"list_peers"`,
+    /// `"pair_payload"`, `"pair_import"`, `"pair_confirm"`, `"send"`)
+    /// once a connection has completed a successful `"unlock"` —
+    /// absent for `"unlock"` itself, whose exchange stays untagged
+    /// (TODO B.3 GUI messaging design, Phase 2). The GUI assigns and
+    /// increments this per request on one connection; the Engine
+    /// echoes it back in the tagged [`SessionLine::Response`]
+    /// variant... see [`SessionLine`] doc.
+    #[serde(default)]
+    pub request_id: Option<u64>,
+    /// Message text for `"send"` (Phase 2: the op is a no-op stub
+    /// that always answers `"not yet implemented"` — real sending is
+    /// Phase 3, which will actually read this field).
+    #[serde(default)]
+    pub text: Option<String>,
 }
 
 /// One response line, `umbra-engine` -> `umbra-gui`.
@@ -166,9 +181,95 @@ impl Response {
     }
 }
 
+/// One line the Engine writes to a connection's SESSION PHASE (TODO
+/// B.3 GUI messaging design, Phase 2) — starting immediately after a
+/// successful `"unlock"` on this connection, EVERY line the Engine
+/// writes is one of these, discriminated by `kind`. A plain struct
+/// (not a tagged enum), matching this module's existing
+/// `Request`/`Response` convention and the wire format verbatim:
+///
+/// ```json
+/// {"kind":"response","request_id":3,"ok":true,"payload":"..."}
+/// {"kind":"event","event":"ready","address":"..."}
+/// ```
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SessionLine {
+    /// `"response"` (answers one GUI-initiated request, by
+    /// `request_id`) or `"event"` (unprompted).
+    pub kind: String,
+    /// Present when `kind == "response"`: echoes the request's own
+    /// `request_id`.
+    #[serde(default)]
+    pub request_id: Option<u64>,
+    /// Present when `kind == "event"`: which event. `"ready"` (the
+    /// published onion address) is Phase 2's only one; later phases
+    /// add `"inbound-text"`, `"sent"`, `"send-error"`,
+    /// `"session-error"`.
+    #[serde(default)]
+    pub event: Option<String>,
+    /// A `"response"` line's success flag (absent/irrelevant for
+    /// `"event"` lines).
+    #[serde(default)]
+    pub ok: Option<bool>,
+    /// A `"response"` line's error message, present when
+    /// `ok == Some(false)`.
+    #[serde(default)]
+    pub error: Option<String>,
+    /// `"list_peers"` response payload.
+    #[serde(default)]
+    pub peer_names: Option<Vec<String>>,
+    /// `"pair_payload"` response payload.
+    #[serde(default)]
+    pub payload: Option<String>,
+    /// `"pair_import"` response payload.
+    #[serde(default)]
+    pub sas: Option<String>,
+    /// The `"ready"` event's own onion address.
+    #[serde(default)]
+    pub address: Option<String>,
+}
+
+impl SessionLine {
+    /// Wraps an existing (untagged) [`Response`] into a tagged
+    /// `"response"` line, echoing `request_id`. Used to retrofit
+    /// Phase 1's four ops (`list_peers`/`pair_payload`/`pair_import`/
+    /// `pair_confirm`) into the session phase, and for the new
+    /// `"send"` stub.
+    #[must_use]
+    pub fn from_response(request_id: Option<u64>, response: Response) -> Self {
+        Self {
+            kind: "response".to_string(),
+            request_id,
+            event: None,
+            ok: Some(response.ok),
+            error: response.error,
+            peer_names: response.peer_names,
+            payload: response.payload,
+            sas: response.sas,
+            address: None,
+        }
+    }
+
+    /// Builds the `"ready"` event line.
+    #[must_use]
+    pub fn ready(address: String) -> Self {
+        Self {
+            kind: "event".to_string(),
+            request_id: None,
+            event: Some("ready".to_string()),
+            ok: None,
+            error: None,
+            peer_names: None,
+            payload: None,
+            sas: None,
+            address: Some(address),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Request, Response};
+    use super::{Request, Response, SessionLine};
 
     #[test]
     fn request_round_trips_through_json() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -302,6 +403,55 @@ mod tests {
         let decoded: Response = serde_json::from_str(&line)?;
         assert!(decoded.ok);
         assert_eq!(decoded.sas.as_deref(), Some("123456"));
+        Ok(())
+    }
+
+    #[test]
+    fn request_id_and_text_round_trip_through_json()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let request = Request {
+            op: "send".to_string(),
+            request_id: Some(7),
+            peer_name: Some("alice".to_string()),
+            text: Some("hello".to_string()),
+            ..Request::default()
+        };
+        let line = serde_json::to_string(&request)?;
+        let decoded: Request = serde_json::from_str(&line)?;
+        assert_eq!(decoded.request_id, Some(7));
+        assert_eq!(decoded.text.as_deref(), Some("hello"));
+        Ok(())
+    }
+
+    #[test]
+    fn session_line_response_round_trips_and_matches_the_spec_shape()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let session_line =
+            SessionLine::from_response(Some(3), Response::payload("own-payload".to_string()));
+        let line = serde_json::to_string(&session_line)?;
+        assert!(line.contains("\"kind\":\"response\""));
+        assert!(line.contains("\"request_id\":3"));
+        let decoded: SessionLine = serde_json::from_str(&line)?;
+        assert_eq!(decoded.kind, "response");
+        assert_eq!(decoded.request_id, Some(3));
+        assert_eq!(decoded.ok, Some(true));
+        assert_eq!(decoded.payload.as_deref(), Some("own-payload"));
+        Ok(())
+    }
+
+    #[test]
+    fn session_line_ready_event_round_trips_and_matches_the_spec_shape()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let session_line = SessionLine::ready("onion-address-placeholder".to_string());
+        let line = serde_json::to_string(&session_line)?;
+        assert!(line.contains("\"kind\":\"event\""));
+        assert!(line.contains("\"event\":\"ready\""));
+        let decoded: SessionLine = serde_json::from_str(&line)?;
+        assert_eq!(decoded.kind, "event");
+        assert_eq!(decoded.event.as_deref(), Some("ready"));
+        assert_eq!(decoded.address.as_deref(), Some("onion-address-placeholder"));
+        assert_eq!(decoded.request_id, None);
+        assert_eq!(decoded.ok, None);
         Ok(())
     }
 }
