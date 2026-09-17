@@ -69,7 +69,7 @@ the IPv4/UNIX-STREAM-only kill-switch, `mlockall`/`PR_SET_DUMPABLE=0`/`RLIMIT_CO
 (Seccomp/Landlock), [ADR-009](DECISIONS.md#adr-009-hardware-security-key-fido2--yubikey-and-sudden-motion-sentinel)
 (hardware key), [ADR-010](DECISIONS.md#adr-010-deniable-fake-profile-with-the-decoy-vault)
 (Decoy Vault), [ADR-014](DECISIONS.md#adr-014-os-specific-deep-optimizations-and-simd-acceleration)
-(OS-specific optimizations, mostly still TODO B.5).
+(OS-specific optimizations, mostly still TODO B.9 (renumbered from B.5, 2026-09-17)).
 
 ## Phase 5 — Zero Data Leakage
 **Status: LANDED** (core paths); D-Bus notification path implemented but untested
@@ -84,7 +84,7 @@ also [ADR-018](DECISIONS.md#adr-018-1-minute-automatic-clipboard-destruction-and
 
 ## Phase 6 — Code Quality and Verification
 **Status: LANDED**, with formal-methods verification tracked as new work (see TODO
-B.8, added alongside this document). Source: `CODE_MANIFESTO.md`, `CODE_REVIEW.md`.
+B.7, added alongside this document; renumbered from B.8 on 2026-09-17). Source: `CODE_MANIFESTO.md`, `CODE_REVIEW.md`.
 
 Typestate session states, newtypes + checked arithmetic everywhere, 122+ hermetic test
 cases across 19+ suites, proptest, 4 fuzz targets with CI smoke, nightly ASan, weekly
@@ -95,7 +95,7 @@ cases across 19+ suites, proptest, 4 fuzz targets with CI smoke, nightly ASan, w
 (scanning), [ADR-021](DECISIONS.md#adr-021-prevention-of-logic-errors-and-invalid-states-through-type-driven-design-and-mutation-testing)
 (typestate/mutation testing).
 
-**New work proposed and tracked (TODO B.8):** Kani model-checking for panic-freedom and
+**New work proposed and tracked (TODO B.7, renumbered from B.8):** Kani model-checking for panic-freedom and
 bounded-store proofs, and TLA+ specifications for protocol liveness/safety — neither
 exists in this repo yet.
 
@@ -142,7 +142,7 @@ every push, `strip`+LTO release profile, PGP-signed tags. ADR:
 (the scanning half); release mechanics themselves have no dedicated ADR.
 
 ## Phase 12 — Active Resilience Testing
-**Status: PLANNED — new work, tracked as TODO B.8.** No source document yet; this
+**Status: PLANNED — new work, tracked as TODO B.7 (renumbered from B.8, 2026-09-17).** No source document yet; this
 phase does not exist anywhere else in the repo before this page.
 
 Testing the project's OWN local testnet, not production infrastructure:

@@ -9,7 +9,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [Unreleased]
 
 ### Added
-- **`docs/SECURITY_PHASES.md`**: a single-page index over the full security lifecycle (Phases 0-12), cross-referencing every phase to its authoritative source document and `DECISIONS.md` ADR(s). Phase 12 (active resilience testing against a local Chutney Tor testnet) and Phase 6's Kani/TLA+ formal-verification addition are genuinely new, not-yet-landed work, now tracked as TODO B.8.
+- **`docs/SECURITY_PHASES.md`**: a single-page index over the full security lifecycle (Phases 0-12), cross-referencing every phase to its authoritative source document and `DECISIONS.md` ADR(s). Phase 12 (active resilience testing against a local Chutney Tor testnet) and Phase 6's Kani/TLA+ formal-verification addition are genuinely new, not-yet-landed work, now tracked as TODO B.7 (renumbered from B.8 on 2026-09-17 — see the "Section B reorganization" entry below).
+- **FIDO2/hardware-key GUI wiring** (TODO B.3): `umbra-gui` can now unlock a hardware-key-gated keystore — `--hw-module`/`--hw-key-label` flags plus an interactive PIN field, auto-detected by `umbra-engine` inspecting the keystore file itself. `umbra-engine` gained a new `--hw-module-dir` startup argument (and test-only `SOFTHSM2_CONF` token-directory detection) since its once-at-startup Landlock sandbox can never be widened later to accommodate a hardware module it wasn't told about upfront.
+
+### Changed
+- **`docs/TODO.md` Section B reorganization** (2026-09-17): current
+  priority is now explicitly stated (finish B.3 first, then B.4;
+  B.1.1/B.1.2 I2P/Veilid stay deprioritized to the end). B.5
+  (OS-Specific Deep Optimizations) moved to the very end as the new
+  B.9 — none of its items change what Umbra does, only how
+  efficiently, unlike every other open B-section item. B.6/B.7/B.8
+  each shifted down one number to close the resulting gap (Honeypot →
+  B.5, Hardware/side-channel tests → B.6, Formal Verification → B.7);
+  the pt-proxy Rust Port section keeps its B.8 number.
+  Added **B.1.3**: a direct clearnet transport, tracked alongside
+  I2P/Veilid for filling the same "when every anonymizing transport is
+  blocked" gap — deliberately opt-in only, anonymity rated NONE on the
+  existing per-transport profile scale, never a silent fallback.
 
 ---
 
