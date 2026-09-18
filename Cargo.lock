@@ -7884,6 +7884,7 @@ dependencies = [
 name = "umbra-engine"
 version = "1.0.0-alpha.3"
 dependencies = [
+ "base64 0.23.1",
  "clap",
  "serde",
  "serde_json",
@@ -7894,6 +7895,7 @@ dependencies = [
  "umbra-hardware",
  "umbra-hwkey",
  "umbra-net",
+ "zeroize",
 ]
 
 [[package]]
@@ -7928,6 +7930,7 @@ name = "umbra-gui"
 version = "1.0.0-alpha.3"
 dependencies = [
  "async-channel",
+ "base64 0.23.1",
  "clap",
  "gtk4",
  "libadwaita",

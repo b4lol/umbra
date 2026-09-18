@@ -436,11 +436,13 @@ async fn serve_connection(
                 let bootstrap_tor_dir = tor_dir.clone();
                 let bootstrap_line_tx = line_tx.clone();
                 let bootstrap_transport_cell = transport_cell.clone();
+                let inbound_material = session.inbound_material();
                 tokio::spawn(async move {
                     run_tor_bootstrap(
                         bootstrap_tor_dir,
                         bootstrap_line_tx,
                         bootstrap_transport_cell,
+                        inbound_material,
                     )
                     .await;
                 });
@@ -463,20 +465,44 @@ async fn serve_connection(
     }
 }
 
+/// Inbound-event queue capacity for the engine's accept loop (mirrors
+/// `tui.rs`'s `SESSION_QUEUE`/`serve.rs`'s `INBOUND_RESULT_QUEUE`,
+/// both 32).
+const INBOUND_QUEUE_CAPACITY: usize = 32;
+
 /// Bootstraps Tor under `tor_dir`, publishes the shared transport into
-/// `transport_cell` (Phase 3: `"send"` ops use it) and, on success,
-/// emits the `"ready"` event over `line_tx`. Honest scope (TODO B.3
-/// GUI messaging design, Phase 2): a bootstrap FAILURE is only logged
-/// to stderr, not surfaced as a wire event yet — a `"session-error"`
-/// event for bootstrap failure is real, tracked future work (Phase
-/// 4's own event set), not silently dropped.
+/// `transport_cell` (Phase 3: `"send"` ops use it), emits the
+/// `"ready"` event, then runs the inbound accept loop for the rest of
+/// the session (Phase 4): decrypted two-party texts become
+/// `"inbound-text"` events and per-session/loop failures become
+/// `"session-error"` events (this closes Phase 2's documented gap of
+/// bootstrap failures being stderr-only). Group (PQ-MLS) inbound
+/// events are received by the shared loop but not forwarded — group
+/// chat is a tracked, separate GUI increment (TODO B.3 GUI messaging
+/// design, "out of scope").
 async fn run_tor_bootstrap(
     tor_dir: std::path::PathBuf,
     line_tx: tokio::sync::mpsc::UnboundedSender<String>,
     transport_cell: std::sync::Arc<
         tokio::sync::OnceCell<std::sync::Arc<umbra_net::tor::TorTransport>>,
     >,
+    inbound_material: Option<(
+        umbra_crypto::keys::IdentitySeeds,
+        umbra_cli::group_inbound::GroupInboundContext,
+    )>,
 ) {
+    use base64::Engine as _;
+    let session_error = |message: String| {
+        eprintln!("umbra-engine: {message}");
+        let mut encoded =
+            match serde_json::to_string(&protocol::SessionLine::session_error(message.clone())) {
+                Ok(encoded) => encoded,
+                Err(_) => return,
+            };
+        encoded.push('\n');
+        let _ = line_tx.send(encoded);
+    };
+
     // Fixed, not operator-configurable: the Engine's onion-service
     // identity lives under `tor_dir`, which is already scoped
     // per-keystore (one `keystore_dir/tor` per identity) — the
@@ -488,18 +514,18 @@ async fn run_tor_bootstrap(
         match umbra_net::tor::TorTransport::bootstrap_persistent_with_pt(&tor_dir, None).await {
             Ok(transport) => transport,
             Err(error) => {
-                eprintln!("umbra-engine: Tor bootstrap failed: {error}");
+                session_error(format!("Tor bootstrap failed: {error}"));
                 return;
             }
         };
     if let Err(error) = transport.spawn_inbound(ENGINE_ONION_NICKNAME).await {
-        eprintln!("umbra-engine: onion inbound service failed: {error}");
+        session_error(format!("onion inbound service failed: {error}"));
         return;
     }
     let address = match umbra_cli::serve::wait_for_address(&transport).await {
         Ok(address) => address,
         Err(error) => {
-            eprintln!("umbra-engine: onion address publication failed: {error}");
+            session_error(format!("onion address publication failed: {error}"));
             return;
         }
     };
@@ -507,13 +533,63 @@ async fn run_tor_bootstrap(
     // Publish the transport BEFORE the ready event: a client that
     // reacts to `"ready"` with an immediate `"send"` must already find
     // it here.
-    let _ = transport_cell.set(transport);
+    let _ = transport_cell.set(transport.clone());
     let session_line = protocol::SessionLine::ready(address);
     let Ok(mut encoded) = serde_json::to_string(&session_line) else {
         return;
     };
     encoded.push('\n');
     let _ = line_tx.send(encoded);
+
+    // Phase 4: the inbound accept loop. `inbound_material` is `Some`
+    // on every real unlock; `None` is unreachable (unlock populates it
+    // before the ready event can exist) but handled without a panic
+    // per this workspace's lints.
+    let Some((seeds, group_context)) = inbound_material else {
+        session_error("inbound loop material missing after unlock".to_string());
+        return;
+    };
+    let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel::<
+        Result<umbra_cli::group_inbound::InboundEvent, String>,
+    >(INBOUND_QUEUE_CAPACITY);
+    let loop_handle = tokio::spawn(umbra_cli::serve::inbound_loop(
+        transport,
+        std::sync::Arc::new(seeds),
+        std::sync::Arc::new(group_context),
+        inbound_tx,
+        INBOUND_QUEUE_CAPACITY,
+    ));
+    while let Some(result) = inbound_rx.recv().await {
+        let event_line = match result {
+            Ok(umbra_cli::group_inbound::InboundEvent::Text(plaintext)) => {
+                let encoded_text =
+                    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&plaintext);
+                Some(protocol::SessionLine::inbound_text(encoded_text))
+            }
+            Ok(
+                umbra_cli::group_inbound::InboundEvent::GroupText { .. }
+                | umbra_cli::group_inbound::InboundEvent::GroupJoined { .. }
+                | umbra_cli::group_inbound::InboundEvent::GroupUpdated { .. }
+                | umbra_cli::group_inbound::InboundEvent::GroupRosterSynced { .. },
+            ) => None, // group chat: separate, tracked GUI increment
+            Err(error) => Some(protocol::SessionLine::session_error(error)),
+        };
+        let Some(event_line) = event_line else {
+            continue;
+        };
+        let Ok(mut encoded) = serde_json::to_string(&event_line) else {
+            continue;
+        };
+        encoded.push('\n');
+        if line_tx.send(encoded).is_err() {
+            return; // GUI side gone
+        }
+    }
+    // The forward channel closed — the accept loop ended; surface its
+    // own terminal error, if any.
+    if let Ok(Err(error)) = loop_handle.await {
+        session_error(format!("inbound loop ended: {error}"));
+    }
 }
 
 /// Rejects a request whose `keystore_path` falls outside the

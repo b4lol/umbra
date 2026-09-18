@@ -116,6 +116,11 @@ struct SessionLine {
     /// The identity's own onion address (`"ready"` event).
     #[serde(default)]
     address: Option<String>,
+    /// The `"inbound-text"` event's payload (Phase 4): decrypted
+    /// plaintext, base64url-no-pad. No sender attribution exists at
+    /// the Engine's layer, so there is deliberately no `peer` field.
+    #[serde(default)]
+    data: Option<String>,
 }
 
 /// An event the GTK main loop can react to — the subset of
@@ -136,6 +141,14 @@ pub enum EngineEvent {
     /// A queued `"send"` failed (peer has no onion address, Tor still
     /// bootstrapping, connect timeout, ...): `(peer_name, error)`.
     SendError(String, String),
+    /// A decrypted two-party message arrived (Phase 4). The sender is
+    /// NOT attributable at the Engine's layer, so the GUI renders this
+    /// in the inbox pseudo-conversation, never inside a named peer's
+    /// log.
+    InboundText(String),
+    /// Bootstrap or inbound-loop failure (Phase 4) — previously
+    /// stderr-only on the Engine side.
+    SessionError(String),
 }
 
 /// A protocol-level connection to the Engine, independent of how that
@@ -320,10 +333,29 @@ fn spawn_reader_thread(
                     }
                 }
                 "event" => {
-                    if parsed.event.as_deref() == Some("ready")
-                        && let Some(address) = parsed.address.clone()
-                    {
-                        let _ = event_sender.send_blocking(EngineEvent::Ready(address));
+                    let event = match parsed.event.as_deref() {
+                        Some("ready") => parsed.address.clone().map(EngineEvent::Ready),
+                        Some("inbound-text") => parsed
+                            .data
+                            .as_deref()
+                            .and_then(|data| {
+                                use base64::Engine as _;
+                                base64::engine::general_purpose::URL_SAFE_NO_PAD
+                                    .decode(data)
+                                    .ok()
+                            })
+                            // Text frames only (the messenger layer's
+                            // own contract); non-UTF-8 payloads are
+                            // dropped rather than lossy-rendered.
+                            .and_then(|bytes| String::from_utf8(bytes).ok())
+                            .map(EngineEvent::InboundText),
+                        Some("session-error") => {
+                            parsed.error.clone().map(EngineEvent::SessionError)
+                        }
+                        _ => None,
+                    };
+                    if let Some(event) = event {
+                        let _ = event_sender.send_blocking(event);
                     }
                 }
                 _ => {}
@@ -1185,5 +1217,71 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         Err("timed out waiting for the Ready event on the glib channel".into())
+    }
+
+    /// Phase 4: an `"inbound-text"` event line is base64-decoded by the
+    /// reader thread and forwarded as [`EngineEvent::InboundText`];
+    /// a `"session-error"` line becomes [`EngineEvent::SessionError`].
+    #[cfg(feature = "gui")]
+    #[test]
+    fn inbound_text_and_session_error_events_are_decoded_and_forwarded()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let socket_path = std::env::temp_dir().join(format!(
+            "umbra-gui-engine-client-test-{}-inbound-events.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = UnixListener::bind(&socket_path)?;
+        std::thread::spawn(move || -> Result<(), std::io::Error> {
+            let (stream, _peer_addr) = listener.accept()?;
+            let mut writer = stream;
+            // "aGVsbG8" is base64url-no-pad for "hello".
+            writer.write_all(br#"{"kind":"event","event":"inbound-text","data":"aGVsbG8"}"#)?;
+            writer.write_all(b"\n")?;
+            writer.write_all(br#"{"kind":"event","event":"session-error","error":"boom"}"#)?;
+            writer.write_all(b"\n")
+        });
+        let stream = UnixStream::connect(&socket_path)?;
+        let _ = std::fs::remove_file(&socket_path);
+
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let (event_tx, event_rx) = async_channel::unbounded();
+        let _reader_thread = spawn_reader_thread(stream, pending, event_tx);
+
+        // A FRESH context, not `MainContext::default()`: the default
+        // context is owned by whichever test thread acquires it first,
+        // and Rust's harness runs these tests in parallel (the
+        // ready-event test above owns it when both run together).
+        let context = gtk4::glib::MainContext::new();
+        let observed: Rc<RefCell<Vec<EngineEvent>>> = Rc::new(RefCell::new(Vec::new()));
+        let observed_for_task = observed.clone();
+        context.spawn_local(async move {
+            while let Ok(event) = event_rx.recv().await {
+                observed_for_task.borrow_mut().push(event);
+            }
+        });
+        let deadline = std::time::Instant::now()
+            .checked_add(std::time::Duration::from_secs(2))
+            .ok_or("system clock error computing test deadline")?;
+        while std::time::Instant::now() < deadline {
+            context.iteration(false);
+            let events = observed.borrow();
+            if events.len() >= 2 {
+                let first = events.first().ok_or("missing first event")?;
+                let second = events.get(1).ok_or("missing second event")?;
+                assert!(
+                    matches!(first, EngineEvent::InboundText(text) if text == "hello"),
+                    "unexpected first event: {first:?}"
+                );
+                assert!(
+                    matches!(second, EngineEvent::SessionError(error) if error == "boom"),
+                    "unexpected second event: {second:?}"
+                );
+                return Ok(());
+            }
+            drop(events);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        Err("timed out waiting for inbound-text/session-error events".into())
     }
 }

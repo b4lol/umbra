@@ -17,7 +17,7 @@ default = []
 # free of GTK4's heavy system-library requirement (libgtk-4-dev,
 # libadwaita-1-dev) — those are only pulled in when this feature is
 # explicitly enabled, e.g. `cargo test -p umbra-gui --features gui`.
-gui = ["dep:gtk4", "dep:adw", "dep:clap", "dep:zeroize", "dep:async-channel"]
+gui = ["dep:gtk4", "dep:adw", "dep:clap", "dep:zeroize", "dep:async-channel", "dep:base64"]
 
 [[bin]]
 name = "umbra-gui"
@@ -68,3 +68,6 @@ adw = { package = "libadwaita", version = "0.9.2", optional = true }
 # cannot drift out of sync with that pin.
 clap = { workspace = true, optional = true }
 zeroize = { workspace = true, optional = true }
+# base64url decode of `"inbound-text"` event payloads (engine_client.rs
+# reader thread); same crate+version umbra-cli already pins.
+base64 = { version = "0.23.1", optional = true }

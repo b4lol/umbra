@@ -25,6 +25,14 @@ use crate::protocol::{Request, Response};
 pub struct Session {
     /// Unlocked identity bundle and its derived peers directory, populated after successful unlock.
     identity: Option<(IdentityBundle, PathBuf)>,
+    /// Keystore passphrase, kept resident (Phase 4) so the inbound
+    /// loop's [`umbra_cli::group_inbound::GroupInboundContext`] can
+    /// decrypt group-state files — the same residency `serve`/`tui`
+    /// already practice, wrapped in `Zeroizing`.
+    passphrase: Option<zeroize::Zeroizing<Vec<u8>>>,
+    /// The keystore file's parent directory (group-state root for the
+    /// inbound loop), populated together with `passphrase`.
+    keystore_dir: Option<PathBuf>,
 }
 
 impl Session {
@@ -34,6 +42,27 @@ impl Session {
         self.identity
             .as_ref()
             .map(|(_, peers_dir)| peers_dir.as_path())
+    }
+
+    /// The material the background inbound loop needs (Phase 4):
+    /// identity seeds (re-derived from the resident bundle) plus the
+    /// group-inbound context. `None` until a successful unlock.
+    pub fn inbound_material(
+        &self,
+    ) -> Option<(
+        umbra_crypto::keys::IdentitySeeds,
+        umbra_cli::group_inbound::GroupInboundContext,
+    )> {
+        let (bundle, _) = self.identity.as_ref()?;
+        let passphrase = self.passphrase.as_ref()?;
+        let keystore_dir = self.keystore_dir.as_ref()?;
+        Some((
+            bundle.secret_seeds(),
+            umbra_cli::group_inbound::GroupInboundContext {
+                keystore_dir: keystore_dir.clone(),
+                passphrase: zeroize::Zeroizing::new(passphrase.to_vec()),
+            },
+        ))
     }
 }
 
@@ -77,9 +106,12 @@ fn dispatch_unlock(request: &Request, session: &mut Session) -> Response {
         request.hw_key_label.as_deref(),
     ) {
         Ok((fingerprint, bundle)) => {
-            let peers_dir = keystore_path
+            let keystore_dir = keystore_path
                 .parent()
-                .map_or_else(|| PathBuf::from("peers"), |parent| parent.join("peers"));
+                .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf);
+            let peers_dir = keystore_dir.join("peers");
+            session.passphrase = Some(zeroize::Zeroizing::new(passphrase.as_bytes().to_vec()));
+            session.keystore_dir = Some(keystore_dir);
             session.identity = Some((bundle, peers_dir));
             Response::ok(fingerprint)
         }

@@ -20,6 +20,14 @@ use umbra_gui::engine_client::EngineClient;
 /// GTK application ID (reverse-DNS convention).
 const APPLICATION_ID: &str = "org.umbra.Gui";
 
+/// Sidebar pseudo-conversation for inbound texts (Phase 4): sender
+/// attribution does not exist at the Engine's layer (`receive_message`
+/// returns plaintext only), so inbound messages land here — never
+/// inside a named peer's log, which would misattribute them. Not a
+/// valid engine-side peer name (peer names are validated against a
+/// strict character set), so it can never collide with a real one.
+const INBOX_PEER: &str = "· inbox (unattributed) ·";
+
 /// `umbra-gui`'s command-line arguments: only the keystore path — the
 /// passphrase itself is entered interactively in the GUI (spec
 /// decision, 2026-09-13: deliberately NOT a `--passphrase-file` flag
@@ -320,6 +328,19 @@ fn build_window(
                                     &format!("send failed: {message}"),
                                 );
                             }
+                            umbra_gui::engine_client::EngineEvent::InboundText(text) => {
+                                append_chat_line(
+                                    &chat_logs_for_events,
+                                    &selected_peer_for_events,
+                                    &log_view_for_events,
+                                    INBOX_PEER,
+                                    &format!("received: {text}"),
+                                );
+                            }
+                            umbra_gui::engine_client::EngineEvent::SessionError(message) => {
+                                status_label_for_events
+                                    .set_label(&format!("session error: {message}"));
+                            }
                         }
                     }
                 });
@@ -344,6 +365,11 @@ fn build_window(
                     let Some(peer) = peer else {
                         return;
                     };
+                    if peer == INBOX_PEER {
+                        // The inbox is receive-only (senders are not
+                        // attributable); there is nobody to answer.
+                        return;
+                    }
                     let send_result = engine_client_for_send.borrow().send(&peer, &text);
                     match send_result {
                         Ok(()) => {
@@ -459,7 +485,12 @@ fn build_peer_panel(
         match engine_client_for_refresh.borrow_mut().list_peers() {
             Ok(names) => {
                 peer_error_label_for_refresh.set_visible(false);
-                *listed_names_for_refresh.borrow_mut() = names.clone();
+                // Row 0 is always the unattributed-inbound inbox (Phase
+                // 4); real peers follow it.
+                *listed_names_for_refresh.borrow_mut() = std::iter::once(INBOX_PEER.to_string())
+                    .chain(names.iter().cloned())
+                    .collect();
+                list_box_for_refresh.append(&gtk4::Label::new(Some(INBOX_PEER)));
                 for name in names {
                     list_box_for_refresh.append(&gtk4::Label::new(Some(&name)));
                 }

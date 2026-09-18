@@ -201,9 +201,10 @@ pub struct SessionLine {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<u64>,
     /// Present when `kind == "event"`: which event. `"ready"` (the
-    /// published onion address) is Phase 2's only one; later phases
-    /// add `"inbound-text"`, `"sent"`, `"send-error"`,
-    /// `"session-error"`.
+    /// published onion address, Phase 2), `"inbound-text"` and
+    /// `"session-error"` (Phase 4). Send outcomes are NOT events —
+    /// they arrive as ordinary tagged `"response"` lines to the
+    /// `"send"` request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event: Option<String>,
     /// A `"response"` line's success flag (absent/irrelevant for
@@ -226,14 +227,21 @@ pub struct SessionLine {
     /// The `"ready"` event's own onion address.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
+    /// The `"inbound-text"` event's payload: the decrypted message
+    /// bytes, base64url-no-pad encoded (Phase 4). Sender attribution
+    /// is NOT available at this layer (`receive_message` returns the
+    /// plaintext only), so the event deliberately carries no `peer`
+    /// field — the GUI renders these in a separate inbox, never
+    /// misattributed to a selected conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
 }
 
 impl SessionLine {
     /// Wraps an existing (untagged) [`Response`] into a tagged
     /// `"response"` line, echoing `request_id`. Used to retrofit
     /// Phase 1's four ops (`list_peers`/`pair_payload`/`pair_import`/
-    /// `pair_confirm`) into the session phase, and for the new
-    /// `"send"` stub.
+    /// `pair_confirm`) into the session phase, and for `"send"`.
     #[must_use]
     pub fn from_response(request_id: Option<u64>, response: Response) -> Self {
         Self {
@@ -246,6 +254,7 @@ impl SessionLine {
             payload: response.payload,
             sas: response.sas,
             address: None,
+            data: None,
         }
     }
 
@@ -262,6 +271,43 @@ impl SessionLine {
             payload: None,
             sas: None,
             address: Some(address),
+            data: None,
+        }
+    }
+
+    /// Builds an `"inbound-text"` event line (Phase 4): `data` is the
+    /// decrypted plaintext, base64url-no-pad.
+    #[must_use]
+    pub fn inbound_text(data: String) -> Self {
+        Self {
+            kind: "event".to_string(),
+            request_id: None,
+            event: Some("inbound-text".to_string()),
+            ok: None,
+            error: None,
+            peer_names: None,
+            payload: None,
+            sas: None,
+            address: None,
+            data: Some(data),
+        }
+    }
+
+    /// Builds a `"session-error"` event line (Phase 4): bootstrap or
+    /// inbound-loop failures, previously stderr-only.
+    #[must_use]
+    pub fn session_error(message: String) -> Self {
+        Self {
+            kind: "event".to_string(),
+            request_id: None,
+            event: Some("session-error".to_string()),
+            ok: None,
+            error: Some(message),
+            peer_names: None,
+            payload: None,
+            sas: None,
+            address: None,
+            data: None,
         }
     }
 }
@@ -458,6 +504,37 @@ mod tests {
         );
         assert_eq!(decoded.request_id, None);
         assert_eq!(decoded.ok, None);
+        Ok(())
+    }
+
+    #[test]
+    fn session_line_inbound_text_event_round_trips()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let session_line = SessionLine::inbound_text("aGVsbG8".to_string());
+        let line = serde_json::to_string(&session_line)?;
+        assert_eq!(
+            line,
+            r#"{"kind":"event","event":"inbound-text","data":"aGVsbG8"}"#
+        );
+        let decoded: SessionLine = serde_json::from_str(&line)?;
+        assert_eq!(decoded.event.as_deref(), Some("inbound-text"));
+        assert_eq!(decoded.data.as_deref(), Some("aGVsbG8"));
+        assert_eq!(decoded.request_id, None);
+        Ok(())
+    }
+
+    #[test]
+    fn session_line_session_error_event_round_trips()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let session_line = SessionLine::session_error("bootstrap failed".to_string());
+        let line = serde_json::to_string(&session_line)?;
+        assert_eq!(
+            line,
+            r#"{"kind":"event","event":"session-error","error":"bootstrap failed"}"#
+        );
+        let decoded: SessionLine = serde_json::from_str(&line)?;
+        assert_eq!(decoded.event.as_deref(), Some("session-error"));
+        assert_eq!(decoded.error.as_deref(), Some("bootstrap failed"));
         Ok(())
     }
 }
