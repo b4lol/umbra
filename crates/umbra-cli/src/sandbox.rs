@@ -392,6 +392,34 @@ pub fn allowed_syscalls() -> Vec<i64> {
         libc::SYS_unlinkat,
         libc::SYS_renameat,
         libc::SYS_renameat2,
+        // Legacy single-pathname twins of the `*at` calls above. glibc's
+        // own `mkdir`/`rename`/`readlink`/`unlink` wrappers invoke the
+        // DEDICATED legacy syscalls on x86_64, not the `*at` variants
+        // (verified empirically against glibc 2.43, TODO B.3 Phase 2
+        // bring-up): std::fs's `create_dir`/`rename`/`remove_file` and
+        // `realpath()`'s per-component `readlink` all EPERM without
+        // these, breaking Arti's state/cache initialization and the
+        // bundled SQLite dirmgr's journal deletion (SQLITE_IOERR_DELETE).
+        // They add no real attack surface beyond their already-allowed
+        // `*at` equivalents — Landlock still gates the path targets.
+        libc::SYS_mkdir,
+        libc::SYS_readlink,
+        libc::SYS_unlink,
+        libc::SYS_rename,
+        // `faccessat2(AT_EACCESS)`: glibc's `realpath()` (std's
+        // `fs::canonicalize`) resolves trailing-slash paths — which
+        // tor-dirmgr's `dir_blobs/` store path has — through
+        // `faccessat(F_OK|AT_EACCESS)`, i.e. this syscall. Without it,
+        // fs-mistrust's `CheckedDir::new` canonicalization EPERMs.
+        libc::SYS_faccessat2,
+        // `flock`: tor-persist/fslock-guard's mandatory state-dir and
+        // dirmgr store lockfiles (`std::fs::File::try_lock` uses flock
+        // on Linux).
+        libc::SYS_flock,
+        // `getgroups`: fs-mistrust consults the process's supplementary
+        // groups (via `pwd-grp`) when verifying group-trust on the Tor
+        // state tree's ownership/permissions.
+        libc::SYS_getgroups,
         // AF_UNIX stream sockets (landlock-granted; used by the runtime
         // stack and resolver plumbing).
         libc::SYS_socketpair,

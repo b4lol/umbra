@@ -15,11 +15,23 @@
 //! `unlink(2)` via SQLite's unix VFS (`unixDelete` deleting a
 //! not-yet-existing journal/WAL file), and `nym-pemstore`'s
 //! `write_pem_file` (identity key persistence) finishes with
-//! `std::fs::set_permissions`, which calls the raw `chmod(2)`. Arti's own
-//! storage layer — what the upstream base list was originally sized for —
-//! apparently never needed any of the three, using only the `*at` family
-//! (`mkdirat`/`unlinkat`/`fchmodat`, all already on the list) instead. See
+//! `std::fs::set_permissions`, which calls the raw `chmod(2)`. See
 //! Task 12's report for the exact denial observed at each step.
+//!
+//! UPDATE (TODO B.3 GUI messaging Phase 2 bring-up): Task 12's
+//! conclusion that "Arti's own storage layer never needs the raw,
+//! non-`*at` variants" turned out to be WRONG — Arti does, via glibc's
+//! `mkdir`/`rename`/`readlink`/`unlink` wrappers (which invoke the
+//! dedicated legacy syscalls on x86_64, not the `*at` variants), plus
+//! `faccessat2` (glibc `realpath()` on trailing-slash paths) and
+//! `flock` (tor-persist's state-dir lockfile). Those seven syscalls
+//! moved INTO the shared base list in `umbra-cli`'s
+//! `allowed_syscalls()` when the Engine's Tor bootstrap needed them, so
+//! `SYS_mkdir`/`SYS_unlink` in the extension below are now redundant
+//! no-ops (the `BTreeMap` deduplicates); only `SYS_chmod` remains
+//! genuinely Nym-specific. The extension is left as-is rather than
+//! slimmed: harmless, and keeps this crate's proven-against-testnet
+//! profile self-evidently intact.
 //!
 //! `umbra_cli::sandbox::install_filter` cannot express this: it hardcodes
 //! a call to `umbra_cli::sandbox::allowed_syscalls()` internally with no
@@ -60,7 +72,9 @@ fn install_filter_nym(
     return Ok(());
 
     // The shared base list (single source of truth in umbra-cli) plus
-    // the three Task 12 additions.
+    // the three Task 12 additions (of which `SYS_mkdir`/`SYS_unlink`
+    // have since moved INTO the base list — harmless BTreeMap-deduped
+    // no-ops here; see the module docs' UPDATE note).
     let mut base = allowed_syscalls();
     base.extend_from_slice(&[libc::SYS_mkdir, libc::SYS_unlink, libc::SYS_chmod]);
 

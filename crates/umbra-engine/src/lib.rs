@@ -127,7 +127,13 @@ pub fn run(
     // before the Landlock ruleset installs — Landlock can only ever
     // narrow access, never widen it again, so anything the hardware-key
     // path might need must be granted in this same call.
-    let mut read_only = vec![keystore_dir];
+    // `/etc` READ-ONLY mirrors `umbra serve`'s own grant
+    // (`crates/umbra-cli/src/serve.rs`): Arti's fs-mistrust consults the
+    // passwd/group databases (`getpwuid` → `/etc/passwd`) when verifying
+    // the Tor state tree's ownership, and the libc resolver may open
+    // public configuration files there during bootstrap — public,
+    // world-readable config content only.
+    let mut read_only = vec![keystore_dir, std::path::Path::new("/etc")];
     // Owned in this outer scope (not inside the `if let Some(...)`
     // below) purely so the `PathBuf`s they may hold outlive
     // `read_only`'s borrows of them further down. Both stay `None` —
@@ -239,8 +245,17 @@ pub fn run(
     // a successful unlock (below) persists the onion service's own
     // identity keys and descriptor cache here for the rest of this
     // connection's life. Unconditional, same reasoning as `peers_dir`
-    // above: every session may start messaging.
-    std::fs::create_dir_all(tor_dir)?;
+    // above: every session may start messaging. Created 0700 (the tree
+    // holds the onion-service identity key at rest), mirroring `umbra
+    // serve`'s `tor_base` creation in `crates/umbra-cli/src/serve.rs` —
+    // Arti's fs-mistrust refuses a lax tree.
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(tor_dir)?;
+    }
     let _status = umbra_cli::sandbox::restrict_filesystem_with_exceptions(
         &[peers_dir.as_path(), tor_dir],
         &read_only,
