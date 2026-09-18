@@ -271,18 +271,14 @@ fn build_window(
                     error_label.set_visible(true);
                 }
                 // Phase 3 chat area: per-peer message log + compose row.
-                // The log's text buffers live in `chat_logs` (one per
-                // peer name); `selected_peer` tracks the sidebar
+                // Log entries live in `chat_logs` (one bounded list per
+                // conversation name); `selected_peer` tracks the sidebar
                 // selection the compose row sends to.
                 let selected_peer: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
-                let chat_logs: Rc<RefCell<HashMap<String, String>>> =
-                    Rc::new(RefCell::new(HashMap::new()));
+                let chat_logs: ChatLogs = Rc::new(RefCell::new(HashMap::new()));
                 let chat_with_label = gtk4::Label::new(Some("no peer selected"));
-                let log_view = gtk4::TextView::builder()
-                    .editable(false)
-                    .cursor_visible(false)
-                    .wrap_mode(gtk4::WrapMode::WordChar)
-                    .build();
+                let log_view = gtk4::ListBox::new();
+                log_view.add_css_class("boxed-list");
                 let log_scroll = gtk4::ScrolledWindow::builder()
                     .child(&log_view)
                     .min_content_height(160)
@@ -378,7 +374,7 @@ fn build_window(
                                     &selected_peer_for_events,
                                     &log_view_for_events,
                                     &peer,
-                                    &format!("send failed: {message}"),
+                                    ChatLine::System(format!("send failed: {message}")),
                                 );
                             }
                             umbra_gui::engine_client::EngineEvent::InboundText(text) => {
@@ -387,7 +383,7 @@ fn build_window(
                                     &selected_peer_for_events,
                                     &log_view_for_events,
                                     INBOX_PEER,
-                                    &format!("received: {text}"),
+                                    ChatLine::Received(text),
                                 );
                             }
                             umbra_gui::engine_client::EngineEvent::SessionError(message) => {
@@ -432,7 +428,7 @@ fn build_window(
                                 &selected_peer,
                                 &log_view,
                                 &peer,
-                                &format!("me: {text}"),
+                                ChatLine::Own(text.clone()),
                             );
                             compose_entry.set_text("");
                         }
@@ -441,7 +437,7 @@ fn build_window(
                             &selected_peer,
                             &log_view,
                             &peer,
-                            &format!("send failed: {message}"),
+                            ChatLine::System(format!("send failed: {message}")),
                         ),
                     }
                 });
@@ -461,53 +457,100 @@ fn build_window(
     window.present();
 }
 
+/// One chat-log entry. Message content (both directions) renders as a
+/// Scratch-to-Reveal widget — chat history is sensitive content and
+/// the anti-shoulder-surfing doctrine applies to it exactly as it does
+/// to the fingerprint; system lines (send failures) stay plain.
+enum ChatLine {
+    /// An own message, echoed at click time (the honest caveat on
+    /// `EngineEvent::Sent` applies: queued into Arti, not delivered).
+    Own(String),
+    /// A decrypted inbound message (inbox; unattributed).
+    Received(String),
+    /// A local system line (send failure, etc.) — never masked.
+    System(String),
+}
+
+/// Chat log storage: one bounded entry list per conversation name.
+type ChatLogs = Rc<RefCell<HashMap<String, Vec<ChatLine>>>>;
+
+/// Builds the row widget for one chat line: message content masked
+/// behind Scratch-to-Reveal (single-line preview — newlines are
+/// flattened), system lines as plain dim labels.
+fn chat_line_widget(line: &ChatLine) -> gtk4::Widget {
+    match line {
+        ChatLine::Own(text) | ChatLine::Received(text) => {
+            // ~9 px per 14 pt monospace glyph + padding, clamped:
+            // sized to the content so short messages stay compact and
+            // long ones stay readable (no wrapping in the widget).
+            let flat: String = text
+                .chars()
+                .map(|c| if c == '\n' { ' ' } else { c })
+                .collect();
+            let content_width = i32::try_from(flat.chars().count())
+                .unwrap_or(i32::MAX)
+                .saturating_mul(9)
+                .saturating_add(24);
+            let width = content_width.clamp(160, 560);
+            let widget = umbra_gui::scratch_reveal::build_scratch_reveal_sized(&flat, width, 32);
+            match line {
+                ChatLine::Own(_) => widget.set_halign(gtk4::Align::End),
+                _ => widget.set_halign(gtk4::Align::Start),
+            }
+            widget.upcast()
+        }
+        ChatLine::System(text) => gtk4::Label::builder()
+            .label(text)
+            .halign(gtk4::Align::Start)
+            .css_classes(["dim-label"])
+            .build()
+            .upcast(),
+    }
+}
+
 /// Appends one line to `peer`'s chat log buffer, and re-renders the
 /// log view when that peer is the currently selected one. Shared by
 /// the send button (own echo), the event loop (send failures), and
 /// (Phase 4) inbound messages.
 fn append_chat_line(
-    chat_logs: &Rc<RefCell<HashMap<String, String>>>,
+    chat_logs: &ChatLogs,
     selected_peer: &Rc<RefCell<Option<String>>>,
-    log_view: &gtk4::TextView,
+    log_view: &gtk4::ListBox,
     peer: &str,
-    line: &str,
+    line: ChatLine,
 ) {
-    chat_logs
-        .borrow_mut()
-        .entry(peer.to_string())
-        .or_default()
-        .push_str(&format!("{line}\n"));
-    // Bounded memory (Phase 5): drop whole oldest lines once a log
-    // exceeds MAX_CHAT_LOG_LINES.
-    let mut logs = chat_logs.borrow_mut();
-    if let Some(buffer) = logs.get_mut(peer) {
-        let overflow = buffer.lines().count().saturating_sub(MAX_CHAT_LOG_LINES);
+    {
+        let mut logs = chat_logs.borrow_mut();
+        let entries = logs.entry(peer.to_string()).or_default();
+        entries.push(line);
+        // Bounded memory (Phase 5): drop whole oldest lines once a log
+        // exceeds MAX_CHAT_LOG_LINES.
+        let overflow = entries.len().saturating_sub(MAX_CHAT_LOG_LINES);
         if overflow > 0 {
-            let byte_cut = buffer
-                .match_indices('\n')
-                .nth(overflow.saturating_sub(1))
-                .map_or(0, |(index, _)| index.saturating_add(1));
-            buffer.drain(..byte_cut);
+            entries.drain(..overflow);
         }
     }
-    drop(logs);
     if selected_peer.borrow().as_deref() == Some(peer) {
-        let text = chat_logs.borrow().get(peer).cloned().unwrap_or_default();
-        log_view.buffer().set_text(&text);
+        render_chat_log(chat_logs, log_view, Some(peer));
     }
 }
 
-/// Renders `peer`'s whole log buffer into the log view (used when the
+/// Renders `peer`'s whole log into the log view (used when the
 /// sidebar selection changes).
-fn render_chat_log(
-    chat_logs: &Rc<RefCell<HashMap<String, String>>>,
-    log_view: &gtk4::TextView,
-    peer: Option<&str>,
-) {
-    let text = peer
-        .and_then(|peer| chat_logs.borrow().get(peer).cloned())
-        .unwrap_or_default();
-    log_view.buffer().set_text(&text);
+fn render_chat_log(chat_logs: &ChatLogs, log_view: &gtk4::ListBox, peer: Option<&str>) {
+    while let Some(row) = log_view.row_at_index(0) {
+        log_view.remove(&row);
+    }
+    let Some(peer) = peer else {
+        return;
+    };
+    let logs = chat_logs.borrow();
+    let Some(entries) = logs.get(peer) else {
+        return;
+    };
+    for line in entries {
+        log_view.append(&chat_line_widget(line));
+    }
 }
 
 /// Builds the peer-list panel: a heading, a `ListBox` of paired peer
@@ -521,8 +564,8 @@ fn build_peer_panel(
     window: &adw::ApplicationWindow,
     selected_peer: Rc<RefCell<Option<String>>>,
     chat_with_label: gtk4::Label,
-    log_view: gtk4::TextView,
-    chat_logs: Rc<RefCell<HashMap<String, String>>>,
+    log_view: gtk4::ListBox,
+    chat_logs: ChatLogs,
     on_selection_changed: Rc<dyn Fn()>,
 ) -> (gtk4::Box, Rc<dyn Fn()>) {
     let panel = gtk4::Box::new(gtk4::Orientation::Vertical, 8);

@@ -180,7 +180,8 @@ const WIDGET_WIDTH: i32 = 300;
 const WIDGET_HEIGHT: i32 = 40;
 
 /// Builds a scratch-to-reveal widget showing `secret_text` once enough
-/// of the surface has been dragged over (see [`REVEAL_THRESHOLD`]).
+/// of the surface has been dragged over (see [`REVEAL_THRESHOLD`]),
+/// at the default fingerprint-sized dimensions.
 ///
 /// # Honest scope
 ///
@@ -189,11 +190,24 @@ const WIDGET_HEIGHT: i32 = 40;
 #[cfg(feature = "gui")]
 #[must_use]
 pub fn build_scratch_reveal(secret_text: &str) -> gtk4::DrawingArea {
+    build_scratch_reveal_sized(secret_text, WIDGET_WIDTH, WIDGET_HEIGHT)
+}
+
+/// [`build_scratch_reveal`] with explicit dimensions (chat log rows
+/// size to their content's length; the fingerprint keeps the default).
+///
+/// # Honest scope
+///
+/// See this module's top-level doc comment: the interactive
+/// gesture/draw wiring below is not exercised by any automated test.
+#[cfg(feature = "gui")]
+#[must_use]
+pub fn build_scratch_reveal_sized(secret_text: &str, width: i32, height: i32) -> gtk4::DrawingArea {
     use gtk4::prelude::{DrawingAreaExtManual, GestureDragExt, WidgetExt};
 
     let drawing_area = gtk4::DrawingArea::builder()
-        .content_width(WIDGET_WIDTH)
-        .content_height(WIDGET_HEIGHT)
+        .content_width(width)
+        .content_height(height)
         .build();
 
     let state = std::rc::Rc::new(std::cell::RefCell::new(RevealState::new(
@@ -214,8 +228,8 @@ pub fn build_scratch_reveal(secret_text: &str) -> gtk4::DrawingArea {
             state.scratch_at(
                 start_x + offset_x,
                 start_y + offset_y,
-                f64::from(WIDGET_WIDTH),
-                f64::from(WIDGET_HEIGHT),
+                f64::from(width),
+                f64::from(height),
                 SCRATCH_RADIUS_CELLS,
             );
             drawing_area_for_redraw.queue_draw();

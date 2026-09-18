@@ -48,7 +48,7 @@
 use std::collections::BTreeMap;
 
 use seccompiler::{
-    apply_filter, BpfProgram, SeccompAction, SeccompFilter, SeccompRule, TargetArch,
+    BpfProgram, SeccompAction, SeccompFilter, SeccompRule, TargetArch, apply_filter,
 };
 use umbra_cli::sandbox::{allowed_syscalls, socket_rule};
 
@@ -155,8 +155,8 @@ mod tests {
     /// structure. In-process: the filter applies to the spawned thread
     /// only, so the test runner is unaffected.
     #[test]
-    fn nym_profile_allows_raw_mkdir_unlink_chmod_and_default_sockets_only(
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn nym_profile_allows_raw_mkdir_unlink_chmod_and_default_sockets_only()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let handle =
             std::thread::spawn(|| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 restrict_syscalls_nym()?;
