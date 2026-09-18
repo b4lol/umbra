@@ -352,6 +352,13 @@ async fn serve_connection(
 
     let mut session = dispatch::Session::default();
     let mut session_started = false;
+    // Filled by the background bootstrap task once Tor is ready
+    // (TODO B.3 GUI messaging design, Phase 3): `"send"` ops read the
+    // shared transport from here rather than owning a second
+    // bootstrapped client.
+    let transport_cell = std::sync::Arc::new(tokio::sync::OnceCell::<
+        std::sync::Arc<umbra_net::tor::TorTransport>,
+    >::new());
     let mut read_buf = String::new();
     let loop_result: Result<(), EngineError> = loop {
         read_buf.clear();
@@ -385,7 +392,14 @@ async fn serve_connection(
         };
         let request_id = request.request_id;
         let is_unlock = request.op == "unlock";
-        let response = dispatch_checked(&request, keystore_dir, hw_module_dir, &mut session);
+        // Phase 3: `"send"` awaits a bounded onion connect, so it goes
+        // through the async dispatch path; every other op stays on the
+        // synchronous dispatcher (with its keystore/hw path checks).
+        let response = if request.op == "send" {
+            dispatch::dispatch_async(&request, &session, transport_cell.get()).await
+        } else {
+            dispatch_checked(&request, keystore_dir, hw_module_dir, &mut session)
+        };
 
         if session_started {
             // Session phase: every response is tagged.
@@ -421,8 +435,14 @@ async fn serve_connection(
                 session_started = true;
                 let bootstrap_tor_dir = tor_dir.clone();
                 let bootstrap_line_tx = line_tx.clone();
+                let bootstrap_transport_cell = transport_cell.clone();
                 tokio::spawn(async move {
-                    run_tor_bootstrap(bootstrap_tor_dir, bootstrap_line_tx).await;
+                    run_tor_bootstrap(
+                        bootstrap_tor_dir,
+                        bootstrap_line_tx,
+                        bootstrap_transport_cell,
+                    )
+                    .await;
                 });
             }
         }
@@ -443,16 +463,19 @@ async fn serve_connection(
     }
 }
 
-/// Bootstraps Tor under `tor_dir` and, on success, publishes the
-/// `"ready"` event over `line_tx`. Honest scope (TODO B.3 GUI
-/// messaging design, Phase 2): a bootstrap FAILURE is only logged to
-/// stderr, not surfaced as a wire event yet — Phase 2's own stated
-/// scope is exactly one event (`"ready"`); a `"session-error"` event
-/// for bootstrap failure is real, tracked future work (Phase 4's own
-/// event set), not silently dropped.
+/// Bootstraps Tor under `tor_dir`, publishes the shared transport into
+/// `transport_cell` (Phase 3: `"send"` ops use it) and, on success,
+/// emits the `"ready"` event over `line_tx`. Honest scope (TODO B.3
+/// GUI messaging design, Phase 2): a bootstrap FAILURE is only logged
+/// to stderr, not surfaced as a wire event yet — a `"session-error"`
+/// event for bootstrap failure is real, tracked future work (Phase
+/// 4's own event set), not silently dropped.
 async fn run_tor_bootstrap(
     tor_dir: std::path::PathBuf,
     line_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    transport_cell: std::sync::Arc<
+        tokio::sync::OnceCell<std::sync::Arc<umbra_net::tor::TorTransport>>,
+    >,
 ) {
     // Fixed, not operator-configurable: the Engine's onion-service
     // identity lives under `tor_dir`, which is already scoped
@@ -480,6 +503,11 @@ async fn run_tor_bootstrap(
             return;
         }
     };
+    let transport = std::sync::Arc::new(transport);
+    // Publish the transport BEFORE the ready event: a client that
+    // reacts to `"ready"` with an immediate `"send"` must already find
+    // it here.
+    let _ = transport_cell.set(transport);
     let session_line = protocol::SessionLine::ready(address);
     let Ok(mut encoded) = serde_json::to_string(&session_line) else {
         return;

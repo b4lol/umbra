@@ -119,12 +119,23 @@ struct SessionLine {
 }
 
 /// An event the GTK main loop can react to — the subset of
-/// [`SessionLine`]'s `"event"` shapes this crate knows about.
+/// [`SessionLine`]'s `"event"` shapes this crate knows about, plus
+/// send outcomes (a `"send"` response is routed through the pending
+/// map like any response, but its caller is the send-worker thread,
+/// which forwards the outcome here — mirrors `tui.rs`'s own
+/// `UiEvent::Sent`/`UiEvent::SendError`).
 #[derive(Debug, Clone)]
 pub enum EngineEvent {
     /// Tor bootstrap finished; this is the identity's own onion
     /// address.
     Ready(String),
+    /// A queued `"send"` completed: Arti's stream accepted the frames
+    /// (NOT an end-to-end delivery confirmation — the same honest
+    /// caveat `tui.rs`'s `UiEvent::Sent` carries).
+    Sent(String),
+    /// A queued `"send"` failed (peer has no onion address, Tor still
+    /// bootstrapping, connect timeout, ...): `(peer_name, error)`.
+    SendError(String, String),
 }
 
 /// A protocol-level connection to the Engine, independent of how that
@@ -229,6 +240,18 @@ impl EngineConnection {
     }
 }
 
+/// One queued outbound message (Phase 3): consumed by the send-worker
+/// thread, which owns a cloned write half of the Engine socket so the
+/// GTK main loop never blocks on a (bounded, but up-to-120 s) onion
+/// connect.
+#[cfg(feature = "gui")]
+struct SendJob {
+    /// Local peer name to send to.
+    peer_name: String,
+    /// Message text.
+    text: String,
+}
+
 /// Live session-phase state, created once `unlock` succeeds
 /// (TODO B.3 GUI messaging design, Phase 2): the background reader
 /// thread's join handle plus the bookkeeping it shares with the GTK
@@ -245,6 +268,14 @@ struct EngineSession {
     /// Kept alive for the session's lifetime; the thread exits on its
     /// own once the socket closes (EOF) or errors.
     _reader_thread: std::thread::JoinHandle<()>,
+    /// Queue feeding the send-worker thread (Phase 3): `EngineClient::
+    /// send` enqueues here and returns immediately; the worker owns the
+    /// cloned write half of the socket and reports each outcome back as
+    /// an [`EngineEvent::Sent`]/[`EngineEvent::SendError`].
+    send_jobs: std::sync::mpsc::Sender<SendJob>,
+    /// Kept alive for the session's lifetime; exits when `send_jobs`
+    /// disconnects (session dropped) or the socket dies mid-send.
+    _send_worker: std::thread::JoinHandle<()>,
 }
 
 /// Spawns the background reader thread: reads tagged NDJSON lines off
@@ -296,6 +327,70 @@ fn spawn_reader_thread(
                     }
                 }
                 _ => {}
+            }
+        }
+    })
+}
+
+/// Spawns the send-worker thread (Phase 3): owns a CLONED write half
+/// of the Engine socket and processes queued [`SendJob`]s strictly one
+/// at a time — assigning the request id, registering the oneshot
+/// waiter, writing the tagged `"send"` line, and blocking on the
+/// reader thread's delivery. Serializing sends here (rather than
+/// blocking the GTK main loop per send) is what keeps the UI
+/// responsive during a slow onion connect; the outcome is forwarded
+/// to the main loop as [`EngineEvent::Sent`]/[`EngineEvent::SendError`]
+/// (mirrors `tui.rs`'s `UiEvent::Sent`/`SendError`). Exits when the
+/// job queue disconnects (session dropped).
+#[cfg(feature = "gui")]
+fn spawn_send_worker(
+    mut write_stream: UnixStream,
+    next_request_id: Arc<AtomicU64>,
+    pending: Arc<Mutex<HashMap<u64, std::sync::mpsc::Sender<SessionLine>>>>,
+    event_sender: async_channel::Sender<EngineEvent>,
+    jobs: std::sync::mpsc::Receiver<SendJob>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        for job in jobs {
+            let request_id = next_request_id.fetch_add(1, Ordering::Relaxed);
+            let (tx, rx) = std::sync::mpsc::channel();
+            {
+                let Ok(mut pending_map) = pending.lock() else {
+                    return; // poisoned session state: nothing more can work
+                };
+                pending_map.insert(request_id, tx);
+            }
+            let request = Request {
+                op: "send".to_string(),
+                peer_name: Some(job.peer_name.clone()),
+                text: Some(job.text),
+                request_id: Some(request_id),
+                ..Request::default()
+            };
+            let outcome = serde_json::to_string(&request)
+                .map_err(|error| error.to_string())
+                .and_then(|line| {
+                    let mut line = line;
+                    line.push('\n');
+                    write_stream
+                        .write_all(line.as_bytes())
+                        .map_err(|error| error.to_string())
+                })
+                .and_then(|()| {
+                    rx.recv()
+                        .map_err(|_error| "Engine connection closed mid-send".to_string())
+                });
+            let event = match outcome {
+                Ok(line) if line.ok == Some(true) => EngineEvent::Sent(job.peer_name),
+                Ok(line) => EngineEvent::SendError(
+                    job.peer_name,
+                    line.error
+                        .unwrap_or_else(|| "Engine returned an error with no message".to_string()),
+                ),
+                Err(message) => EngineEvent::SendError(job.peer_name, message),
+            };
+            if event_sender.send_blocking(event).is_err() {
+                return; // main loop gone
             }
         }
     })
@@ -448,7 +543,7 @@ impl EngineClient {
     /// future on its own thread — glib 0.22 removed
     /// `glib::MainContext::channel`, see `Cargo.toml`'s note).
     /// Must be called before any of `list_peers`/`pair_payload`/
-    /// `pair_import`/`pair_confirm`/`send_stub` (TODO B.3 GUI
+    /// `pair_import`/`pair_confirm`/`send` (TODO B.3 GUI
     /// messaging design, Phase 2 — those methods now require an
     /// active session).
     ///
@@ -466,12 +561,28 @@ impl EngineClient {
             .stream
             .try_clone()
             .map_err(|error| error.to_string())?;
+        let write_stream = self
+            .connection
+            .stream
+            .try_clone()
+            .map_err(|error| error.to_string())?;
         let pending = Arc::new(Mutex::new(HashMap::new()));
-        let reader_thread = spawn_reader_thread(read_stream, pending.clone(), event_sender);
+        let next_request_id = Arc::new(AtomicU64::new(1));
+        let reader_thread = spawn_reader_thread(read_stream, pending.clone(), event_sender.clone());
+        let (send_jobs, send_jobs_rx) = std::sync::mpsc::channel();
+        let send_worker = spawn_send_worker(
+            write_stream,
+            next_request_id.clone(),
+            pending.clone(),
+            event_sender,
+            send_jobs_rx,
+        );
         self.session = Some(EngineSession {
-            next_request_id: Arc::new(AtomicU64::new(1)),
+            next_request_id,
             pending,
             _reader_thread: reader_thread,
+            send_jobs,
+            _send_worker: send_worker,
         });
         Ok(())
     }
@@ -608,38 +719,31 @@ impl EngineClient {
         }
     }
 
-    /// Sends a `"send"` session request. Phase 2: the Engine always
-    /// answers `"not yet implemented"` — this exists to prove the
-    /// session-phase wire round trip for a genuinely new op, not to
-    /// deliver anything yet. Real sending is Phase 3.
+    /// Queues a `"send"` of `text` to `peer_name` and returns
+    /// IMMEDIATELY (TODO B.3 GUI messaging design, Phase 3): the
+    /// send-worker thread performs the bounded onion connect off the
+    /// GTK main loop, and the outcome arrives as an
+    /// [`EngineEvent::Sent`]/[`EngineEvent::SendError`] on the session's
+    /// event channel. Phase 2's blocking `send_stub` is gone — sending
+    /// is real now.
     ///
     /// # Errors
     ///
-    /// Returns a display-ready error message — for Phase 2, always
-    /// `"not yet implemented"` on success-shaped calls, or a
-    /// connection failure message.
+    /// Returns a display-ready error message if the session was never
+    /// started or the send worker is gone (engine died).
     #[cfg(feature = "gui")]
-    pub fn send_stub(&mut self, peer_name: &str, text: &str) -> Result<(), String> {
+    pub fn send(&self, peer_name: &str, text: &str) -> Result<(), String> {
         let session = self
             .session
             .as_ref()
             .ok_or_else(|| "session not started".to_string())?;
-        let response = self.connection.session_request(
-            session,
-            Request {
-                op: "send".to_string(),
-                peer_name: Some(peer_name.to_string()),
-                text: Some(text.to_string()),
-                ..Request::default()
-            },
-        )?;
-        if response.ok == Some(true) {
-            Ok(())
-        } else {
-            Err(response
-                .error
-                .unwrap_or_else(|| "Engine returned an error with no message".to_string()))
-        }
+        session
+            .send_jobs
+            .send(SendJob {
+                peer_name: peer_name.to_string(),
+                text: text.to_string(),
+            })
+            .map_err(|_error| "send worker is gone (Engine connection closed)".to_string())
     }
 }
 
@@ -658,7 +762,7 @@ fn sibling_engine_binary_path() -> Result<PathBuf, String> {
 mod tests {
     use super::EngineConnection;
     #[cfg(feature = "gui")]
-    use super::{EngineEvent, EngineSession, Request, spawn_reader_thread};
+    use super::{EngineEvent, EngineSession, Request, spawn_reader_thread, spawn_send_worker};
     #[cfg(feature = "gui")]
     use std::cell::RefCell;
     #[cfg(feature = "gui")]
@@ -946,13 +1050,24 @@ mod tests {
         let stream = UnixStream::connect(&socket_path)?;
         let _ = std::fs::remove_file(&socket_path);
         let read_stream = stream.try_clone()?;
+        let write_stream = stream.try_clone()?;
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let (event_tx, _event_rx) = async_channel::unbounded();
-        let reader_thread = spawn_reader_thread(read_stream, pending.clone(), event_tx);
+        let reader_thread = spawn_reader_thread(read_stream, pending.clone(), event_tx.clone());
+        let (send_jobs, send_jobs_rx) = std::sync::mpsc::channel();
+        let send_worker = spawn_send_worker(
+            write_stream,
+            Arc::new(AtomicU64::new(10_000)),
+            pending.clone(),
+            event_tx,
+            send_jobs_rx,
+        );
         let session = EngineSession {
             next_request_id: Arc::new(AtomicU64::new(1)),
             pending,
             _reader_thread: reader_thread,
+            send_jobs,
+            _send_worker: send_worker,
         };
         Ok((EngineConnection { stream }, session))
     }
@@ -985,15 +1100,26 @@ mod tests {
         let stream = UnixStream::connect(&socket_path)?;
         let _ = std::fs::remove_file(&socket_path);
         let read_stream = stream.try_clone()?;
+        let write_stream = stream.try_clone()?;
         let mut connection = EngineConnection { stream };
 
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let (event_tx, _event_rx) = async_channel::unbounded();
-        let reader_thread = spawn_reader_thread(read_stream, pending.clone(), event_tx);
+        let reader_thread = spawn_reader_thread(read_stream, pending.clone(), event_tx.clone());
+        let (send_jobs, send_jobs_rx) = std::sync::mpsc::channel();
+        let send_worker = spawn_send_worker(
+            write_stream,
+            Arc::new(AtomicU64::new(10_000)),
+            pending.clone(),
+            event_tx,
+            send_jobs_rx,
+        );
         let session = EngineSession {
             next_request_id: Arc::new(AtomicU64::new(1)),
             pending,
             _reader_thread: reader_thread,
+            send_jobs,
+            _send_worker: send_worker,
         };
 
         let response = connection.session_request(

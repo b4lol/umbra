@@ -9,6 +9,7 @@
 //! and `docs/superpowers/specs/2026-09-15-engine-ui-separation-design.md`.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -255,7 +256,41 @@ fn build_window(
                     error_label.set_label(&format!("session start failed: {message}"));
                     error_label.set_visible(true);
                 }
+                // Phase 3 chat area: per-peer message log + compose row.
+                // The log's text buffers live in `chat_logs` (one per
+                // peer name); `selected_peer` tracks the sidebar
+                // selection the compose row sends to.
+                let selected_peer: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+                let chat_logs: Rc<RefCell<HashMap<String, String>>> =
+                    Rc::new(RefCell::new(HashMap::new()));
+                let chat_with_label = gtk4::Label::new(Some("no peer selected"));
+                let log_view = gtk4::TextView::builder()
+                    .editable(false)
+                    .cursor_visible(false)
+                    .wrap_mode(gtk4::WrapMode::WordChar)
+                    .build();
+                let log_scroll = gtk4::ScrolledWindow::builder()
+                    .child(&log_view)
+                    .min_content_height(160)
+                    .vexpand(true)
+                    .build();
+                let compose_entry = gtk4::Entry::builder()
+                    .placeholder_text("Message…")
+                    .build();
+                let send_button = gtk4::Button::builder().label("Send").build();
+                let chat_box = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+                chat_box.append(&chat_with_label);
+                chat_box.append(&log_scroll);
+                let compose_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+                compose_entry.set_hexpand(true);
+                compose_row.append(&compose_entry);
+                compose_row.append(&send_button);
+                chat_box.append(&compose_row);
+
                 let status_label_for_events = status_label.clone();
+                let chat_logs_for_events = chat_logs.clone();
+                let selected_peer_for_events = selected_peer.clone();
+                let log_view_for_events = log_view.clone();
                 // glib 0.22 removed `MainContext::channel`; the event
                 // receiver is consumed by a future on the default main
                 // context instead (dropping the returned `JoinHandle`
@@ -263,16 +298,73 @@ fn build_window(
                 // until the channel closes at Engine exit).
                 gtk4::glib::MainContext::default().spawn_local(async move {
                     while let Ok(event) = event_rx.recv().await {
-                        let umbra_gui::engine_client::EngineEvent::Ready(address) = event;
-                        status_label_for_events.set_label(
-                            "bootstrapped — onion service ready (address redacted client-side)",
-                        );
-                        let _ = address; // Phase 2: not yet displayed/copyable; Phase 3+ UI work.
+                        match event {
+                            umbra_gui::engine_client::EngineEvent::Ready(address) => {
+                                status_label_for_events.set_label(
+                                    "bootstrapped — onion service ready (address redacted client-side)",
+                                );
+                                let _ = address; // Not yet displayed/copyable; Phase 3+ UI work.
+                            }
+                            umbra_gui::engine_client::EngineEvent::Sent(_peer) => {
+                                // The composed line was already echoed to
+                                // the log at click time; per the honest
+                                // caveat on `EngineEvent::Sent`, there is
+                                // no stronger delivery signal to show.
+                            }
+                            umbra_gui::engine_client::EngineEvent::SendError(peer, message) => {
+                                append_chat_line(
+                                    &chat_logs_for_events,
+                                    &selected_peer_for_events,
+                                    &log_view_for_events,
+                                    &peer,
+                                    &format!("send failed: {message}"),
+                                );
+                            }
+                        }
                     }
                 });
-                let (peer_panel, _refresh) =
-                    build_peer_panel(engine_client_for_peers.clone(), &window_for_peers);
+                let (peer_panel, _refresh) = build_peer_panel(
+                    engine_client_for_peers.clone(),
+                    &window_for_peers,
+                    selected_peer.clone(),
+                    chat_with_label.clone(),
+                    log_view.clone(),
+                    chat_logs.clone(),
+                );
                 identity_container.append(&peer_panel);
+                identity_container.append(&chat_box);
+
+                let engine_client_for_send = engine_client_for_peers.clone();
+                send_button.connect_clicked(move |_button| {
+                    let peer = selected_peer.borrow().clone();
+                    let text = compose_entry.text().to_string();
+                    if text.is_empty() {
+                        return;
+                    }
+                    let Some(peer) = peer else {
+                        return;
+                    };
+                    let send_result = engine_client_for_send.borrow().send(&peer, &text);
+                    match send_result {
+                        Ok(()) => {
+                            append_chat_line(
+                                &chat_logs,
+                                &selected_peer,
+                                &log_view,
+                                &peer,
+                                &format!("me: {text}"),
+                            );
+                            compose_entry.set_text("");
+                        }
+                        Err(message) => append_chat_line(
+                            &chat_logs,
+                            &selected_peer,
+                            &log_view,
+                            &peer,
+                            &format!("send failed: {message}"),
+                        ),
+                    }
+                });
                 stack_for_closure.set_visible_child_name("identity");
             }
             Err(message) => {
@@ -289,14 +381,54 @@ fn build_window(
     window.present();
 }
 
+/// Appends one line to `peer`'s chat log buffer, and re-renders the
+/// log view when that peer is the currently selected one. Shared by
+/// the send button (own echo), the event loop (send failures), and
+/// (Phase 4) inbound messages.
+fn append_chat_line(
+    chat_logs: &Rc<RefCell<HashMap<String, String>>>,
+    selected_peer: &Rc<RefCell<Option<String>>>,
+    log_view: &gtk4::TextView,
+    peer: &str,
+    line: &str,
+) {
+    chat_logs
+        .borrow_mut()
+        .entry(peer.to_string())
+        .or_default()
+        .push_str(&format!("{line}\n"));
+    if selected_peer.borrow().as_deref() == Some(peer) {
+        let text = chat_logs.borrow().get(peer).cloned().unwrap_or_default();
+        log_view.buffer().set_text(&text);
+    }
+}
+
+/// Renders `peer`'s whole log buffer into the log view (used when the
+/// sidebar selection changes).
+fn render_chat_log(
+    chat_logs: &Rc<RefCell<HashMap<String, String>>>,
+    log_view: &gtk4::TextView,
+    peer: Option<&str>,
+) {
+    let text = peer
+        .and_then(|peer| chat_logs.borrow().get(peer).cloned())
+        .unwrap_or_default();
+    log_view.buffer().set_text(&text);
+}
+
 /// Builds the peer-list panel: a heading, a `ListBox` of paired peer
 /// names, and an "Add peer" button. Returns the panel widget and a
 /// `Rc<dyn Fn()>` that re-fetches `list_peers` and repopulates the
 /// `ListBox` — called once here to populate it initially, and again
-/// after a successful pairing (Step 3).
+/// after a successful pairing (Step 3). Selecting a row binds the chat
+/// area (compose target label + per-peer log view) to that peer.
 fn build_peer_panel(
     engine_client: Rc<RefCell<EngineClient>>,
     window: &adw::ApplicationWindow,
+    selected_peer: Rc<RefCell<Option<String>>>,
+    chat_with_label: gtk4::Label,
+    log_view: gtk4::TextView,
+    chat_logs: Rc<RefCell<HashMap<String, String>>>,
 ) -> (gtk4::Box, Rc<dyn Fn()>) {
     let panel = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
     let heading = gtk4::Label::builder()
@@ -311,9 +443,15 @@ fn build_peer_panel(
     panel.append(&peer_error_label);
     panel.append(&add_button);
 
+    // The rows currently shown, in order — `connect_row_selected`
+    // hands back an index, not the name, so the selection handler
+    // looks the name up here. Replaced wholesale by each refresh.
+    let listed_names: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+
     let list_box_for_refresh = list_box.clone();
     let peer_error_label_for_refresh = peer_error_label.clone();
     let engine_client_for_refresh = engine_client.clone();
+    let listed_names_for_refresh = listed_names.clone();
     let refresh: Rc<dyn Fn()> = Rc::new(move || {
         while let Some(row) = list_box_for_refresh.row_at_index(0) {
             list_box_for_refresh.remove(&row);
@@ -321,6 +459,7 @@ fn build_peer_panel(
         match engine_client_for_refresh.borrow_mut().list_peers() {
             Ok(names) => {
                 peer_error_label_for_refresh.set_visible(false);
+                *listed_names_for_refresh.borrow_mut() = names.clone();
                 for name in names {
                     list_box_for_refresh.append(&gtk4::Label::new(Some(&name)));
                 }
@@ -332,6 +471,20 @@ fn build_peer_panel(
         }
     });
     refresh();
+
+    let listed_names_for_select = listed_names.clone();
+    list_box.connect_row_selected(move |_list_box, row| {
+        let selected = row.and_then(|row| {
+            let index = usize::try_from(row.index()).ok()?;
+            listed_names_for_select.borrow().get(index).cloned()
+        });
+        chat_with_label.set_label(&match selected.as_deref() {
+            Some(name) => format!("chatting with: {name}"),
+            None => "no peer selected".to_string(),
+        });
+        render_chat_log(&chat_logs, &log_view, selected.as_deref());
+        *selected_peer.borrow_mut() = selected;
+    });
 
     let window_for_dialog = window.clone();
     let engine_client_for_dialog = engine_client.clone();

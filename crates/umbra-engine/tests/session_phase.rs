@@ -152,9 +152,9 @@ fn responses_are_untagged_before_unlock_and_tagged_after()
 }
 
 #[test]
-fn send_stub_is_tagged_and_not_yet_implemented()
+fn send_to_an_unknown_peer_is_tagged_and_fails_cleanly()
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let dir = temp_case_dir("send-stub");
+    let dir = temp_case_dir("send-unknown-peer");
     let keystore_path = dir.join("keystore.enc");
     let socket_path = dir.join("engine.sock");
     let tor_dir = dir.join("tor");
@@ -192,7 +192,14 @@ fn send_stub_is_tagged_and_not_yet_implemented()
     assert_eq!(send_response.kind, "response");
     assert_eq!(send_response.request_id, Some(2));
     assert_eq!(send_response.ok, Some(false));
-    assert_eq!(send_response.error.as_deref(), Some("not yet implemented"));
+    // Phase 3: real send — the peer record does not exist, so the
+    // peer lookup fails before any network work.
+    assert!(
+        send_response
+            .error
+            .as_deref()
+            .is_some_and(|error| !error.is_empty())
+    );
     Ok(())
 }
 

@@ -79,9 +79,8 @@ pub struct Request {
     /// see [`SessionLine`] doc.
     #[serde(default)]
     pub request_id: Option<u64>,
-    /// Message text for `"send"` (Phase 2: the op is a no-op stub
-    /// that always answers `"not yet implemented"` — real sending is
-    /// Phase 3, which will actually read this field).
+    /// Message text for `"send"` (Phase 3: delivered as one PQXDH
+    /// session over the shared bootstrapped Tor transport).
     #[serde(default)]
     pub text: Option<String>,
 }
@@ -429,7 +428,10 @@ mod tests {
         let session_line =
             SessionLine::from_response(Some(3), Response::payload("own-payload".to_string()));
         let line = serde_json::to_string(&session_line)?;
-        assert_eq!(line, r#"{"kind":"response","request_id":3,"ok":true,"payload":"own-payload"}"#);
+        assert_eq!(
+            line,
+            r#"{"kind":"response","request_id":3,"ok":true,"payload":"own-payload"}"#
+        );
         let decoded: SessionLine = serde_json::from_str(&line)?;
         assert_eq!(decoded.kind, "response");
         assert_eq!(decoded.request_id, Some(3));
@@ -443,11 +445,17 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let session_line = SessionLine::ready("onion-address-placeholder".to_string());
         let line = serde_json::to_string(&session_line)?;
-        assert_eq!(line, r#"{"kind":"event","event":"ready","address":"onion-address-placeholder"}"#);
+        assert_eq!(
+            line,
+            r#"{"kind":"event","event":"ready","address":"onion-address-placeholder"}"#
+        );
         let decoded: SessionLine = serde_json::from_str(&line)?;
         assert_eq!(decoded.kind, "event");
         assert_eq!(decoded.event.as_deref(), Some("ready"));
-        assert_eq!(decoded.address.as_deref(), Some("onion-address-placeholder"));
+        assert_eq!(
+            decoded.address.as_deref(),
+            Some("onion-address-placeholder")
+        );
         assert_eq!(decoded.request_id, None);
         assert_eq!(decoded.ok, None);
         Ok(())

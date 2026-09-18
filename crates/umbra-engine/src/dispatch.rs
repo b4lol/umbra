@@ -27,6 +27,16 @@ pub struct Session {
     identity: Option<(IdentityBundle, PathBuf)>,
 }
 
+impl Session {
+    /// This session's peers directory, `None` until a successful
+    /// unlock (the gate every session-phase op checks first).
+    fn peers_dir(&self) -> Option<&Path> {
+        self.identity
+            .as_ref()
+            .map(|(_, peers_dir)| peers_dir.as_path())
+    }
+}
+
 /// Dispatches one decoded [`Request`] against the connection's
 /// [`Session`], returning the [`Response`] to send back. Never fails
 /// itself — every failure mode becomes an `Ok` [`Response`] with
@@ -40,7 +50,10 @@ pub fn dispatch(request: &Request, session: &mut Session) -> Response {
         "pair_payload" => dispatch_pair_payload(session),
         "pair_import" => dispatch_pair_import(request, session),
         "pair_confirm" => dispatch_pair_confirm(request, session),
-        "send" => Response::err("not yet implemented"),
+        // Phase 3: `"send"` is handled by [`dispatch_async`] (it awaits
+        // a bounded onion connect); reaching it here is a dispatcher
+        // wiring bug, not a client error.
+        "send" => Response::err("send requires the async dispatch path"),
         other => Response::err(format!("unknown operation: {other}")),
     }
 }
@@ -204,9 +217,66 @@ fn dispatch_pair_confirm(request: &Request, session: &Session) -> Response {
     }
 }
 
+/// Implements `"send"` (TODO B.3 GUI messaging design, Phase 3):
+/// loads the named peer's record (its `.onion` address must be on
+/// file), then delivers `text` as one PQXDH session over the shared,
+/// already-bootstrapped Tor transport. Async because `send_over`
+/// awaits a bounded (120 s) onion connect. `transport` is `None` until
+/// the background bootstrap task publishes the `"ready"` event — a
+/// send that arrives earlier fails cleanly rather than queuing.
+///
+/// "Sent" means Arti's stream accepted the frames, not end-to-end
+/// delivery confirmation — the same honest caveat `tui.rs`'s own
+/// `UiEvent::Sent` documents.
+async fn dispatch_send(
+    request: &Request,
+    session: &Session,
+    transport: Option<&std::sync::Arc<umbra_net::tor::TorTransport>>,
+) -> Response {
+    let Some(peers_dir) = session.peers_dir() else {
+        return Response::err("not unlocked yet");
+    };
+    let Some(peer_name) = request.peer_name.as_deref() else {
+        return Response::err("missing peer_name");
+    };
+    let Some(text) = request.text.as_deref() else {
+        return Response::err("missing text");
+    };
+    let peer = match umbra_cli::peers::load_peer(peers_dir, peer_name) {
+        Ok(peer) => peer,
+        Err(error) => return Response::err(error.to_string()),
+    };
+    let Some(onion) = peer.onion.clone() else {
+        return Response::err("peer has no onion address on record");
+    };
+    let Some(transport) = transport else {
+        return Response::err("Tor is still bootstrapping");
+    };
+    match umbra_cli::tor_send::send_over(transport, &peer, &onion, text.as_bytes()).await {
+        Ok((_frames, _bytes)) => Response::success(),
+        Err(error) => Response::err(error.to_string()),
+    }
+}
+
+/// Async entry point for `"send"`, split from the synchronous
+/// [`dispatch`] because delivery awaits a bounded onion connect (and
+/// needs the shared transport, which is session-loop state, not
+/// [`Session`] state). Every failure mode becomes an `Ok` [`Response`]
+/// with `ok: false`, exactly like [`dispatch`].
+pub async fn dispatch_async(
+    request: &Request,
+    session: &Session,
+    transport: Option<&std::sync::Arc<umbra_net::tor::TorTransport>>,
+) -> Response {
+    match request.op.as_str() {
+        "send" => dispatch_send(request, session, transport).await,
+        other => Response::err(format!("unknown async operation: {other}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Session, dispatch};
+    use super::{Session, dispatch, dispatch_async};
     use crate::protocol::Request;
     use umbra_cli::keystore::{HARDWARE_KEY_CHALLENGE, save_with_hardware_key};
     use umbra_crypto::keys::IdentityBundle;
@@ -397,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn send_is_a_not_yet_implemented_stub() {
+    fn send_via_sync_dispatch_is_a_wiring_error() {
         let mut session = Session::default();
         let response = dispatch(
             &Request {
@@ -407,7 +477,122 @@ mod tests {
             &mut session,
         );
         assert!(!response.ok);
-        assert_eq!(response.error.as_deref(), Some("not yet implemented"));
+        assert_eq!(
+            response.error.as_deref(),
+            Some("send requires the async dispatch path")
+        );
+    }
+
+    #[tokio::test]
+    async fn send_before_unlock_fails() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let session = Session::default();
+        let response = dispatch_async(
+            &Request {
+                op: "send".to_string(),
+                peer_name: Some("alice".to_string()),
+                text: Some("hello".to_string()),
+                ..Request::default()
+            },
+            &session,
+            None,
+        )
+        .await;
+        assert!(!response.ok);
+        assert_eq!(response.error.as_deref(), Some("not unlocked yet"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn send_before_bootstrap_completes_fails()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let path = temp_keystore_path("send-no-transport");
+        let bundle = IdentityBundle::generate();
+        umbra_cli::keystore::save(&path, b"pw", &bundle)?;
+        let mut session = Session::default();
+        assert!(
+            dispatch(
+                &Request {
+                    op: "unlock".to_string(),
+                    keystore_path: Some(path.clone()),
+                    passphrase: Some("pw".to_string()),
+                    ..Request::default()
+                },
+                &mut session,
+            )
+            .ok
+        );
+        let response = dispatch_async(
+            &Request {
+                op: "send".to_string(),
+                peer_name: Some("alice".to_string()),
+                text: Some("hello".to_string()),
+                ..Request::default()
+            },
+            &session,
+            None,
+        )
+        .await;
+        std::fs::remove_file(&path)?;
+        assert!(!response.ok);
+        // The peer record does not exist, so the peer lookup fails
+        // before the transport check is even reached.
+        assert!(response.error.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn send_to_a_peer_without_onion_fails_with_a_clear_reason()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let path = temp_keystore_path("send-no-onion");
+        let bundle = IdentityBundle::generate();
+        umbra_cli::keystore::save(&path, b"pw", &bundle)?;
+        let mut session = Session::default();
+        assert!(
+            dispatch(
+                &Request {
+                    op: "unlock".to_string(),
+                    keystore_path: Some(path.clone()),
+                    passphrase: Some("pw".to_string()),
+                    ..Request::default()
+                },
+                &mut session,
+            )
+            .ok
+        );
+        let peer_bundle = IdentityBundle::generate();
+        let peer_payload = umbra_cli::pairing::payload_for(&peer_bundle)?;
+        assert!(
+            dispatch(
+                &Request {
+                    op: "pair_confirm".to_string(),
+                    peer_name: Some("alice".to_string()),
+                    peer_payload: Some(peer_payload),
+                    ..Request::default()
+                },
+                &mut session,
+            )
+            .ok
+        );
+        let response = dispatch_async(
+            &Request {
+                op: "send".to_string(),
+                peer_name: Some("alice".to_string()),
+                text: Some("hello".to_string()),
+                ..Request::default()
+            },
+            &session,
+            None,
+        )
+        .await;
+        let peers_dir = path.parent().ok_or("no parent")?.join("peers");
+        std::fs::remove_file(&path)?;
+        let _ = std::fs::remove_dir_all(&peers_dir);
+        assert!(!response.ok);
+        assert_eq!(
+            response.error.as_deref(),
+            Some("peer has no onion address on record")
+        );
+        Ok(())
     }
 
     #[test]
