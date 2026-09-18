@@ -28,6 +28,12 @@ const APPLICATION_ID: &str = "org.umbra.Gui";
 /// strict character set), so it can never collide with a real one.
 const INBOX_PEER: &str = "· inbox (unattributed) ·";
 
+/// Per-conversation log bound (Phase 5), mirroring `tui.rs`'s
+/// `MAX_LOG_LINES = 400`: a chat log is attacker-influenced content
+/// arriving without user action, so its memory footprint must stay
+/// bounded exactly like the TUI's.
+const MAX_CHAT_LOG_LINES: usize = 400;
+
 /// `umbra-gui`'s command-line arguments: only the keystore path — the
 /// passphrase itself is entered interactively in the GUI (spec
 /// decision, 2026-09-13: deliberately NOT a `--passphrase-file` flag
@@ -286,6 +292,33 @@ fn build_window(
                     .placeholder_text("Message…")
                     .build();
                 let send_button = gtk4::Button::builder().label("Send").build();
+                // Phase 5: disabled-with-a-reason states (mirrors
+                // tui.rs's inline messages). `tor_ready` flips on the
+                // Ready event; the reason shows as the compose box's
+                // placeholder text.
+                let tor_ready = Rc::new(std::cell::Cell::new(false));
+                let update_send_state: Rc<dyn Fn()> = {
+                    let send_button = send_button.clone();
+                    let compose_entry = compose_entry.clone();
+                    let selected_peer = selected_peer.clone();
+                    let tor_ready = tor_ready.clone();
+                    Rc::new(move || {
+                        let selected = selected_peer.borrow().clone();
+                        let (sensitive, reason) = if !tor_ready.get() {
+                            (false, "bootstrapping Tor — sending not available yet")
+                        } else if selected.is_none() {
+                            (false, "no peer selected")
+                        } else if selected.as_deref() == Some(INBOX_PEER) {
+                            (false, "the inbox is receive-only")
+                        } else {
+                            (true, "Message…")
+                        };
+                        send_button.set_sensitive(sensitive);
+                        compose_entry.set_sensitive(sensitive);
+                        compose_entry.set_placeholder_text(Some(reason));
+                    })
+                };
+                update_send_state();
                 let chat_box = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
                 chat_box.append(&chat_with_label);
                 chat_box.append(&log_scroll);
@@ -294,11 +327,29 @@ fn build_window(
                 compose_row.append(&compose_entry);
                 compose_row.append(&send_button);
                 chat_box.append(&compose_row);
+                // Phase 5: persistent privacy/trust footer (mirrors the
+                // TUI's always-on notice — the operator sees the
+                // anonymity tier, always, no opt-out). Tor is this
+                // increment's only transport.
+                let privacy_footer = gtk4::Label::builder()
+                    .label(
+                        "Tor onion service · anonymity: STRONG (both endpoints hidden) · \
+                         content: STRONG (PQXDH X25519 + ML-KEM-768, ML-DSA identity) · \
+                         metadata protection rests on Tor itself",
+                    )
+                    .wrap(true)
+                    .wrap_mode(gtk4::pango::WrapMode::WordChar)
+                    .halign(gtk4::Align::Start)
+                    .css_classes(["dim-label", "caption"])
+                    .build();
+                chat_box.append(&privacy_footer);
 
                 let status_label_for_events = status_label.clone();
                 let chat_logs_for_events = chat_logs.clone();
                 let selected_peer_for_events = selected_peer.clone();
                 let log_view_for_events = log_view.clone();
+                let tor_ready_for_events = tor_ready.clone();
+                let update_send_state_for_events = update_send_state.clone();
                 // glib 0.22 removed `MainContext::channel`; the event
                 // receiver is consumed by a future on the default main
                 // context instead (dropping the returned `JoinHandle`
@@ -312,6 +363,8 @@ fn build_window(
                                     "bootstrapped — onion service ready (address redacted client-side)",
                                 );
                                 let _ = address; // Not yet displayed/copyable; Phase 3+ UI work.
+                                tor_ready_for_events.set(true);
+                                update_send_state_for_events();
                             }
                             umbra_gui::engine_client::EngineEvent::Sent(_peer) => {
                                 // The composed line was already echoed to
@@ -351,6 +404,7 @@ fn build_window(
                     chat_with_label.clone(),
                     log_view.clone(),
                     chat_logs.clone(),
+                    update_send_state.clone(),
                 );
                 identity_container.append(&peer_panel);
                 identity_container.append(&chat_box);
@@ -423,6 +477,20 @@ fn append_chat_line(
         .entry(peer.to_string())
         .or_default()
         .push_str(&format!("{line}\n"));
+    // Bounded memory (Phase 5): drop whole oldest lines once a log
+    // exceeds MAX_CHAT_LOG_LINES.
+    let mut logs = chat_logs.borrow_mut();
+    if let Some(buffer) = logs.get_mut(peer) {
+        let overflow = buffer.lines().count().saturating_sub(MAX_CHAT_LOG_LINES);
+        if overflow > 0 {
+            let byte_cut = buffer
+                .match_indices('\n')
+                .nth(overflow.saturating_sub(1))
+                .map_or(0, |(index, _)| index.saturating_add(1));
+            buffer.drain(..byte_cut);
+        }
+    }
+    drop(logs);
     if selected_peer.borrow().as_deref() == Some(peer) {
         let text = chat_logs.borrow().get(peer).cloned().unwrap_or_default();
         log_view.buffer().set_text(&text);
@@ -455,6 +523,7 @@ fn build_peer_panel(
     chat_with_label: gtk4::Label,
     log_view: gtk4::TextView,
     chat_logs: Rc<RefCell<HashMap<String, String>>>,
+    on_selection_changed: Rc<dyn Fn()>,
 ) -> (gtk4::Box, Rc<dyn Fn()>) {
     let panel = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
     let heading = gtk4::Label::builder()
@@ -515,6 +584,7 @@ fn build_peer_panel(
         });
         render_chat_log(&chat_logs, &log_view, selected.as_deref());
         *selected_peer.borrow_mut() = selected;
+        on_selection_changed();
     });
 
     let window_for_dialog = window.clone();
