@@ -101,13 +101,23 @@ fn send_requests_over_one_connection(
         writer
             .write_all(line.as_bytes())
             .map_err(|error| error.to_string())?;
-        let mut response_line = String::new();
-        reader
-            .read_line(&mut response_line)
-            .map_err(|error| error.to_string())?;
-        responses.push(
-            serde_json::from_str(response_line.trim_end()).map_err(|error| error.to_string())?,
-        );
+        // Post-unlock, unprompted session-phase EVENT lines (e.g. a
+        // `session-error` from the background Tor bootstrap failing in
+        // this hermetic test environment) can interleave with
+        // responses — skip them until this request's own line arrives.
+        let response = loop {
+            let mut response_line = String::new();
+            reader
+                .read_line(&mut response_line)
+                .map_err(|error| error.to_string())?;
+            let value: serde_json::Value = serde_json::from_str(response_line.trim_end())
+                .map_err(|error| error.to_string())?;
+            if value.get("kind").and_then(|kind| kind.as_str()) == Some("event") {
+                continue;
+            }
+            break serde_json::from_value(value).map_err(|error| error.to_string())?;
+        };
+        responses.push(response);
     }
     Ok(responses)
 }
