@@ -339,7 +339,29 @@ async fn serve_connection(
     let (read_half, write_half) = tokio_stream.into_split();
     let mut reader = tokio::io::BufReader::new(read_half);
 
-    let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    // BOUNDED, not `unbounded_channel`: this channel carries both this
+    // loop's own responses AND unprompted events from the background
+    // bootstrap/inbound-accept task (`run_tor_bootstrap`), which has
+    // no other backpressure signal of its own. An unbounded channel
+    // would let a GUI that's slow to read grow this process's memory
+    // without limit.
+    //
+    // Backpressure (`.send(...).await`), not drop-on-full, is the
+    // correct choice here — traced deliberately, not assumed: EVERY
+    // line on this channel either answers a specific `request_id`
+    // (which `umbra-gui`'s `session_request` blocks on, unbounded, no
+    // timeout) or is an event the GUI has no other way to learn about
+    // (`ready`/`inbound-text`/`session-error`). Silently dropping a
+    // "response" line would hang that caller forever — reintroducing
+    // exactly the freeze this same fix pass closes on the GUI side
+    // (see `engine_client.rs`'s `ConnectionLost`) — and dropping an
+    // event line would lose a message with no trace. Blocking the
+    // sender instead cannot deadlock: the only consumer is
+    // `writer_handle` below, a plain forward-to-socket loop with no
+    // dependency back on this read loop or on `run_tor_bootstrap`, so
+    // backpressure here only ever slows the producer down to the
+    // GUI's own read rate — it never cycles back on itself.
+    let (line_tx, mut line_rx) = tokio::sync::mpsc::channel::<String>(LINE_QUEUE_CAPACITY);
     let writer_handle: tokio::task::JoinHandle<Result<(), std::io::Error>> =
         tokio::spawn(async move {
             use tokio::io::AsyncWriteExt as _;
@@ -384,7 +406,7 @@ async fn serve_connection(
                     }
                     Err(error) => break Err(EngineError::Json(error)),
                 };
-                if line_tx.send(encoded).is_err() {
+                if line_tx.send(encoded).await.is_err() {
                     break Ok(());
                 }
                 continue;
@@ -392,14 +414,56 @@ async fn serve_connection(
         };
         let request_id = request.request_id;
         let is_unlock = request.op == "unlock";
-        // Phase 3: `"send"` awaits a bounded onion connect, so it goes
-        // through the async dispatch path; every other op stays on the
-        // synchronous dispatcher (with its keystore/hw path checks).
-        let response = if request.op == "send" {
-            dispatch::dispatch_async(&request, &session, transport_cell.get()).await
-        } else {
-            dispatch_checked(&request, keystore_dir, hw_module_dir, &mut session)
-        };
+        // Phase 3 fix (this review pass): `"send"` awaits a bounded
+        // (up to ~120 s) onion connect, so it must NOT be awaited
+        // inline here — doing so used to stall this WHOLE read loop
+        // (including every OTHER in-flight request on this same
+        // connection, none of which have a timeout on the GUI side
+        // either) for as long as the connect takes. Spawn it instead:
+        // the spawned task writes its own tagged (or, pre-session,
+        // bare) response line through the SAME `line_tx` every other
+        // response already goes through, using the existing
+        // `request_id` correlation the GUI's `session_request` relies
+        // on — an out-of-order response is already handled correctly
+        // by that mechanism, this just produces one. Only an OWNED
+        // `peers_dir` (never the whole `Session`, which holds secret
+        // identity/passphrase material) and a CLONED `Arc<TorTransport>`
+        // cross into the spawned task.
+        if request.op == "send" {
+            let session_started_at_request = session_started;
+            let peers_dir = session.peers_dir().map(Path::to_path_buf);
+            let transport = transport_cell.get().cloned();
+            let request_for_send = request;
+            let send_line_tx = line_tx.clone();
+            tokio::spawn(async move {
+                let response = dispatch::dispatch_async(
+                    &request_for_send,
+                    peers_dir.as_deref(),
+                    transport.as_ref(),
+                )
+                .await;
+                let encoded = if session_started_at_request {
+                    serde_json::to_string(&protocol::SessionLine::from_response(
+                        request_id, response,
+                    ))
+                } else {
+                    serde_json::to_string(&response)
+                };
+                if let Ok(mut encoded) = encoded {
+                    encoded.push('\n');
+                    let _ = send_line_tx.send(encoded).await;
+                }
+                // A JSON-encode failure or a closed `line_tx` here has
+                // no loop left to `break` out of (this is a detached
+                // task) — silently dropping is the correct terminal
+                // behavior, mirroring every other `Err(_) => return`/
+                // `continue` swallow already in this file for the
+                // same "never expected in practice, and there is no
+                // right corrective action anyway" reason.
+            });
+            continue;
+        }
+        let response = dispatch_checked(&request, keystore_dir, hw_module_dir, &mut session);
 
         if session_started {
             // Session phase: every response is tagged.
@@ -411,7 +475,7 @@ async fn serve_connection(
                 }
                 Err(error) => break Err(EngineError::Json(error)),
             };
-            if line_tx.send(encoded).is_err() {
+            if line_tx.send(encoded).await.is_err() {
                 break Ok(());
             }
         } else {
@@ -424,7 +488,7 @@ async fn serve_connection(
                 }
                 Err(error) => break Err(EngineError::Json(error)),
             };
-            if line_tx.send(encoded).is_err() {
+            if line_tx.send(encoded).await.is_err() {
                 break Ok(());
             }
             // Captured before encoding (rather than re-reading
@@ -470,6 +534,12 @@ async fn serve_connection(
 /// both 32).
 const INBOUND_QUEUE_CAPACITY: usize = 32;
 
+/// Capacity of `serve_connection`'s own `line_tx`/`line_rx` channel
+/// (see its construction site's own doc comment for why this is
+/// bounded, and why backpressure rather than drop-on-full). Mirrors
+/// [`INBOUND_QUEUE_CAPACITY`]'s own precedent.
+const LINE_QUEUE_CAPACITY: usize = 32;
+
 /// Bootstraps Tor under `tor_dir`, publishes the shared transport into
 /// `transport_cell` (Phase 3: `"send"` ops use it), emits the
 /// `"ready"` event, then runs the inbound accept loop for the rest of
@@ -482,7 +552,7 @@ const INBOUND_QUEUE_CAPACITY: usize = 32;
 /// design, "out of scope").
 async fn run_tor_bootstrap(
     tor_dir: std::path::PathBuf,
-    line_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    line_tx: tokio::sync::mpsc::Sender<String>,
     transport_cell: std::sync::Arc<
         tokio::sync::OnceCell<std::sync::Arc<umbra_net::tor::TorTransport>>,
     >,
@@ -492,16 +562,6 @@ async fn run_tor_bootstrap(
     )>,
 ) {
     use base64::Engine as _;
-    let session_error = |message: String| {
-        eprintln!("umbra-engine: {message}");
-        let mut encoded =
-            match serde_json::to_string(&protocol::SessionLine::session_error(message.clone())) {
-                Ok(encoded) => encoded,
-                Err(_) => return,
-            };
-        encoded.push('\n');
-        let _ = line_tx.send(encoded);
-    };
 
     // Fixed, not operator-configurable: the Engine's onion-service
     // identity lives under `tor_dir`, which is already scoped
@@ -514,18 +574,22 @@ async fn run_tor_bootstrap(
         match umbra_net::tor::TorTransport::bootstrap_persistent_with_pt(&tor_dir, None).await {
             Ok(transport) => transport,
             Err(error) => {
-                session_error(format!("Tor bootstrap failed: {error}"));
+                emit_session_error(&line_tx, format!("Tor bootstrap failed: {error}")).await;
                 return;
             }
         };
     if let Err(error) = transport.spawn_inbound(ENGINE_ONION_NICKNAME).await {
-        session_error(format!("onion inbound service failed: {error}"));
+        emit_session_error(&line_tx, format!("onion inbound service failed: {error}")).await;
         return;
     }
     let address = match umbra_cli::serve::wait_for_address(&transport).await {
         Ok(address) => address,
         Err(error) => {
-            session_error(format!("onion address publication failed: {error}"));
+            emit_session_error(
+                &line_tx,
+                format!("onion address publication failed: {error}"),
+            )
+            .await;
             return;
         }
     };
@@ -539,14 +603,18 @@ async fn run_tor_bootstrap(
         return;
     };
     encoded.push('\n');
-    let _ = line_tx.send(encoded);
+    let _ = line_tx.send(encoded).await;
 
     // Phase 4: the inbound accept loop. `inbound_material` is `Some`
     // on every real unlock; `None` is unreachable (unlock populates it
     // before the ready event can exist) but handled without a panic
     // per this workspace's lints.
     let Some((seeds, group_context)) = inbound_material else {
-        session_error("inbound loop material missing after unlock".to_string());
+        emit_session_error(
+            &line_tx,
+            "inbound loop material missing after unlock".to_string(),
+        )
+        .await;
         return;
     };
     let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel::<
@@ -581,15 +649,34 @@ async fn run_tor_bootstrap(
             continue;
         };
         encoded.push('\n');
-        if line_tx.send(encoded).is_err() {
+        if line_tx.send(encoded).await.is_err() {
             return; // GUI side gone
         }
     }
     // The forward channel closed — the accept loop ended; surface its
     // own terminal error, if any.
     if let Ok(Err(error)) = loop_handle.await {
-        session_error(format!("inbound loop ended: {error}"));
+        emit_session_error(&line_tx, format!("inbound loop ended: {error}")).await;
     }
+}
+
+/// Encodes and sends one `"session-error"` [`protocol::SessionLine`]
+/// through `line_tx`, also logging it to stderr (this closes Phase
+/// 2's documented gap of bootstrap failures being stderr-only, while
+/// keeping a local trace too). A plain `async fn` rather than a
+/// shared closure over `line_tx`: [`run_tor_bootstrap`]'s several
+/// call sites all `.await` a BOUNDED channel send now (see
+/// `line_tx`'s own construction site in `serve_connection` for why
+/// backpressure, not drop, is correct here), and async closures are
+/// more ceremony than a small free function for the same effect.
+async fn emit_session_error(line_tx: &tokio::sync::mpsc::Sender<String>, message: String) {
+    eprintln!("umbra-engine: {message}");
+    let Ok(mut encoded) = serde_json::to_string(&protocol::SessionLine::session_error(message))
+    else {
+        return;
+    };
+    encoded.push('\n');
+    let _ = line_tx.send(encoded).await;
 }
 
 /// Rejects a request whose `keystore_path` falls outside the

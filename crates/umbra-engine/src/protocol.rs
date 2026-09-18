@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// `op`-tagged enum so an unrecognized `op` can still be PARSED (and
 /// answered with a clean [`Response`] error) instead of failing to
 /// deserialize at all.
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Request {
     /// The requested operation: `"unlock"`, `"list_peers"`,
     /// `"pair_payload"`, `"pair_import"`, or `"pair_confirm"`.

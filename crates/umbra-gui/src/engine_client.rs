@@ -61,8 +61,8 @@ struct Request {
     /// Present for every session-phase request once `start_session`
     /// has been called on this connection.
     request_id: Option<u64>,
-    /// Message text for `"send"` (Phase 2: the Engine always answers
-    /// `"not yet implemented"`; real sending is Phase 3).
+    /// Message text for `"send"` (Phase 3: delivered as one PQXDH
+    /// session over the shared, already-bootstrapped Tor transport).
     text: Option<String>,
 }
 
@@ -94,8 +94,9 @@ struct SessionLine {
     /// `request_id`.
     #[serde(default)]
     request_id: Option<u64>,
-    /// Present when `kind == "event"`: which event. `"ready"` (the
-    /// only one in Phase 2) means Tor bootstrap finished.
+    /// Present when `kind == "event"`: which event. `"ready"` means
+    /// Tor bootstrap finished; `"inbound-text"`/`"session-error"`
+    /// (Phase 4) are the others.
     #[serde(default)]
     event: Option<String>,
     /// Whether the operation succeeded (`kind == "response"`).
@@ -123,6 +124,16 @@ struct SessionLine {
     data: Option<String>,
 }
 
+/// Capacity of the GTK-side event channel (see
+/// [`EngineClient::start_session`]) — bounded so a slow-to-drain GTK
+/// main loop can never make this process's memory grow without
+/// bound. Events are low-frequency (bootstrap ready, a handful of
+/// sends/receives per user action) so this is generous headroom, not
+/// a tight budget; overflow is dropped (see [`forward_or_drop`]), not
+/// something normal operation should ever hit.
+#[cfg(feature = "gui")]
+pub const EVENT_CHANNEL_CAPACITY: usize = 256;
+
 /// An event the GTK main loop can react to — the subset of
 /// [`SessionLine`]'s `"event"` shapes this crate knows about, plus
 /// send outcomes (a `"send"` response is routed through the pending
@@ -149,6 +160,16 @@ pub enum EngineEvent {
     /// Bootstrap or inbound-loop failure (Phase 4) — previously
     /// stderr-only on the Engine side.
     SessionError(String),
+    /// The Engine connection died (EOF or a read/write error on the
+    /// socket) — the Engine process is gone or unreachable. This is
+    /// PERMANENT and terminal for the session: the GUI must show a
+    /// clear, permanent error state and stop (no automatic reconnect
+    /// — restarting a process that owns secret key material behind
+    /// the GUI's back is not something to do silently). Sent right
+    /// before the reader thread drains `pending`, so any in-flight
+    /// [`EngineConnection::session_request`] caller unblocks with an
+    /// error at the same time this event is delivered.
+    ConnectionLost,
 }
 
 /// A protocol-level connection to the Engine, independent of how that
@@ -245,9 +266,18 @@ impl EngineConnection {
         tagged_request.request_id = Some(request_id);
         let mut line = serde_json::to_string(&tagged_request).map_err(|error| error.to_string())?;
         line.push('\n');
-        self.stream
-            .write_all(line.as_bytes())
-            .map_err(|error| error.to_string())?;
+        if let Err(error) = self.stream.write_all(line.as_bytes()) {
+            // The request never reached the Engine, so no response
+            // (tagged or otherwise) will ever arrive for this
+            // request_id — remove the just-inserted waiter now,
+            // rather than leaking one `pending` entry per failed
+            // write (it would otherwise sit there forever, since
+            // nothing else will ever remove it).
+            if let Ok(mut pending) = session.pending.lock() {
+                pending.remove(&request_id);
+            }
+            return Err(error.to_string());
+        }
         rx.recv()
             .map_err(|_error| "Engine connection closed before responding".to_string())
     }
@@ -291,16 +321,62 @@ struct EngineSession {
     _send_worker: std::thread::JoinHandle<()>,
 }
 
+/// Forwards `event` to `event_sender` WITHOUT ever blocking: a full
+/// bounded channel means the GTK main loop is behind, not that the
+/// reader thread should stall (stalling here would stop it from also
+/// draining `"response"` lines, which OTHER in-flight
+/// [`EngineConnection::session_request`] callers are blocked
+/// waiting on — the exact freeze this module's `ConnectionLost`
+/// handling exists to avoid). On overflow the event is dropped and
+/// logged, with a running counter so a burst of drops doesn't spam
+/// stderr silently. Returns `true` if the channel is closed (the GTK
+/// side is gone), signalling the caller should exit its loop.
+#[cfg(feature = "gui")]
+fn forward_or_drop(
+    event_sender: &async_channel::Sender<EngineEvent>,
+    event: EngineEvent,
+    dropped_count: &AtomicU64,
+) -> bool {
+    match event_sender.try_send(event) {
+        Ok(()) => false,
+        Err(async_channel::TrySendError::Full(_)) => {
+            let total = dropped_count
+                .fetch_add(1, Ordering::Relaxed)
+                .saturating_add(1);
+            eprintln!(
+                "umbra-gui: event channel full, dropping one Engine event ({total} dropped \
+                 so far — the GTK main loop is not keeping up)"
+            );
+            false
+        }
+        Err(async_channel::TrySendError::Closed(_)) => true,
+    }
+}
+
 /// Spawns the background reader thread: reads tagged NDJSON lines off
 /// `read_stream` forever, routing `"response"` lines to their waiting
 /// caller (via `pending`) and `"event"` lines to the GTK main loop
-/// (via `event_sender`). Exits cleanly on EOF or any I/O/parse error
-/// on this stream (the Engine process going away).
+/// (via `event_sender`). Exits on EOF or any I/O/parse error on this
+/// stream (the Engine process going away) — a malformed/unparseable
+/// LINE is skipped and the loop continues (it can't carry a
+/// trustworthy request_id or event either way), but a genuine
+/// read failure or EOF is fatal for the connection and ends the loop.
+///
+/// On exit, BEFORE returning: sends [`EngineEvent::ConnectionLost`]
+/// (so the GTK side can show a permanent error state), then locks
+/// `pending` and drains it — dropping every waiting
+/// [`std::sync::mpsc::Sender`], which makes every blocked
+/// `rx.recv()` in [`EngineConnection::session_request`] return `Err`
+/// immediately instead of hanging forever (the Engine dying used to
+/// freeze the GTK main thread permanently, since `session_request`
+/// runs on it and nothing else would ever signal those channels
+/// closed).
 ///
 /// `event_sender` is an [`async_channel::Sender`] rather than glib's
-/// removed-in-0.22 `glib::Sender`: `send_blocking` works from this
-/// non-async thread, and the GTK side consumes the paired receiver in
-/// a `glib::MainContext::spawn_local` future (see `main.rs`).
+/// removed-in-0.22 `glib::Sender`: `try_send`/`send_blocking` work
+/// from this non-async thread, and the GTK side consumes the paired
+/// receiver in a `glib::MainContext::spawn_local` future (see
+/// `main.rs`).
 #[cfg(feature = "gui")]
 fn spawn_reader_thread(
     read_stream: UnixStream,
@@ -308,12 +384,22 @@ fn spawn_reader_thread(
     event_sender: async_channel::Sender<EngineEvent>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
+        let dropped_count = AtomicU64::new(0);
         let mut reader = BufReader::new(read_stream);
         let mut line = String::new();
         loop {
             line.clear();
             match reader.read_line(&mut line) {
-                Ok(0) | Err(_) => return,
+                Ok(0) | Err(_) => {
+                    let _ = event_sender.try_send(EngineEvent::ConnectionLost);
+                    if let Ok(mut pending) = pending.lock() {
+                        // `drain()` drops every `Sender` it yields —
+                        // exactly what unblocks each waiting
+                        // `rx.recv()`.
+                        let _ = pending.drain();
+                    }
+                    return;
+                }
                 Ok(_) => {}
             }
             let Ok(parsed) = serde_json::from_str::<SessionLine>(line.trim_end()) else {
@@ -335,27 +421,29 @@ fn spawn_reader_thread(
                 "event" => {
                     let event = match parsed.event.as_deref() {
                         Some("ready") => parsed.address.clone().map(EngineEvent::Ready),
-                        Some("inbound-text") => parsed
-                            .data
-                            .as_deref()
-                            .and_then(|data| {
-                                use base64::Engine as _;
-                                base64::engine::general_purpose::URL_SAFE_NO_PAD
-                                    .decode(data)
-                                    .ok()
-                            })
-                            // Text frames only (the messenger layer's
-                            // own contract); non-UTF-8 payloads are
-                            // dropped rather than lossy-rendered.
-                            .and_then(|bytes| String::from_utf8(bytes).ok())
-                            .map(EngineEvent::InboundText),
+                        Some("inbound-text") => parsed.data.as_deref().and_then(|data| {
+                            use base64::Engine as _;
+                            let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                                .decode(data)
+                                .ok()?;
+                            // Matches `tui.rs`'s own established
+                            // precedent for this exact payload type:
+                            // a non-UTF-8 inbound text still produces
+                            // a visible (if lossy) line rather than
+                            // silently vanishing with no trace.
+                            Some(EngineEvent::InboundText(
+                                String::from_utf8_lossy(&bytes).into_owned(),
+                            ))
+                        }),
                         Some("session-error") => {
                             parsed.error.clone().map(EngineEvent::SessionError)
                         }
                         _ => None,
                     };
-                    if let Some(event) = event {
-                        let _ = event_sender.send_blocking(event);
+                    if let Some(event) = event
+                        && forward_or_drop(&event_sender, event, &dropped_count)
+                    {
+                        return; // GTK main loop gone
                     }
                 }
                 _ => {}
@@ -383,6 +471,7 @@ fn spawn_send_worker(
     jobs: std::sync::mpsc::Receiver<SendJob>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
+        let dropped_count = AtomicU64::new(0);
         for job in jobs {
             let request_id = next_request_id.fetch_add(1, Ordering::Relaxed);
             let (tx, rx) = std::sync::mpsc::channel();
@@ -399,7 +488,7 @@ fn spawn_send_worker(
                 request_id: Some(request_id),
                 ..Request::default()
             };
-            let outcome = serde_json::to_string(&request)
+            let write_result = serde_json::to_string(&request)
                 .map_err(|error| error.to_string())
                 .and_then(|line| {
                     let mut line = line;
@@ -407,11 +496,24 @@ fn spawn_send_worker(
                     write_stream
                         .write_all(line.as_bytes())
                         .map_err(|error| error.to_string())
-                })
-                .and_then(|()| {
-                    rx.recv()
-                        .map_err(|_error| "Engine connection closed mid-send".to_string())
                 });
+            let outcome = match write_result {
+                Ok(()) => rx
+                    .recv()
+                    .map_err(|_error| "Engine connection closed mid-send".to_string()),
+                Err(error) => {
+                    // The request never reached the Engine, so no
+                    // response will ever arrive for this request_id —
+                    // remove the just-inserted waiter now, rather
+                    // than leaking one `pending` entry per failed
+                    // write (same fix as `EngineConnection::
+                    // session_request`'s own analogous leak).
+                    if let Ok(mut pending_map) = pending.lock() {
+                        pending_map.remove(&request_id);
+                    }
+                    Err(error)
+                }
+            };
             let event = match outcome {
                 Ok(line) if line.ok == Some(true) => EngineEvent::Sent(job.peer_name),
                 Ok(line) => EngineEvent::SendError(
@@ -421,7 +523,7 @@ fn spawn_send_worker(
                 ),
                 Err(message) => EngineEvent::SendError(job.peer_name, message),
             };
-            if event_sender.send_blocking(event).is_err() {
+            if forward_or_drop(&event_sender, event, &dropped_count) {
                 return; // main loop gone
             }
         }
@@ -570,10 +672,17 @@ impl EngineClient {
     /// Transitions this connection into the session phase after a
     /// successful `unlock`: spawns the background reader thread and
     /// wires it to forward events through `event_sender` (create one
-    /// via `async_channel::unbounded()`; the GTK main loop consumes
-    /// the paired receiver in a `glib::MainContext::spawn_local`
-    /// future on its own thread — glib 0.22 removed
-    /// `glib::MainContext::channel`, see `Cargo.toml`'s note).
+    /// via `async_channel::bounded(EVENT_CHANNEL_CAPACITY)` — BOUNDED,
+    /// not `async_channel::unbounded()`: an unbounded channel here
+    /// would grow without limit if the GTK main loop ever fell behind
+    /// draining it. Overflow is dropped, not blocked on, by both
+    /// background threads that feed it — see [`forward_or_drop`]'s
+    /// own doc comment for why blocking would risk the same freeze
+    /// [`EngineEvent::ConnectionLost`] exists to fix. The GTK main
+    /// loop consumes the paired receiver in a
+    /// `glib::MainContext::spawn_local` future on its own thread —
+    /// glib 0.22 removed `glib::MainContext::channel`, see
+    /// `Cargo.toml`'s note).
     /// Must be called before any of `list_peers`/`pair_payload`/
     /// `pair_import`/`pair_confirm`/`send` (TODO B.3 GUI
     /// messaging design, Phase 2 — those methods now require an
@@ -1193,16 +1302,23 @@ mod tests {
         // No GTK main loop is running in this test, so the receiver is
         // consumed by a future spawned ONCE onto the default main
         // context, which is then pumped manually via
-        // `iteration(false)`. The future hands the event back out
+        // `iteration(false)`. The future hands events back out
         // through a shared `Rc<RefCell<_>>` — this crate's own
         // established pattern for GTK closures needing to report a
-        // result (see `main.rs`).
+        // result (see `main.rs`). A `Vec`, not a single slot: the fake
+        // engine closes its end of the socket right after writing the
+        // one line, which is EOF from the reader thread's point of
+        // view — since this fix pass, EOF also emits
+        // `EngineEvent::ConnectionLost` (see `spawn_reader_thread`'s
+        // own doc comment), so up to two events can legitimately
+        // arrive here, and a single overwritten slot would race
+        // between them.
         let context = gtk4::glib::MainContext::default();
-        let observed: Rc<RefCell<Option<EngineEvent>>> = Rc::new(RefCell::new(None));
+        let observed: Rc<RefCell<Vec<EngineEvent>>> = Rc::new(RefCell::new(Vec::new()));
         let observed_for_task = observed.clone();
         context.spawn_local(async move {
             while let Ok(event) = event_rx.recv().await {
-                *observed_for_task.borrow_mut() = Some(event);
+                observed_for_task.borrow_mut().push(event);
             }
         });
         let deadline = std::time::Instant::now()
@@ -1210,8 +1326,9 @@ mod tests {
             .ok_or("system clock error computing test deadline")?;
         while std::time::Instant::now() < deadline {
             context.iteration(false);
-            if let Some(EngineEvent::Ready(address)) = observed.borrow_mut().take() {
-                assert_eq!(address, "test-address");
+            if observed.borrow().iter().any(
+                |event| matches!(event, EngineEvent::Ready(address) if address == "test-address"),
+            ) {
                 return Ok(());
             }
             std::thread::sleep(std::time::Duration::from_millis(10));

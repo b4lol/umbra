@@ -3,10 +3,16 @@
 //! process memory (ADR-025) before the passphrase can touch RAM, then
 //! spawns the `umbra-engine` process (TODO B.3.1) and opens a
 //! keystore-unlock view backed by it. On success, shows the unlocked
-//! identity's fingerprint. No messaging, peer list, or sandboxing of
-//! THIS process yet — see
-//! `docs/superpowers/specs/2026-09-13-gui-keystore-unlock-design.md`
-//! and `docs/superpowers/specs/2026-09-15-engine-ui-separation-design.md`.
+//! identity's fingerprint plus (TODO B.3 GUI messaging design,
+//! Phases 1-5) a peer-list panel with SAS-verified pairing, a
+//! per-peer chat view (bounded log, compose box, disabled-send-with-
+//! reason states), and real two-party messaging over Tor once the
+//! Engine's background bootstrap publishes an onion address. This
+//! process itself still runs unsandboxed (Landlock/Seccomp sandboxing
+//! applies only to `umbra-engine`) — see
+//! `docs/superpowers/specs/2026-09-13-gui-keystore-unlock-design.md`,
+//! `docs/superpowers/specs/2026-09-15-engine-ui-separation-design.md`,
+//! and `docs/superpowers/specs/2026-09-17-gui-messaging-design.md`.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -261,11 +267,38 @@ fn build_window(
                 ));
                 identity_container.append(&reveal_widget);
                 identity_container.append(&status_label);
+                // Gap fix (this review pass): without showing the
+                // operator's OWN onion address somewhere, two
+                // operators using only the GUI have no way to
+                // exchange it to pair — the pairing dialog only ever
+                // collects the PEER's payload/onion. A plain
+                // read-only, selectable field is enough to unblock
+                // that; it matches the pairing dialog's own
+                // `own_payload_entry` pattern (`gtk4::Entry`,
+                // `.editable(false)`). Hidden until the `"ready"`
+                // event actually supplies an address.
+                let own_address_label = gtk4::Label::builder()
+                    .label("Your onion address (share with peers who want to send to you):")
+                    .halign(gtk4::Align::Start)
+                    .visible(false)
+                    .build();
+                let own_address_entry = gtk4::Entry::builder()
+                    .editable(false)
+                    .visible(false)
+                    .build();
+                identity_container.append(&own_address_label);
+                identity_container.append(&own_address_entry);
                 // Session phase (TODO B.3 GUI messaging, Phase 2):
                 // `start_session` MUST complete before
                 // `build_peer_panel` below, whose initial refresh calls
                 // `list_peers` — that now requires an active session.
-                let (event_tx, event_rx) = async_channel::unbounded();
+                //
+                // BOUNDED, not `async_channel::unbounded()` (this
+                // review pass's fix): see `EngineClient::start_session`'s
+                // own doc comment for why an unbounded channel here
+                // was a real "grows without limit" risk.
+                let (event_tx, event_rx) =
+                    async_channel::bounded(umbra_gui::engine_client::EVENT_CHANNEL_CAPACITY);
                 if let Err(message) = engine_client_for_peers.borrow_mut().start_session(event_tx) {
                     error_label.set_label(&format!("session start failed: {message}"));
                     error_label.set_visible(true);
@@ -284,9 +317,7 @@ fn build_window(
                     .min_content_height(160)
                     .vexpand(true)
                     .build();
-                let compose_entry = gtk4::Entry::builder()
-                    .placeholder_text("Message…")
-                    .build();
+                let compose_entry = gtk4::Entry::builder().placeholder_text("Message…").build();
                 let send_button = gtk4::Button::builder().label("Send").build();
                 // Phase 5: disabled-with-a-reason states (mirrors
                 // tui.rs's inline messages). `tor_ready` flips on the
@@ -340,12 +371,33 @@ fn build_window(
                     .build();
                 chat_box.append(&privacy_footer);
 
+                // Built BEFORE the event-loop closure below so a clone
+                // of `add_peer_button` can be captured there too (Item
+                // 8's `EngineEvent::ConnectionLost` handling disables
+                // it, alongside the compose box, on a dead Engine).
+                let (peer_panel, _refresh, add_peer_button) = build_peer_panel(
+                    engine_client_for_peers.clone(),
+                    &window_for_peers,
+                    selected_peer.clone(),
+                    chat_with_label.clone(),
+                    log_view.clone(),
+                    chat_logs.clone(),
+                    update_send_state.clone(),
+                );
+                identity_container.append(&peer_panel);
+                identity_container.append(&chat_box);
+
                 let status_label_for_events = status_label.clone();
                 let chat_logs_for_events = chat_logs.clone();
                 let selected_peer_for_events = selected_peer.clone();
                 let log_view_for_events = log_view.clone();
                 let tor_ready_for_events = tor_ready.clone();
                 let update_send_state_for_events = update_send_state.clone();
+                let own_address_entry_for_events = own_address_entry.clone();
+                let own_address_label_for_events = own_address_label.clone();
+                let send_button_for_events = send_button.clone();
+                let compose_entry_for_events = compose_entry.clone();
+                let add_peer_button_for_events = add_peer_button.clone();
                 // glib 0.22 removed `MainContext::channel`; the event
                 // receiver is consumed by a future on the default main
                 // context instead (dropping the returned `JoinHandle`
@@ -355,10 +407,15 @@ fn build_window(
                     while let Ok(event) = event_rx.recv().await {
                         match event {
                             umbra_gui::engine_client::EngineEvent::Ready(address) => {
-                                status_label_for_events.set_label(
-                                    "bootstrapped — onion service ready (address redacted client-side)",
-                                );
-                                let _ = address; // Not yet displayed/copyable; Phase 3+ UI work.
+                                status_label_for_events
+                                    .set_label("bootstrapped — onion service ready");
+                                // Gap fix (this review pass): the
+                                // operator's own address must be shown
+                                // SOMEWHERE, or two GUI-only operators
+                                // have no way to pair with each other.
+                                own_address_entry_for_events.set_text(&address);
+                                own_address_entry_for_events.set_visible(true);
+                                own_address_label_for_events.set_visible(true);
                                 tor_ready_for_events.set(true);
                                 update_send_state_for_events();
                             }
@@ -389,21 +446,37 @@ fn build_window(
                             umbra_gui::engine_client::EngineEvent::SessionError(message) => {
                                 status_label_for_events
                                     .set_label(&format!("session error: {message}"));
+                                // Item 6 fix: a post-ready session
+                                // failure must also revoke the
+                                // "ready"/"can send" state, not just
+                                // report it — otherwise the compose
+                                // box stays enabled after the session
+                                // that would carry a send has already
+                                // failed.
+                                tor_ready_for_events.set(false);
+                                update_send_state_for_events();
+                            }
+                            umbra_gui::engine_client::EngineEvent::ConnectionLost => {
+                                // Item 1 fix: the Engine process died
+                                // or the connection to it broke. This
+                                // is PERMANENT — no auto-reconnect (a
+                                // process holding secret key material
+                                // does not get silently restarted
+                                // behind the operator's back) — so
+                                // fail visibly and disable every
+                                // action that would otherwise talk to
+                                // the now-gone Engine.
+                                status_label_for_events
+                                    .set_label("Engine connection lost — restart Umbra");
+                                tor_ready_for_events.set(false);
+                                update_send_state_for_events();
+                                send_button_for_events.set_sensitive(false);
+                                compose_entry_for_events.set_sensitive(false);
+                                add_peer_button_for_events.set_sensitive(false);
                             }
                         }
                     }
                 });
-                let (peer_panel, _refresh) = build_peer_panel(
-                    engine_client_for_peers.clone(),
-                    &window_for_peers,
-                    selected_peer.clone(),
-                    chat_with_label.clone(),
-                    log_view.clone(),
-                    chat_logs.clone(),
-                    update_send_state.clone(),
-                );
-                identity_container.append(&peer_panel);
-                identity_container.append(&chat_box);
 
                 let engine_client_for_send = engine_client_for_peers.clone();
                 send_button.connect_clicked(move |_button| {
@@ -457,48 +530,56 @@ fn build_window(
     window.present();
 }
 
-/// One chat-log entry. Message content (both directions) renders as a
-/// Scratch-to-Reveal widget — chat history is sensitive content and
-/// the anti-shoulder-surfing doctrine applies to it exactly as it does
-/// to the fingerprint; system lines (send failures) stay plain.
+/// One chat-log entry.
+///
+/// # Scratch-to-Reveal does NOT apply here (revert note)
+///
+/// Message content briefly rendered behind a Scratch-to-Reveal mask
+/// (commit `f6bf207`), but that was explicitly out of scope for the
+/// GUI messaging design (`docs/superpowers/specs/
+/// 2026-09-17-gui-messaging-design.md`'s "Explicitly out of scope"
+/// list) and broken as implemented — a hardcoded width clamp silently
+/// truncated anything past ~60 characters, newlines were flattened to
+/// spaces, and the mask reset on every new incoming message. Reverted
+/// in this review pass back to plain text; only the identity
+/// fingerprint (which predates this and was never part of the
+/// revert) still uses Scratch-to-Reveal.
 enum ChatLine {
     /// An own message, echoed at click time (the honest caveat on
     /// `EngineEvent::Sent` applies: queued into Arti, not delivered).
     Own(String),
     /// A decrypted inbound message (inbox; unattributed).
     Received(String),
-    /// A local system line (send failure, etc.) — never masked.
+    /// A local system line (send failure, etc.).
     System(String),
 }
 
 /// Chat log storage: one bounded entry list per conversation name.
 type ChatLogs = Rc<RefCell<HashMap<String, Vec<ChatLine>>>>;
 
-/// Builds the row widget for one chat line: message content masked
-/// behind Scratch-to-Reveal (single-line preview — newlines are
-/// flattened), system lines as plain dim labels.
+/// Builds the row widget for one chat line: plain, wrapped text (own
+/// messages right-aligned, received/system left-aligned) — see
+/// [`ChatLine`]'s doc comment for why this is plain text, not
+/// Scratch-to-Reveal. Newlines are preserved (`gtk4::Label` renders
+/// them as-is); nothing is truncated.
 fn chat_line_widget(line: &ChatLine) -> gtk4::Widget {
     match line {
-        ChatLine::Own(text) | ChatLine::Received(text) => {
-            // ~9 px per 14 pt monospace glyph + padding, clamped:
-            // sized to the content so short messages stay compact and
-            // long ones stay readable (no wrapping in the widget).
-            let flat: String = text
-                .chars()
-                .map(|c| if c == '\n' { ' ' } else { c })
-                .collect();
-            let content_width = i32::try_from(flat.chars().count())
-                .unwrap_or(i32::MAX)
-                .saturating_mul(9)
-                .saturating_add(24);
-            let width = content_width.clamp(160, 560);
-            let widget = umbra_gui::scratch_reveal::build_scratch_reveal_sized(&flat, width, 32);
-            match line {
-                ChatLine::Own(_) => widget.set_halign(gtk4::Align::End),
-                _ => widget.set_halign(gtk4::Align::Start),
-            }
-            widget.upcast()
-        }
+        ChatLine::Own(text) => gtk4::Label::builder()
+            .label(text)
+            .halign(gtk4::Align::End)
+            .wrap(true)
+            .wrap_mode(gtk4::pango::WrapMode::WordChar)
+            .selectable(true)
+            .build()
+            .upcast(),
+        ChatLine::Received(text) => gtk4::Label::builder()
+            .label(text)
+            .halign(gtk4::Align::Start)
+            .wrap(true)
+            .wrap_mode(gtk4::pango::WrapMode::WordChar)
+            .selectable(true)
+            .build()
+            .upcast(),
         ChatLine::System(text) => gtk4::Label::builder()
             .label(text)
             .halign(gtk4::Align::Start)
@@ -508,10 +589,25 @@ fn chat_line_widget(line: &ChatLine) -> gtk4::Widget {
     }
 }
 
-/// Appends one line to `peer`'s chat log buffer, and re-renders the
-/// log view when that peer is the currently selected one. Shared by
-/// the send button (own echo), the event loop (send failures), and
-/// (Phase 4) inbound messages.
+/// Appends one line to `peer`'s chat log buffer, and — when that peer
+/// is the currently selected one — appends EXACTLY ONE new row widget
+/// to `log_view` for it, removing exactly the oldest row (index 0)
+/// if the bound was just exceeded. Shared by the send button (own
+/// echo), the event loop (send failures), and (Phase 4) inbound
+/// messages.
+///
+/// # O(1) per call, not O(n) (this review pass's fix)
+///
+/// This used to call [`render_chat_log`] on every new line — a full
+/// teardown-and-rebuild of every row currently shown (up to
+/// [`MAX_CHAT_LOG_LINES`], each its own widget), which meant a chat
+/// that had ever grown busy stayed expensive to append to forever
+/// after. Appending/removing exactly one row keeps this O(1) per
+/// call, in line with the storage's own bounded-memory design.
+/// [`render_chat_log`]'s full rebuild remains correct (and fine to
+/// keep O(n)) for its own one remaining call site: switching which
+/// peer's conversation is shown, a one-off user action, not something
+/// that happens once per incoming line.
 fn append_chat_line(
     chat_logs: &ChatLogs,
     selected_peer: &Rc<RefCell<Option<String>>>,
@@ -519,19 +615,28 @@ fn append_chat_line(
     peer: &str,
     line: ChatLine,
 ) {
-    {
+    let is_selected = selected_peer.borrow().as_deref() == Some(peer);
+    // Built (if needed) from `line` BEFORE `line` moves into storage
+    // below.
+    let new_row_widget = is_selected.then(|| chat_line_widget(&line));
+    let overflowed = {
         let mut logs = chat_logs.borrow_mut();
         let entries = logs.entry(peer.to_string()).or_default();
         entries.push(line);
         // Bounded memory (Phase 5): drop whole oldest lines once a log
-        // exceeds MAX_CHAT_LOG_LINES.
+        // exceeds MAX_CHAT_LOG_LINES. Exactly one push happens per
+        // call, so this is 0 or 1 — never more.
         let overflow = entries.len().saturating_sub(MAX_CHAT_LOG_LINES);
         if overflow > 0 {
             entries.drain(..overflow);
         }
-    }
-    if selected_peer.borrow().as_deref() == Some(peer) {
-        render_chat_log(chat_logs, log_view, Some(peer));
+        overflow > 0
+    };
+    if let Some(widget) = new_row_widget {
+        log_view.append(&widget);
+        if overflowed && let Some(oldest_row) = log_view.row_at_index(0) {
+            log_view.remove(&oldest_row);
+        }
     }
 }
 
@@ -554,11 +659,14 @@ fn render_chat_log(chat_logs: &ChatLogs, log_view: &gtk4::ListBox, peer: Option<
 }
 
 /// Builds the peer-list panel: a heading, a `ListBox` of paired peer
-/// names, and an "Add peer" button. Returns the panel widget and a
+/// names, and an "Add peer" button. Returns the panel widget, a
 /// `Rc<dyn Fn()>` that re-fetches `list_peers` and repopulates the
 /// `ListBox` — called once here to populate it initially, and again
-/// after a successful pairing (Step 3). Selecting a row binds the chat
-/// area (compose target label + per-peer log view) to that peer.
+/// after a successful pairing (Step 3) — and the "Add peer" button
+/// itself, so a caller can disable it on a dead Engine connection
+/// (`EngineEvent::ConnectionLost`; see `build_window`). Selecting a
+/// row binds the chat area (compose target label + per-peer log view)
+/// to that peer.
 fn build_peer_panel(
     engine_client: Rc<RefCell<EngineClient>>,
     window: &adw::ApplicationWindow,
@@ -567,7 +675,7 @@ fn build_peer_panel(
     log_view: gtk4::ListBox,
     chat_logs: ChatLogs,
     on_selection_changed: Rc<dyn Fn()>,
-) -> (gtk4::Box, Rc<dyn Fn()>) {
+) -> (gtk4::Box, Rc<dyn Fn()>, gtk4::Button) {
     let panel = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
     let heading = gtk4::Label::builder()
         .label("Peers")
@@ -641,7 +749,7 @@ fn build_peer_panel(
         );
     });
 
-    (panel, refresh)
+    (panel, refresh, add_button)
 }
 
 /// Opens a modal pairing dialog: shows this identity's own payload,

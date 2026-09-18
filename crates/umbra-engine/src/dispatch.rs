@@ -38,7 +38,11 @@ pub struct Session {
 impl Session {
     /// This session's peers directory, `None` until a successful
     /// unlock (the gate every session-phase op checks first).
-    fn peers_dir(&self) -> Option<&Path> {
+    /// `pub(crate)`: `crate::lib`'s `serve_connection` reads this to
+    /// hand an OWNED copy (never the whole `Session`, which also
+    /// holds secret identity/passphrase material) into the `"send"`
+    /// op's spawned task — see [`dispatch_send`]'s doc comment.
+    pub(crate) fn peers_dir(&self) -> Option<&Path> {
         self.identity
             .as_ref()
             .map(|(_, peers_dir)| peers_dir.as_path())
@@ -260,12 +264,22 @@ fn dispatch_pair_confirm(request: &Request, session: &Session) -> Response {
 /// "Sent" means Arti's stream accepted the frames, not end-to-end
 /// delivery confirmation — the same honest caveat `tui.rs`'s own
 /// `UiEvent::Sent` documents.
+///
+/// Takes `peers_dir: Option<&Path>` rather than `&Session` (unlike
+/// every other dispatch function in this module) because
+/// `crate::lib`'s `serve_connection` `tokio::spawn`s this call rather
+/// than awaiting it inline (so a slow/dead-peer connect doesn't block
+/// the whole read loop, including OTHER in-flight requests) — the
+/// spawned task must own everything it touches for `'static`, and
+/// `Session` also holds secret identity/passphrase material that
+/// should never be cloned into a second task just to reach this one
+/// `Path`.
 async fn dispatch_send(
     request: &Request,
-    session: &Session,
+    peers_dir: Option<&Path>,
     transport: Option<&std::sync::Arc<umbra_net::tor::TorTransport>>,
 ) -> Response {
-    let Some(peers_dir) = session.peers_dir() else {
+    let Some(peers_dir) = peers_dir else {
         return Response::err("not unlocked yet");
     };
     let Some(peer_name) = request.peer_name.as_deref() else {
@@ -294,14 +308,15 @@ async fn dispatch_send(
 /// [`dispatch`] because delivery awaits a bounded onion connect (and
 /// needs the shared transport, which is session-loop state, not
 /// [`Session`] state). Every failure mode becomes an `Ok` [`Response`]
-/// with `ok: false`, exactly like [`dispatch`].
+/// with `ok: false`, exactly like [`dispatch`]. Takes `peers_dir`
+/// rather than `&Session` — see [`dispatch_send`]'s doc comment.
 pub async fn dispatch_async(
     request: &Request,
-    session: &Session,
+    peers_dir: Option<&Path>,
     transport: Option<&std::sync::Arc<umbra_net::tor::TorTransport>>,
 ) -> Response {
     match request.op.as_str() {
-        "send" => dispatch_send(request, session, transport).await,
+        "send" => dispatch_send(request, peers_dir, transport).await,
         other => Response::err(format!("unknown async operation: {other}")),
     }
 }
@@ -525,7 +540,7 @@ mod tests {
                 text: Some("hello".to_string()),
                 ..Request::default()
             },
-            &session,
+            session.peers_dir(),
             None,
         )
         .await;
@@ -560,7 +575,7 @@ mod tests {
                 text: Some("hello".to_string()),
                 ..Request::default()
             },
-            &session,
+            session.peers_dir(),
             None,
         )
         .await;
@@ -612,7 +627,7 @@ mod tests {
                 text: Some("hello".to_string()),
                 ..Request::default()
             },
-            &session,
+            session.peers_dir(),
             None,
         )
         .await;
