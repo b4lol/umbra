@@ -355,10 +355,17 @@ implementation plan yet — that gets written per-phase when B.4 actually
 starts.
 
 1. **Phase 0 — FFI surface completion.** Extend `umbra-ffi`'s
-   `UmbraCoreController` trait (§3) to cover peers/pairing, group
-   encryption, and Decoy-Vault-aware unlock, matching what `umbra-cli`
-   already supports on Linux. No Android code yet — this phase is pure
-   Rust, testable without a device or emulator.
+   `UmbraCoreController` trait (§3) to cover peers/pairing and
+   Decoy-Vault-aware unlock, matching what `umbra-cli`/the Linux GUI
+   already support. No Android code yet — this phase is pure Rust,
+   testable without a device or emulator. (Correction, landed with
+   `docs/superpowers/plans/2026-09-19-android-phase0-ffi-unlock-pairing.md`:
+   group-encryption trait methods were dropped from this phase's scope
+   — no phase in this outline actually builds a group-chat UI on
+   Android, so building that FFI surface now would be speculative,
+   the same YAGNI gap the Linux GUI's own messaging design avoided by
+   listing group chat as an explicit non-goal. Add group-encryption
+   trait methods to whichever future phase actually needs them.)
 2. **Phase 1 — Minimal Compose shell + cargo-ndk build wiring (§8).**
    Identity creation, pairing (QR display/scan), one-shot Tor-only
    send/receive — the Android equivalent of the Linux GUI's own Phase 1
