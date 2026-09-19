@@ -121,6 +121,23 @@ This list contains the technical tasks planned for the step-by-step implementati
 
 ## B.4 Android Client (`android/`)
 
+Architecture decided in `ANDROID.md` (2026-09-17). Phased per its own
+§10 outline; Phase 0 LANDED (2026-09-19): `crates/umbra-ffi`'s
+`UmbraCoreController` trait gained real (non-stub) implementations —
+`unlock_identity` (Decoy-Vault-aware, auto-detects by file size,
+mirroring `umbra-engine`'s own `dispatch::unlock`) and
+`list_peers`/`pairing_payload`/`import_peer_payload`/`confirm_peer`
+(mirroring the Linux GUI's own session-scoped peer/pairing ops,
+including the never-persist-before-SAS-confirmation property) —
+backed by a new `LiveController`, in-process session state (no
+`:engine` split for v1, per ANDROID.md §5). Pure Rust, no Android
+toolchain touched; hermetically tested (`cargo test -p umbra-ffi`).
+Group-encryption trait methods deliberately deferred — no phase in
+ANDROID.md's own outline uses them yet (see `ANDROID.md`'s Phase 0
+correction). Everything below remains open; Phase 1 (Compose shell +
+`cargo-ndk` build wiring) is the next step and genuinely needs an
+Android SDK/NDK/Gradle toolchain.
+
 - [ ] Building the Rust core for Kotlin/Compose with `uniffi`.
 - [ ] Mandatory application of the `FLAG_SECURE` window flag to all screens.
 - [ ] **Anti-FlagSecure-Bypass:** 60Hz/120Hz Temporal Pixel Interleaving drawing engine (its effectiveness and usability impact will be verified with real-device tests).
