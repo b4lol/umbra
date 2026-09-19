@@ -297,10 +297,9 @@ impl UmbraCoreController for LiveController {
         let peers_dir = path
             .parent()
             .map_or_else(|| PathBuf::from("peers"), |parent| parent.join("peers"));
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|_error| CoreControllerError::Unsupported("session state poisoned"))?;
+        let mut session = self.session.lock().map_err(|_error| {
+            CoreControllerError::Keystore("session state poisoned".to_string())
+        })?;
         session.identity = Some((bundle, peers_dir));
         Ok(keys)
     }
