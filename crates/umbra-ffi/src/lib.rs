@@ -6,8 +6,10 @@
 //! (`uniffi-bindgen`, Kotlin bindings) lands with TODO B.4 — this crate
 //! pins the API so call sites can be written against it today.
 
-#![forbid(unsafe_code)]
-
 pub mod controller;
 
-pub use controller::{CoreControllerError, IdentityKeys, StubController, UmbraCoreController};
+pub use controller::{
+    CoreControllerError, IdentityKeys, LiveController, StubController, UmbraCoreController,
+};
+
+uniffi::setup_scaffolding!();

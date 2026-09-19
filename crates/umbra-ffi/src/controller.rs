@@ -6,18 +6,18 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use umbra_crypto::keys::{IdentityBundle, KEM_PK_LEN, X25519_PK_LEN};
+use umbra_crypto::keys::IdentityBundle;
 
 /// Public identity material exposed across the FFI boundary.
 ///
 /// Only PUBLIC key bytes cross the bridge; private keys never leave the
 /// Rust core (RAM-only doctrine).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct IdentityKeys {
     /// X25519 identity public key.
-    pub x25519_public: [u8; X25519_PK_LEN],
+    pub x25519_public: Vec<u8>,
     /// ML-KEM-768 encapsulation key.
-    pub kem_public: [u8; KEM_PK_LEN],
+    pub kem_public: Vec<u8>,
     /// ML-DSA-65 verification key.
     pub dsa_public: Vec<u8>,
 }
@@ -36,6 +36,30 @@ pub enum CoreControllerError {
     /// Keystore/decoy-vault-layer failure during unlock.
     #[error("{0}")]
     Keystore(String),
+}
+
+/// UniFFI-exported error type (TODO B.4 Phase 1).
+///
+/// [`CoreControllerError`] cannot derive `uniffi::Error` directly: one
+/// variant wraps a foreign crate's [`umbra_crypto::CryptoError`] (which
+/// does not implement UniFFI's `Lower`/`Lift` traits) and another holds
+/// a `&'static str` (UniFFI's proc-macros only support owned `String`
+/// payloads). Rather than changing `CoreControllerError`'s shape for
+/// every Rust-internal caller, this FFI-only wrapper flattens any
+/// [`CoreControllerError`] to its rendered message string at the
+/// boundary — the same approach `unlock_identity`'s own
+/// `CoreControllerError::Keystore(String)` variant already uses.
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+pub enum FfiControllerError {
+    /// Any [`CoreControllerError`], flattened to its `Display` message.
+    #[error("{0}")]
+    Failed(String),
+}
+
+impl From<CoreControllerError> for FfiControllerError {
+    fn from(error: CoreControllerError) -> Self {
+        Self::Failed(error.to_string())
+    }
 }
 
 /// The controller interface consumed by the Android UI (docs/SPECIFICATION.md §3).
@@ -244,7 +268,7 @@ struct Session {
 /// Rust-side wiring lands. Methods not yet covered by this plan still
 /// return [`CoreControllerError::Unsupported`], matching
 /// `StubController`'s own messages — see each method below.
-#[derive(Default)]
+#[derive(Default, uniffi::Object)]
 pub struct LiveController {
     /// The controller's single in-memory session, populated by
     /// `unlock_identity` and cleared by `trigger_panic_wipe`.
@@ -259,12 +283,100 @@ impl LiveController {
     }
 }
 
+/// UniFFI-exported surface (TODO B.4 Phase 1): thin wrappers around the
+/// [`UmbraCoreController`] trait methods above, under UniFFI-compatible
+/// signatures (an owning `Arc<Self>` constructor, owned `String` args
+/// instead of `&str`). The trait methods themselves are untouched;
+/// these delegate to them.
+#[uniffi::export]
+impl LiveController {
+    /// UniFFI constructor: builds a fresh, unlocked-nothing-yet controller.
+    #[uniffi::constructor]
+    #[must_use]
+    pub fn new_ffi() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self::default())
+    }
+
+    /// UniFFI-shaped wrapper around [`UmbraCoreController::unlock_identity`].
+    ///
+    /// # Errors
+    ///
+    /// See [`UmbraCoreController::unlock_identity`].
+    #[uniffi::method(name = "unlockIdentity")]
+    pub fn unlock_identity_ffi(
+        &self,
+        keystore_path: String,
+        passphrase: String,
+    ) -> Result<IdentityKeys, FfiControllerError> {
+        UmbraCoreController::unlock_identity(self, &keystore_path, &passphrase)
+            .map_err(FfiControllerError::from)
+    }
+
+    /// UniFFI-shaped wrapper around [`UmbraCoreController::list_peers`].
+    ///
+    /// # Errors
+    ///
+    /// See [`UmbraCoreController::list_peers`].
+    #[uniffi::method(name = "listPeers")]
+    pub fn list_peers_ffi(&self) -> Result<Vec<String>, FfiControllerError> {
+        UmbraCoreController::list_peers(self).map_err(FfiControllerError::from)
+    }
+
+    /// UniFFI-shaped wrapper around [`UmbraCoreController::pairing_payload`].
+    ///
+    /// # Errors
+    ///
+    /// See [`UmbraCoreController::pairing_payload`].
+    #[uniffi::method(name = "pairingPayload")]
+    pub fn pairing_payload_ffi(&self) -> Result<String, FfiControllerError> {
+        UmbraCoreController::pairing_payload(self).map_err(FfiControllerError::from)
+    }
+
+    /// UniFFI-shaped wrapper around
+    /// [`UmbraCoreController::import_peer_payload`].
+    ///
+    /// # Errors
+    ///
+    /// See [`UmbraCoreController::import_peer_payload`].
+    #[uniffi::method(name = "importPeerPayload")]
+    pub fn import_peer_payload_ffi(
+        &self,
+        peer_payload: String,
+    ) -> Result<String, FfiControllerError> {
+        UmbraCoreController::import_peer_payload(self, &peer_payload)
+            .map_err(FfiControllerError::from)
+    }
+
+    /// UniFFI-shaped wrapper around [`UmbraCoreController::confirm_peer`].
+    ///
+    /// # Errors
+    ///
+    /// See [`UmbraCoreController::confirm_peer`].
+    #[uniffi::method(name = "confirmPeer")]
+    pub fn confirm_peer_ffi(
+        &self,
+        peer_name: String,
+        peer_payload: String,
+        peer_onion: Option<String>,
+    ) -> Result<(), FfiControllerError> {
+        UmbraCoreController::confirm_peer(self, &peer_name, &peer_payload, peer_onion)
+            .map_err(FfiControllerError::from)
+    }
+
+    /// UniFFI-shaped wrapper around
+    /// [`UmbraCoreController::trigger_panic_wipe`].
+    #[uniffi::method(name = "triggerPanicWipe")]
+    pub fn trigger_panic_wipe_ffi(&self) {
+        UmbraCoreController::trigger_panic_wipe(self);
+    }
+}
+
 /// Projects an [`IdentityBundle`]'s PUBLIC material into the
 /// FFI-safe [`IdentityKeys`] shape (never the private halves).
 fn identity_keys_from_bundle(bundle: &IdentityBundle) -> IdentityKeys {
     IdentityKeys {
-        x25519_public: bundle.x25519.public_bytes(),
-        kem_public: bundle.kem.public_bytes(),
+        x25519_public: bundle.x25519.public_bytes().to_vec(),
+        kem_public: bundle.kem.public_bytes().to_vec(),
         dsa_public: bundle.dsa.public_bytes(),
     }
 }
