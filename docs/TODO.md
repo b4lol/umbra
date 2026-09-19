@@ -138,6 +138,27 @@ correction). Everything below remains open; Phase 1 (Compose shell +
 `cargo-ndk` build wiring) is the next step and genuinely needs an
 Android SDK/NDK/Gradle toolchain.
 
+Android toolchain LANDED and verified (2026-09-19): SDK platform 34,
+build-tools, NDK r27.0.12077973, emulator + a `google_apis`/x86_64
+AVD, `cargo-ndk`, and both `aarch64-linux-android`/`x86_64-linux-android`
+Rust targets are installed and working in this project's dev
+environment (KVM-accelerated emulator confirmed available). A real
+first cross-compile of `umbra-ffi` surfaced that `crates/umbra-cli`'s
+Seccomp allowlist (`sandbox.rs`) referenced Linux/glibc/x86_64-specific
+`libc::SYS_*` constants absent from Android's bionic bindings —
+fixed by gating the REAL, security-critical Linux allowlist (and
+`install_filter`/`restrict_syscalls`/`restrict_syscalls_mesh`) behind
+`#[cfg(target_os = "linux")]`, with inert stubs elsewhere (Seccomp-BPF
+doesn't apply on Android per ANDROID.md §5; nothing there ever calls
+these). Verified byte-for-byte unchanged on Linux (hash-identical
+function body, real live-filter integration tests still pass).
+`umbra-ffi`'s `Cargo.toml` gained the `cdylib`/`rlib` `[lib]` target
+(`libumbra_native.so`, matching ADR-023's naming) — both Android
+targets now produce a real, confirmed-ELF `.so`. This is a real head
+start on Phase 1's own build-wiring half; no Kotlin/Compose/Gradle
+project exists yet — that (plus UniFFI bindings generation and an
+actual app shell) is still open.
+
 - [ ] Building the Rust core for Kotlin/Compose with `uniffi`.
 - [ ] Mandatory application of the `FLAG_SECURE` window flag to all screens.
 - [ ] **Anti-FlagSecure-Bypass:** 60Hz/120Hz Temporal Pixel Interleaving drawing engine (its effectiveness and usability impact will be verified with real-device tests).
