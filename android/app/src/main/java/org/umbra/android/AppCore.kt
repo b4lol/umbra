@@ -4,6 +4,7 @@ import android.content.Context
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import uniffi.umbra_native.FfiControllerException
 import uniffi.umbra_native.LiveController
 
 /** Process-scoped Rust core. The unlocked session lives in Rust RAM behind this one controller. */
@@ -20,3 +21,16 @@ object AppCore {
  */
 suspend fun <T> ffi(block: () -> T): Result<T> =
     withContext(Dispatchers.Default) { runCatching(block) }
+
+/** The real message from a failed FFI call (UniFFI's own `message` is a debug string like `v1=...`). */
+fun Throwable.userMessage(fallback: String): String =
+    (this as? FfiControllerException.Failed)?.v1 ?: message ?: fallback
+
+/**
+ * Test-only prefill for on-device UI automation. Populated by MainActivity ONLY when
+ * BuildConfig.ALLOW_INSECURE_WINDOW is true (a debug build made with -PumbraInsecureE2E);
+ * always null in normal and release builds.
+ */
+object E2eHooks {
+    var peerPayload: String? = null
+}

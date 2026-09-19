@@ -37,7 +37,7 @@ fun PairingScreen(onDone: (saved: Boolean) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var name by remember { mutableStateOf("") }
-    var peerPayload by remember { mutableStateOf("") }
+    var peerPayload by remember { mutableStateOf(E2eHooks.peerPayload ?: "") }
     var sas by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -60,7 +60,7 @@ fun PairingScreen(onDone: (saved: Boolean) -> Unit) {
                             }
                             context.startActivity(Intent.createChooser(send, "Share pairing payload"))
                         }
-                        .onFailure { error = it.message ?: "Could not build payload" }
+                        .onFailure { error = it.userMessage("Could not build payload") }
                 }
             },
         ) { Text("Share my payload") }
@@ -92,7 +92,7 @@ fun PairingScreen(onDone: (saved: Boolean) -> Unit) {
                 scope.launch {
                     val result = ffi { AppCore.controller.importPeerPayload(peerPayload) }
                     busy = false
-                    result.onSuccess { sas = it }.onFailure { error = it.message ?: "Invalid payload" }
+                    result.onSuccess { sas = it }.onFailure { error = it.userMessage("Invalid payload") }
                 }
             },
         ) { Text("Check payload") }
@@ -109,7 +109,7 @@ fun PairingScreen(onDone: (saved: Boolean) -> Unit) {
                     scope.launch {
                         val result = ffi { AppCore.controller.confirmPeer(name, peerPayload, null) }
                         busy = false
-                        result.onSuccess { onDone(true) }.onFailure { error = it.message ?: "Could not save peer" }
+                        result.onSuccess { onDone(true) }.onFailure { error = it.userMessage("Could not save peer") }
                     }
                 },
             ) { Text("Codes match — save peer") }

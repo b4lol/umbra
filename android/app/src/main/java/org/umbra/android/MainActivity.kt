@@ -15,7 +15,13 @@ class MainActivity : ComponentActivity() {
         // TODO B.4: FLAG_SECURE on every window, set before any content exists.
         // Blocks screenshots/recents thumbnails; does NOT stop a rooted/instrumented
         // device (ADR-016 / Phase 3 anti-bypass work).
-        window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+        // BuildConfig.ALLOW_INSECURE_WINDOW is true only in a debug build made with
+        // -PumbraInsecureE2E (on-device UI automation); never in normal or release builds.
+        if (BuildConfig.ALLOW_INSECURE_WINDOW) {
+            E2eHooks.peerPayload = intent.getStringExtra("e2e_peer_payload")
+        } else {
+            window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+        }
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) { UmbraApp() }

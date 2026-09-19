@@ -29,7 +29,7 @@ fun HomeScreen(peersVersion: Int, onPair: () -> Unit, onLock: () -> Unit) {
     LaunchedEffect(peersVersion) {
         ffi { AppCore.controller.listPeers() }
             .onSuccess { peers = it; error = null }
-            .onFailure { error = it.message ?: "Could not list peers" }
+            .onFailure { error = it.userMessage("Could not list peers") }
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {

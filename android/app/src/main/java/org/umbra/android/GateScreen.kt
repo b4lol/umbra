@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -48,7 +50,7 @@ fun GateScreen(onUnlocked: () -> Unit) {
     val canSubmit = !busy && passphrase.isNotEmpty() && !tooShort && !mismatch
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         verticalArrangement = Arrangement.Center,
     ) {
         Text(
@@ -99,7 +101,7 @@ fun GateScreen(onUnlocked: () -> Unit) {
                     confirm = ""
                     result
                         .onSuccess { onUnlocked() }
-                        .onFailure { error = it.message ?: "Operation failed" }
+                        .onFailure { error = it.userMessage("Operation failed") }
                 }
             },
         ) { Text(if (busy) "Working…" else if (creating) "Create" else "Unlock") }

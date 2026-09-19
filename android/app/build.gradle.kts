@@ -22,9 +22,19 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0-walking-skeleton"
+        // FLAG_SECURE is mandatory (TODO B.4). It also hides the window from
+        // uiautomator on some OSes, so an on-device E2E driver needs an opt-out —
+        // but ONLY via the debug build type below, behind an explicit Gradle
+        // property. Default and release are always secure.
+        buildConfigField("boolean", "ALLOW_INSECURE_WINDOW", "false")
     }
 
     buildTypes {
+        debug {
+            if (project.hasProperty("umbraInsecureE2E")) {
+                buildConfigField("boolean", "ALLOW_INSECURE_WINDOW", "true")
+            }
+        }
         release {
             isMinifyEnabled = false
         }
@@ -36,6 +46,7 @@ android {
     }
 
     buildFeatures {
+        buildConfig = true
         compose = true
     }
 
