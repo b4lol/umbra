@@ -108,20 +108,50 @@ val cargoNdkBuild = tasks.register<Exec>("cargoNdkBuild") {
     }
 }
 
-// Copies Task 1's uniffi-bindgen-generated Kotlin bindings into the app
-// module's source tree. This is a straight file-copy for the walking
-// skeleton; regenerating bindings on every build via uniffi-bindgen's own
-// Gradle plugin (ANDROID.md §8's longer-term intent) is left to a later
-// task since the bindings are stable for this smoke test.
-val copyUniffiBindings = tasks.register<Copy>("copyUniffiBindings") {
-    description = "Copies the pre-generated UniFFI Kotlin bindings for umbra-ffi into the app source tree"
+// Regenerates the UniFFI Kotlin bindings for umbra-ffi from the freshly
+// built cdylib, entirely within this project's own build output (no
+// dependency on a path left behind by some earlier, unrelated task/session).
+// Depends on cargoNdkBuild so a real libumbra_native.so is guaranteed to
+// exist first; bindings are ABI-independent so any one of the built .so
+// files works as the --library argument.
+val uniffiBindingsGenDir = layout.buildDirectory.dir("generated/uniffi")
+
+val generateUniffiBindings = tasks.register<Exec>("generateUniffiBindings") {
+    description = "Regenerates the UniFFI Kotlin bindings for umbra-ffi via uniffi-bindgen"
     group = "build"
 
-    val bindingsSrc = providers.gradleProperty("umbraUniffiBindingsDir")
-        .orElse(providers.environmentVariable("UMBRA_UNIFFI_BINDINGS_DIR"))
-        .orElse("/tmp/umbra-kotlin-bindings")
+    dependsOn(cargoNdkBuild)
 
-    from(bindingsSrc.map { file("$it/uniffi/umbra_native/umbra_native.kt") })
+    workingDir = rootProject.projectDir.parentFile // repo root (one level above android/)
+
+    val libraryPath = jniLibsDir.dir("arm64-v8a").file("libumbra_native.so")
+    val outDir = uniffiBindingsGenDir.get().asFile
+
+    inputs.file(libraryPath)
+    outputs.dir(outDir)
+
+    doFirst {
+        outDir.mkdirs()
+    }
+
+    commandLine(
+        "cargo", "run", "-p", "umbra-ffi", "--bin", "uniffi-bindgen", "--",
+        "generate",
+        "--library", libraryPath.asFile.absolutePath,
+        "--language", "kotlin",
+        "--out-dir", outDir.absolutePath,
+    )
+}
+
+// Copies the freshly regenerated Kotlin bindings into the app module's
+// source tree.
+val copyUniffiBindings = tasks.register<Copy>("copyUniffiBindings") {
+    description = "Copies the freshly-generated UniFFI Kotlin bindings for umbra-ffi into the app source tree"
+    group = "build"
+
+    dependsOn(generateUniffiBindings)
+
+    from(uniffiBindingsGenDir.map { it.file("uniffi/umbra_native/umbra_native.kt") })
     into("src/main/java/uniffi/umbra_native")
 }
 
