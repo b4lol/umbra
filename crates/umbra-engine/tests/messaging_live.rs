@@ -97,21 +97,43 @@ fn spawn_engine(
 /// connection's current phase) over `writer` and reads back exactly
 /// one response line from `reader`, decoded as whichever caller-chosen
 /// type `T`.
+///
+/// `reader`'s underlying stream is assumed to have [`READ_POLL_TIMEOUT`]
+/// set (every caller in this file sets it before any `send_and_read`
+/// call) — a `read_line` timeout is routine, not fatal, and this
+/// function keeps retrying until `deadline` passes. This matters for
+/// EVERY call site in this file, not just the ones that "feel slow":
+/// `"pair_confirm"` dispatches synchronously and is genuinely fast, but
+/// `"send"` waits on a real Tor rendezvous connect that can legitimately
+/// exceed one `READ_POLL_TIMEOUT` window — a single non-retrying read
+/// would spuriously fail that call even when the Engine and network are
+/// behaving correctly.
 fn send_and_read<T: serde::de::DeserializeOwned>(
     writer: &mut impl Write,
     reader: &mut impl BufRead,
     request: &Request,
+    deadline: std::time::Instant,
 ) -> Result<T, String> {
     let mut line = serde_json::to_string(request).map_err(|error| error.to_string())?;
     line.push('\n');
     writer
         .write_all(line.as_bytes())
         .map_err(|error| error.to_string())?;
-    let mut response_line = String::new();
-    reader
-        .read_line(&mut response_line)
-        .map_err(|error| error.to_string())?;
-    serde_json::from_str(response_line.trim_end()).map_err(|error| error.to_string())
+    loop {
+        let mut response_line = String::new();
+        match reader.read_line(&mut response_line) {
+            Ok(_) if !response_line.trim_end().is_empty() => {
+                return serde_json::from_str(response_line.trim_end())
+                    .map_err(|error| error.to_string());
+            }
+            Ok(_) => {}
+            Err(error) if is_read_timeout(&error) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+        if std::time::Instant::now() > deadline {
+            return Err("timed out waiting for a response to the request".to_string());
+        }
+    }
 }
 
 /// Per-read socket timeout used by [`wait_for_ready_address`] and
@@ -281,6 +303,25 @@ fn run(dir_a: &Path, dir_b: &Path) -> Result<(), Box<dyn std::error::Error + Sen
     let mut writer_b = stream_b.try_clone()?;
     let mut reader_b = BufReader::new(stream_b);
 
+    // Set on both sockets BEFORE any read (including the unlock
+    // exchange below): every `read_line` in this file — direct or via
+    // `send_and_read`/`wait_for_*` — needs a bounded per-read timeout
+    // so a hung/silent Engine can't block forever and skip past a
+    // caller's own deadline check (see READ_POLL_TIMEOUT).
+    // `send_and_read` retries on a timeout up to its own `deadline`
+    // parameter, so this is transparent to genuinely-fast local calls
+    // (unlock, pair_confirm) and correctly tolerant of slower ones
+    // (send, which waits on a real Tor connect).
+    reader_a
+        .get_ref()
+        .set_read_timeout(Some(READ_POLL_TIMEOUT))?;
+    reader_b
+        .get_ref()
+        .set_read_timeout(Some(READ_POLL_TIMEOUT))?;
+
+    let local_deadline = std::time::Instant::now()
+        .checked_add(Duration::from_secs(30))
+        .ok_or("system clock error computing local-call deadline")?;
     let _unlock_a: serde_json::Value = send_and_read(
         &mut writer_a,
         &mut reader_a,
@@ -290,6 +331,7 @@ fn run(dir_a: &Path, dir_b: &Path) -> Result<(), Box<dyn std::error::Error + Sen
             passphrase: Some("pw-a".to_string()),
             ..Request::default()
         },
+        local_deadline,
     )?;
     let _unlock_b: serde_json::Value = send_and_read(
         &mut writer_b,
@@ -300,21 +342,8 @@ fn run(dir_a: &Path, dir_b: &Path) -> Result<(), Box<dyn std::error::Error + Sen
             passphrase: Some("pw-b".to_string()),
             ..Request::default()
         },
+        local_deadline,
     )?;
-
-    // From here on, every read is one of the polling wait_for_*
-    // helpers above, which need a bounded per-read timeout so a
-    // hung/silent Engine can't block read_line forever and skip past
-    // the helpers' own deadline checks (see READ_POLL_TIMEOUT). The
-    // unlock exchange above is local and fast, so it's deliberately
-    // left with no timeout (matching send_and_read's other call
-    // sites, which are equally local).
-    reader_a
-        .get_ref()
-        .set_read_timeout(Some(READ_POLL_TIMEOUT))?;
-    reader_b
-        .get_ref()
-        .set_read_timeout(Some(READ_POLL_TIMEOUT))?;
 
     // Both engines bootstrap concurrently (independent processes) from
     // this point; we just wait for each address sequentially.
@@ -330,6 +359,9 @@ fn run(dir_a: &Path, dir_b: &Path) -> Result<(), Box<dyn std::error::Error + Sen
     let address_b = wait_for_ready_address(&mut reader_b, bootstrap_deadline_b)?;
     println!("both engines published; recording B as a peer of A and sending…");
 
+    let local_deadline_2 = std::time::Instant::now()
+        .checked_add(Duration::from_secs(30))
+        .ok_or("system clock error computing local-call deadline")?;
     let pair_response: SessionLine = send_and_read(
         &mut writer_a,
         &mut reader_a,
@@ -341,11 +373,19 @@ fn run(dir_a: &Path, dir_b: &Path) -> Result<(), Box<dyn std::error::Error + Sen
             peer_onion: Some(address_b),
             ..Request::default()
         },
+        local_deadline_2,
     )?;
     if pair_response.ok != Some(true) {
         return Err(format!("pair_confirm on engine A failed: {:?}", pair_response.error).into());
     }
 
+    // "send" waits on a real Tor rendezvous connect (bounded at ~120s
+    // by `tor_send.rs`'s own connect timeout) before the Engine
+    // answers — give it real headroom past that bound, unlike the
+    // local/fast calls above.
+    let send_deadline = std::time::Instant::now()
+        .checked_add(Duration::from_secs(130))
+        .ok_or("system clock error computing send deadline")?;
     let message = "umbra-engine live messaging test: hello from A";
     let send_response: SessionLine = send_and_read(
         &mut writer_a,
@@ -357,6 +397,7 @@ fn run(dir_a: &Path, dir_b: &Path) -> Result<(), Box<dyn std::error::Error + Sen
             text: Some(message.to_string()),
             ..Request::default()
         },
+        send_deadline,
     )?;
     if send_response.ok != Some(true) {
         return Err(format!("send from engine A failed: {:?}", send_response.error).into());
