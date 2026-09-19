@@ -12,9 +12,14 @@
 //! <path-to-.so> --language kotlin --out-dir <dir>`).
 
 pub mod controller;
+#[cfg(feature = "tor")]
+pub mod session;
 
 pub use controller::{
     CoreControllerError, IdentityKeys, LiveController, StubController, UmbraCoreController,
 };
+
+#[cfg(feature = "tor")]
+pub use session::SessionEvent;
 
 uniffi::setup_scaffolding!();

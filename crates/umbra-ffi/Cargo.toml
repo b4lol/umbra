@@ -19,4 +19,13 @@ umbra-cli.workspace = true
 umbra-crypto.workspace = true
 umbra-protocol.workspace = true
 thiserror.workspace = true
+umbra-net = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+zeroize = { workspace = true, optional = true }
 uniffi = { version = "0.32.1", features = ["cli"] }
+
+[features]
+default = []
+# Live Tor session (TODO B.4 Phase 2). Off by default so the default host build
+# and its tests are unchanged; the Android Gradle build turns it on.
+tor = ["umbra-cli/tor", "dep:umbra-net", "dep:tokio", "dep:zeroize"]

@@ -296,6 +296,11 @@ pub struct LiveController {
     /// The controller's single in-memory session, populated by
     /// `unlock_identity` and cleared by `trigger_panic_wipe`.
     session: Mutex<Session>,
+    /// The running Tor session, if any (TODO B.4 Phase 2). Kept apart from
+    /// `session` so a blocking `next_event` wait never holds the lock every
+    /// other FFI call needs.
+    #[cfg(feature = "tor")]
+    tor_session: Mutex<Option<std::sync::Arc<crate::session::TorSession>>>,
 }
 
 impl LiveController {
@@ -303,6 +308,49 @@ impl LiveController {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Starts the Tor session for the unlocked identity (see
+    /// [`crate::session::TorSession`]). Returns immediately; progress
+    /// arrives as events.
+    #[cfg(feature = "tor")]
+    fn start_session(&self, nickname: &str) -> Result<(), CoreControllerError> {
+        let (seeds, peers_dir) = {
+            let session = self.session.lock().map_err(|_error| {
+                CoreControllerError::Keystore("session state poisoned".to_string())
+            })?;
+            let Some((bundle, peers_dir)) = session.identity.as_ref() else {
+                return Err(CoreControllerError::Keystore(
+                    "not unlocked yet".to_string(),
+                ));
+            };
+            (bundle.secret_seeds(), peers_dir.clone())
+        };
+        let (Some(tor_base), Some(keystore_dir)) = (
+            crate::session::tor_base_for(&peers_dir),
+            peers_dir.parent().map(std::path::Path::to_path_buf),
+        ) else {
+            return Err(CoreControllerError::Keystore(
+                "keystore path has no parent directory".to_string(),
+            ));
+        };
+        let mut slot = self.tor_session.lock().map_err(|_error| {
+            CoreControllerError::Keystore("session state poisoned".to_string())
+        })?;
+        if slot.is_some() {
+            return Err(CoreControllerError::Keystore(
+                "session already running".to_string(),
+            ));
+        }
+        let started = crate::session::TorSession::start(
+            tor_base,
+            keystore_dir,
+            peers_dir,
+            nickname.to_string(),
+            seeds,
+        )?;
+        *slot = Some(std::sync::Arc::new(started));
+        Ok(())
     }
 }
 
@@ -406,6 +454,71 @@ impl LiveController {
     #[uniffi::method(name = "triggerPanicWipe")]
     pub fn trigger_panic_wipe_ffi(&self) {
         UmbraCoreController::trigger_panic_wipe(self);
+    }
+}
+
+/// UniFFI-exported Tor session surface (TODO B.4 Phase 2). A separate impl
+/// block gated as a whole: UniFFI's attribute macro does not honor `#[cfg]` on
+/// individual methods inside an exported `impl`.
+#[cfg(feature = "tor")]
+#[uniffi::export]
+impl LiveController {
+    /// Starts the Tor session (bootstrap, onion service, inbound loop).
+    /// Returns immediately; poll [`LiveController::next_event_ffi`].
+    /// Requires an unlocked identity.
+    ///
+    /// # Errors
+    ///
+    /// Not unlocked, or a session is already running.
+    #[uniffi::method(name = "startSession")]
+    pub fn start_session_ffi(&self, nickname: String) -> Result<(), FfiControllerError> {
+        self.start_session(&nickname)
+            .map_err(FfiControllerError::from)
+    }
+
+    /// Blocks up to `timeout_millis` for the next session event; `None` on
+    /// timeout or when no session runs. Poll from a single IO thread.
+    #[uniffi::method(name = "nextEvent")]
+    pub fn next_event_ffi(&self, timeout_millis: u64) -> Option<crate::session::SessionEvent> {
+        let session = self
+            .tor_session
+            .lock()
+            .ok()?
+            .as_ref()
+            .map(std::sync::Arc::clone)?;
+        session.next_event(std::time::Duration::from_millis(timeout_millis))
+    }
+
+    /// Validates and enqueues a text message to a paired peer; the outcome
+    /// arrives as a `Sent`/`SendError` event.
+    ///
+    /// # Errors
+    ///
+    /// No active session, or the message/peer fails validation.
+    #[uniffi::method(name = "sendMessage")]
+    pub fn send_message_ffi(
+        &self,
+        peer_name: String,
+        text: String,
+    ) -> Result<(), FfiControllerError> {
+        let session = self
+            .tor_session
+            .lock()
+            .map_err(|_error| FfiControllerError::Failed("session state poisoned".to_string()))?
+            .as_ref()
+            .map(std::sync::Arc::clone)
+            .ok_or_else(|| FfiControllerError::Failed("no active session".to_string()))?;
+        session
+            .send(&peer_name, &text)
+            .map_err(FfiControllerError::from)
+    }
+
+    /// Stops the Tor session (idempotent).
+    #[uniffi::method(name = "stopSession")]
+    pub fn stop_session_ffi(&self) {
+        if let Ok(mut slot) = self.tor_session.lock() {
+            *slot = None;
+        }
     }
 }
 
@@ -572,6 +685,10 @@ impl UmbraCoreController for LiveController {
         // material on drop (existing, unchanged crate behavior).
         if let Ok(mut session) = self.session.lock() {
             session.identity = None;
+        }
+        #[cfg(feature = "tor")]
+        if let Ok(mut slot) = self.tor_session.lock() {
+            *slot = None;
         }
     }
 }

@@ -30,13 +30,15 @@ private val NAME_RE = Regex("^[A-Za-z0-9_-]+$")
  * Two halves: (1) share OUR payload out through the Android share sheet (it is public
  * key material — safe to share; too large for one QR, ~8.7 KB base64url), (2) paste the
  * PEER's payload, compare the 6-digit SAS out of band, and only then save.
- * Nothing is persisted before the operator confirms the SAS.
+ * Nothing is persisted before the operator confirms the SAS. The peer needs OUR onion
+ * address too — share it from the home screen once Tor is ready.
  */
 @Composable
 fun PairingScreen(onDone: (saved: Boolean) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var name by remember { mutableStateOf("") }
+    var onion by remember { mutableStateOf("") }
     var peerPayload by remember { mutableStateOf(E2eHooks.peerPayload ?: "") }
     var sas by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -83,6 +85,14 @@ fun PairingScreen(onDone: (saved: Boolean) -> Unit) {
             maxLines = 6,
             modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
         )
+        OutlinedTextField(
+            value = onion,
+            onValueChange = { onion = it.trim() },
+            label = { Text("Peer .onion address (optional)") },
+            singleLine = true,
+            enabled = !busy && sas == null,
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        )
         Button(
             enabled = !busy && sas == null && NAME_RE.matches(name) && peerPayload.isNotEmpty(),
             modifier = Modifier.padding(top = 8.dp),
@@ -107,7 +117,7 @@ fun PairingScreen(onDone: (saved: Boolean) -> Unit) {
                 onClick = {
                     busy = true
                     scope.launch {
-                        val result = ffi { AppCore.controller.confirmPeer(name, peerPayload, null) }
+                        val result = ffi { AppCore.controller.confirmPeer(name, peerPayload, onion.ifEmpty { null }) }
                         busy = false
                         result.onSuccess { onDone(true) }.onFailure { error = it.userMessage("Could not save peer") }
                     }

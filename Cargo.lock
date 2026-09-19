@@ -8064,10 +8064,13 @@ name = "umbra-ffi"
 version = "1.0.0-alpha.3"
 dependencies = [
  "thiserror 2.0.20",
+ "tokio",
  "umbra-cli",
  "umbra-crypto",
+ "umbra-net",
  "umbra-protocol",
  "uniffi",
+ "zeroize",
 ]
 
 [[package]]

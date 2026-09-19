@@ -176,3 +176,15 @@ strip = true
 # is size-optimized (docs/OS_OPTIMIZATIONS.md §3).
 [profile.release.package.umbra-crypto]
 opt-level = 3
+
+# Android on-device profile (TODO B.4 Phase 2): a debug-profile Arti is far too
+# slow to bootstrap on a phone, and the size-optimized fat-LTO release profile
+# is very slow to BUILD and uses panic="abort" (UniFFI can only turn a Rust
+# panic into a Kotlin exception under "unwind"). Middle ground for iteration.
+[profile.android]
+inherits = "release"
+opt-level = 2
+lto = "off"
+codegen-units = 16
+panic = "unwind"
+strip = false

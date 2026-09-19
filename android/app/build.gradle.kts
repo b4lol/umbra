@@ -64,6 +64,7 @@ kotlin {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation(platform("androidx.compose:compose-bom:2024.09.00"))
@@ -86,7 +87,17 @@ dependencies {
 // Plugin packages them automatically. Runs before the Kotlin/Java compile
 // step so the .so files are always present for a build.
 
-val cargoNdkAbis = listOf("arm64-v8a", "x86_64")
+// Property-driven so on-device iteration can build one ABI with the optimized
+// `android` Cargo profile and the Tor feature (TODO B.4 Phase 2); the defaults
+// keep the plain debug two-ABI build unchanged.
+val cargoNdkAbis = (findProperty("umbraAbis") as String? ?: "arm64-v8a,x86_64").split(",")
+val rustProfile = findProperty("umbraRustProfile") as String? ?: "dev"
+val rustFeatures = findProperty("umbraRustFeatures") as String? ?: ""
+val cargoBuildArgs = buildList {
+    addAll(listOf("build", "-p", "umbra-ffi", "--lib"))
+    if (rustProfile != "dev") addAll(listOf("--profile", rustProfile))
+    if (rustFeatures.isNotEmpty()) addAll(listOf("--features", rustFeatures))
+}
 val jniLibsDir = layout.projectDirectory.dir("src/main/jniLibs")
 // Pinned NDK version, matching this workspace's existing reproducibility
 // conventions (Cargo.lock, ADR-014 profile pinning, etc).
@@ -101,6 +112,9 @@ val cargoNdkBuild = tasks.register<Exec>("cargoNdkBuild") {
     val outDir = jniLibsDir.asFile
     outputs.dir(outDir)
     inputs.dir(rootProject.projectDir.parentFile.resolve("crates/umbra-ffi/src"))
+    inputs.property("rustProfile", rustProfile)
+    inputs.property("rustFeatures", rustFeatures)
+    inputs.property("abis", cargoNdkAbis)
 
     commandLine(
         listOf(
@@ -108,14 +122,18 @@ val cargoNdkBuild = tasks.register<Exec>("cargoNdkBuild") {
             "--platform", "26",
         ) + cargoNdkAbis.flatMap { listOf("--target", it) } + listOf(
             "-o", outDir.absolutePath,
-            "build", "-p", "umbra-ffi", "--lib",
-        )
+        ) + cargoBuildArgs
     )
 
     environment("ANDROID_NDK_HOME", "${System.getProperty("user.home")}/Android/Sdk/ndk/$ndkVersionPin")
 
     doFirst {
         outDir.mkdirs()
+        // Drop ABI directories not being built now, so a stale library from an
+        // earlier (differently-configured) build can never ride along in the APK.
+        outDir.listFiles()
+            ?.filter { it.isDirectory && it.name !in cargoNdkAbis }
+            ?.forEach { it.deleteRecursively() }
     }
 }
 
@@ -135,7 +153,7 @@ val generateUniffiBindings = tasks.register<Exec>("generateUniffiBindings") {
 
     workingDir = rootProject.projectDir.parentFile // repo root (one level above android/)
 
-    val libraryPath = jniLibsDir.dir("arm64-v8a").file("libumbra_native.so")
+    val libraryPath = jniLibsDir.dir(cargoNdkAbis.first()).file("libumbra_native.so")
     val outDir = uniffiBindingsGenDir.get().asFile
 
     inputs.file(libraryPath)
