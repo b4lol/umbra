@@ -11,6 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+umbra-cli.workspace = true
 umbra-crypto.workspace = true
 umbra-protocol.workspace = true
 thiserror.workspace = true
