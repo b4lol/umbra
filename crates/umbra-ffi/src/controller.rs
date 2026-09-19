@@ -87,6 +87,19 @@ pub trait UmbraCoreController: Send + Sync {
         passphrase: &str,
     ) -> Result<IdentityKeys, CoreControllerError>;
 
+    /// Creates a NEW identity, persists it to `keystore_path` encrypted
+    /// under `passphrase`, and leaves this controller unlocked with it.
+    /// Never overwrites: fails if the file already exists.
+    ///
+    /// # Errors
+    ///
+    /// The file already exists, the path is unwritable, or KDF/AEAD failure.
+    fn create_identity(
+        &self,
+        keystore_path: &str,
+        passphrase: &str,
+    ) -> Result<IdentityKeys, CoreControllerError>;
+
     /// Lists the current session's paired peer names, sorted.
     ///
     /// # Errors
@@ -187,6 +200,16 @@ impl UmbraCoreController for StubController {
     ) -> Result<IdentityKeys, CoreControllerError> {
         Err(CoreControllerError::Unsupported(
             "engine wiring lands with TODO A.4/B.4",
+        ))
+    }
+
+    fn create_identity(
+        &self,
+        _keystore_path: &str,
+        _passphrase: &str,
+    ) -> Result<IdentityKeys, CoreControllerError> {
+        Err(CoreControllerError::Unsupported(
+            "identity creation lands with TODO B.4",
         ))
     }
 
@@ -312,6 +335,21 @@ impl LiveController {
             .map_err(FfiControllerError::from)
     }
 
+    /// UniFFI-shaped wrapper around [`UmbraCoreController::create_identity`].
+    ///
+    /// # Errors
+    ///
+    /// See [`UmbraCoreController::create_identity`].
+    #[uniffi::method(name = "createIdentity")]
+    pub fn create_identity_ffi(
+        &self,
+        keystore_path: String,
+        passphrase: String,
+    ) -> Result<IdentityKeys, FfiControllerError> {
+        UmbraCoreController::create_identity(self, &keystore_path, &passphrase)
+            .map_err(FfiControllerError::from)
+    }
+
     /// UniFFI-shaped wrapper around [`UmbraCoreController::list_peers`].
     ///
     /// # Errors
@@ -405,6 +443,26 @@ impl UmbraCoreController for LiveController {
             umbra_cli::keystore::load(path, passphrase.as_bytes())
                 .map_err(|error| CoreControllerError::Keystore(error.to_string()))?
         };
+        let keys = identity_keys_from_bundle(&bundle);
+        let peers_dir = path
+            .parent()
+            .map_or_else(|| PathBuf::from("peers"), |parent| parent.join("peers"));
+        let mut session = self.session.lock().map_err(|_error| {
+            CoreControllerError::Keystore("session state poisoned".to_string())
+        })?;
+        session.identity = Some((bundle, peers_dir));
+        Ok(keys)
+    }
+
+    fn create_identity(
+        &self,
+        keystore_path: &str,
+        passphrase: &str,
+    ) -> Result<IdentityKeys, CoreControllerError> {
+        let path = std::path::Path::new(keystore_path);
+        let bundle = IdentityBundle::generate();
+        umbra_cli::keystore::save(path, passphrase.as_bytes(), &bundle)
+            .map_err(|error| CoreControllerError::Keystore(error.to_string()))?;
         let keys = identity_keys_from_bundle(&bundle);
         let peers_dir = path
             .parent()
@@ -700,6 +758,55 @@ mod tests {
         let _ = std::fs::remove_dir_all(&peers_dir);
 
         assert_eq!(names, vec!["alice".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn create_identity_writes_a_keystore_and_leaves_the_session_unlocked()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let path = temp_keystore_path("create-ok");
+        let _ = std::fs::remove_file(&path);
+        let path_str = path.to_str().ok_or("non-UTF8 test path")?;
+
+        let controller = LiveController::new();
+        let keys = controller
+            .create_identity(path_str, "create-passphrase")
+            .map_err(|error| format!("expected Ok, got Err: {error}"))?;
+
+        // The file unlocks to the SAME public keys via a fresh controller, and
+        // the creating controller is already unlocked (pairing needs no second unlock).
+        let reopened = LiveController::new().unlock_identity(path_str, "create-passphrase");
+        let payload = controller.pairing_payload();
+        std::fs::remove_file(&path)?;
+
+        let reopened = reopened.map_err(|error| format!("reopen failed: {error}"))?;
+        assert_eq!(keys, reopened);
+        assert!(payload.is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn create_identity_refuses_to_overwrite_an_existing_keystore()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let path = temp_keystore_path("create-exists");
+        let original = IdentityBundle::generate();
+        umbra_cli::keystore::save(&path, b"original-passphrase", &original)?;
+        let path_str = path.to_str().ok_or("non-UTF8 test path")?;
+
+        let controller = LiveController::new();
+        let result = controller.create_identity(path_str, "different-passphrase");
+        let still_original = LiveController::new().unlock_identity(path_str, "original-passphrase");
+        std::fs::remove_file(&path)?;
+
+        assert!(result.is_err());
+        assert_eq!(
+            still_original
+                .map_err(|error| error.to_string())?
+                .x25519_public,
+            original.x25519.public_bytes()
+        );
+        // A failed create must not leave the controller unlocked.
+        assert!(controller.pairing_payload().is_err());
         Ok(())
     }
 }
