@@ -459,6 +459,7 @@ pub fn allowed_syscalls() -> Vec<i64> {
 /// [`restrict_syscalls`] (IPv4/UNIX STREAM only) and
 /// [`restrict_syscalls_mesh`] (adds IPv6 STREAM + UNIX DGRAM) so the
 /// masked-comparison logic is defined exactly once.
+#[cfg(target_os = "linux")]
 pub fn install_filter(socket_rules: Vec<seccompiler::SeccompRule>) -> Result<(), CliError> {
     use seccompiler::{SeccompAction, SeccompFilter, TargetArch, apply_filter};
 
@@ -486,6 +487,19 @@ pub fn install_filter(socket_rules: Vec<seccompiler::SeccompRule>) -> Result<(),
         .try_into()
         .map_err(|e: seccompiler::BackendError| CliError::Seccomp(e.to_string()))?;
     apply_filter(&program).map_err(|e| CliError::Seccomp(e.to_string()))?;
+    Ok(())
+}
+
+/// Stub for every non-Linux target (TODO B.4 fix round 1): unlike
+/// `allowed_syscalls()`, this function has real, unconditional
+/// intra-crate callers (`cli.rs::harden_sandbox`, `serve.rs`,
+/// `mesh_serve.rs`, `tor_send.rs`, `mesh_send.rs`) that must keep
+/// compiling on every target `umbra-cli` builds for, including
+/// Android — so it needs a stub, not just a narrower caller-side cfg.
+/// Seccomp-BPF is a Linux kernel feature; on Android this is a
+/// deliberate no-op, not a partial implementation.
+#[cfg(not(target_os = "linux"))]
+pub fn install_filter(_socket_rules: Vec<seccompiler::SeccompRule>) -> Result<(), CliError> {
     Ok(())
 }
 
@@ -534,11 +548,21 @@ pub fn socket_rule(domain: i32, sock_type: i32) -> Result<seccompiler::SeccompRu
 ///
 /// Returns [`CliError::Sandbox`] if the filter cannot be built or
 /// installed.
+#[cfg(target_os = "linux")]
 pub fn restrict_syscalls() -> Result<(), CliError> {
     install_filter(vec![
         socket_rule(libc::AF_INET, libc::SOCK_STREAM)?,
         socket_rule(libc::AF_UNIX, libc::SOCK_STREAM)?,
     ])
+}
+
+/// Stub for every non-Linux target (TODO B.4 fix round 1) — see
+/// [`install_filter`]'s stub doc comment for why a stub, not a
+/// caller-side cfg, is needed: real callers (`cli.rs::harden_sandbox`,
+/// `serve.rs`, `tor_send.rs`) invoke this unconditionally.
+#[cfg(not(target_os = "linux"))]
+pub fn restrict_syscalls() -> Result<(), CliError> {
+    Ok(())
 }
 
 /// Mesh-mode Seccomp profile (TODO B.1): the SAME base allowlist as
@@ -554,6 +578,7 @@ pub fn restrict_syscalls() -> Result<(), CliError> {
 ///
 /// Returns [`CliError::Seccomp`] if the filter cannot be built or
 /// installed.
+#[cfg(target_os = "linux")]
 pub fn restrict_syscalls_mesh() -> Result<(), CliError> {
     install_filter(vec![
         socket_rule(libc::AF_INET, libc::SOCK_STREAM)?,
@@ -561,6 +586,15 @@ pub fn restrict_syscalls_mesh() -> Result<(), CliError> {
         socket_rule(libc::AF_INET6, libc::SOCK_STREAM)?,
         socket_rule(libc::AF_UNIX, libc::SOCK_DGRAM)?,
     ])
+}
+
+/// Stub for every non-Linux target (TODO B.4 fix round 1) — see
+/// [`install_filter`]'s stub doc comment for why a stub, not a
+/// caller-side cfg, is needed: real callers (`mesh_serve.rs`,
+/// `mesh_send.rs`) invoke this unconditionally.
+#[cfg(not(target_os = "linux"))]
+pub fn restrict_syscalls_mesh() -> Result<(), CliError> {
+    Ok(())
 }
 
 /// Test hook: applies the allowlist to the calling thread (hermetic test

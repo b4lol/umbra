@@ -10,6 +10,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[lib]
+name = "umbra_native"
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 umbra-cli.workspace = true
 umbra-crypto.workspace = true
