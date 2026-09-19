@@ -63,6 +63,56 @@ pub trait UmbraCoreController: Send + Sync {
         passphrase: &str,
     ) -> Result<IdentityKeys, CoreControllerError>;
 
+    /// Lists the current session's paired peer names, sorted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no identity is unlocked yet, or on any
+    /// underlying I/O failure.
+    fn list_peers(&self) -> Result<Vec<String>, CoreControllerError>;
+
+    /// Returns this session's own base64url pairing payload, to hand
+    /// to a peer out of band (QR display).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no identity is unlocked yet.
+    fn pairing_payload(&self) -> Result<String, CoreControllerError>;
+
+    /// Validates a peer's pairing payload (QR scan result) and
+    /// returns the shared 6-digit SAS code for out-of-band
+    /// verification. Does NOT persist a peer record yet — see
+    /// [`UmbraCoreController::confirm_peer`]. Deliberately split from
+    /// a single-step connect (matches the Linux GUI's own
+    /// `pair_import`/`pair_confirm` design,
+    /// `crates/umbra-engine/src/dispatch.rs`): never persist a peer
+    /// before the operator has confirmed the SAS code matches out of
+    /// band.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on an invalid payload, or if no identity is
+    /// unlocked yet.
+    fn import_peer_payload(&self, peer_payload: &str) -> Result<String, CoreControllerError>;
+
+    /// Persists a peer record under `peer_name`, once the operator
+    /// has confirmed the SAS code from
+    /// [`UmbraCoreController::import_peer_payload`] matches out of
+    /// band. `peer_onion`, if given, is this peer's `.onion` service
+    /// address (optional — a peer may be added payload-only and given
+    /// an address later).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on an invalid name/payload/address, or if no
+    /// identity is unlocked yet.
+    fn confirm_peer(
+        &self,
+        peer_name: &str,
+        peer_payload: &str,
+        peer_onion: Option<String>,
+    ) -> Result<(), CoreControllerError>;
+
     /// Generates the one-time pairing QR payload (out-of-band, CRYPTOGRAPHY
     /// §5).
     ///
@@ -113,6 +163,35 @@ impl UmbraCoreController for StubController {
     ) -> Result<IdentityKeys, CoreControllerError> {
         Err(CoreControllerError::Unsupported(
             "engine wiring lands with TODO A.4/B.4",
+        ))
+    }
+
+    fn list_peers(&self) -> Result<Vec<String>, CoreControllerError> {
+        Err(CoreControllerError::Unsupported(
+            "peers/pairing lands with TODO B.4 Phase 0",
+        ))
+    }
+
+    fn pairing_payload(&self) -> Result<String, CoreControllerError> {
+        Err(CoreControllerError::Unsupported(
+            "peers/pairing lands with TODO B.4 Phase 0",
+        ))
+    }
+
+    fn import_peer_payload(&self, _peer_payload: &str) -> Result<String, CoreControllerError> {
+        Err(CoreControllerError::Unsupported(
+            "peers/pairing lands with TODO B.4 Phase 0",
+        ))
+    }
+
+    fn confirm_peer(
+        &self,
+        _peer_name: &str,
+        _peer_payload: &str,
+        _peer_onion: Option<String>,
+    ) -> Result<(), CoreControllerError> {
+        Err(CoreControllerError::Unsupported(
+            "peers/pairing lands with TODO B.4 Phase 0",
         ))
     }
 
@@ -226,6 +305,73 @@ impl UmbraCoreController for LiveController {
         Ok(keys)
     }
 
+    fn list_peers(&self) -> Result<Vec<String>, CoreControllerError> {
+        let session = self.session.lock().map_err(|_error| {
+            CoreControllerError::Keystore("session state poisoned".to_string())
+        })?;
+        let Some((_, peers_dir)) = session.identity.as_ref() else {
+            return Err(CoreControllerError::Keystore(
+                "not unlocked yet".to_string(),
+            ));
+        };
+        umbra_cli::peers::list_names(peers_dir)
+            .map_err(|error| CoreControllerError::Keystore(error.to_string()))
+    }
+
+    fn pairing_payload(&self) -> Result<String, CoreControllerError> {
+        let session = self.session.lock().map_err(|_error| {
+            CoreControllerError::Keystore("session state poisoned".to_string())
+        })?;
+        let Some((bundle, _)) = session.identity.as_ref() else {
+            return Err(CoreControllerError::Keystore(
+                "not unlocked yet".to_string(),
+            ));
+        };
+        umbra_cli::pairing::payload_for(bundle)
+            .map_err(|error| CoreControllerError::Keystore(error.to_string()))
+    }
+
+    fn import_peer_payload(&self, peer_payload: &str) -> Result<String, CoreControllerError> {
+        let session = self.session.lock().map_err(|_error| {
+            CoreControllerError::Keystore("session state poisoned".to_string())
+        })?;
+        let Some((bundle, _)) = session.identity.as_ref() else {
+            return Err(CoreControllerError::Keystore(
+                "not unlocked yet".to_string(),
+            ));
+        };
+        umbra_cli::pairing::parse_payload(peer_payload)
+            .map_err(|error| CoreControllerError::Keystore(error.to_string()))?;
+        let own_payload = umbra_cli::pairing::payload_for(bundle)
+            .map_err(|error| CoreControllerError::Keystore(error.to_string()))?;
+        Ok(umbra_cli::pairing::pairing_sas(&own_payload, peer_payload).to_string())
+    }
+
+    fn confirm_peer(
+        &self,
+        peer_name: &str,
+        peer_payload: &str,
+        peer_onion: Option<String>,
+    ) -> Result<(), CoreControllerError> {
+        let session = self.session.lock().map_err(|_error| {
+            CoreControllerError::Keystore("session state poisoned".to_string())
+        })?;
+        let Some((_, peers_dir)) = session.identity.as_ref() else {
+            return Err(CoreControllerError::Keystore(
+                "not unlocked yet".to_string(),
+            ));
+        };
+        umbra_cli::peers::save_peer(
+            peers_dir,
+            peer_name,
+            peer_payload,
+            peer_onion.as_deref(),
+            None,
+            None,
+        )
+        .map_err(|error| CoreControllerError::Keystore(error.to_string()))
+    }
+
     fn generate_pairing_payload(&self) -> Result<String, CoreControllerError> {
         Err(CoreControllerError::Unsupported(
             "use pairing_payload() (TODO B.4 Phase 0) instead — this older, \
@@ -323,10 +469,8 @@ mod tests {
         umbra_cli::decoy_vault::write_hidden(&path, b"hidden-pw", &hidden_bundle)?;
 
         let controller = LiveController::new();
-        let result = controller.unlock_identity(
-            path.to_str().ok_or("non-UTF8 test path")?,
-            "hidden-pw",
-        );
+        let result =
+            controller.unlock_identity(path.to_str().ok_or("non-UTF8 test path")?, "hidden-pw");
         std::fs::remove_file(&path)?;
 
         let keys = result.map_err(|error| format!("expected Ok, got Err: {error}"))?;
@@ -353,6 +497,98 @@ mod tests {
             .lock()
             .map_err(|_error| "session lock poisoned")?;
         assert!(session.identity.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn peers_and_pairing_before_unlock_all_fail()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let controller = LiveController::new();
+        assert!(controller.list_peers().is_err());
+        assert!(controller.pairing_payload().is_err());
+        assert!(controller.import_peer_payload("irrelevant").is_err());
+        assert!(
+            controller
+                .confirm_peer("alice", "irrelevant", None)
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pairing_payload_after_unlock_matches_payload_for()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let path = temp_keystore_path("pairing-payload");
+        let bundle = IdentityBundle::generate();
+        umbra_cli::keystore::save(&path, b"pw", &bundle)?;
+
+        let controller = LiveController::new();
+        controller
+            .unlock_identity(path.to_str().ok_or("non-UTF8 test path")?, "pw")
+            .map_err(|error| format!("expected Ok, got Err: {error}"))?;
+        let payload = controller
+            .pairing_payload()
+            .map_err(|error| format!("expected Ok, got Err: {error}"))?;
+        std::fs::remove_file(&path)?;
+
+        let expected = umbra_cli::pairing::payload_for(&bundle)?;
+        assert_eq!(payload, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn import_peer_payload_does_not_persist_a_peer_record()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let path = temp_keystore_path("import-no-persist");
+        let bundle = IdentityBundle::generate();
+        umbra_cli::keystore::save(&path, b"pw", &bundle)?;
+        let peer_bundle = IdentityBundle::generate();
+        let peer_payload = umbra_cli::pairing::payload_for(&peer_bundle)?;
+
+        let controller = LiveController::new();
+        controller
+            .unlock_identity(path.to_str().ok_or("non-UTF8 test path")?, "pw")
+            .map_err(|error| format!("expected Ok, got Err: {error}"))?;
+        let sas = controller
+            .import_peer_payload(&peer_payload)
+            .map_err(|error| format!("expected Ok, got Err: {error}"))?;
+        let peers_dir = path.parent().ok_or("no parent")?.join("peers");
+        let no_peers_saved = umbra_cli::peers::list_names(&peers_dir)?.is_empty();
+        std::fs::remove_file(&path)?;
+        let _ = std::fs::remove_dir_all(&peers_dir);
+
+        assert_eq!(sas.len(), 6);
+        assert!(
+            no_peers_saved,
+            "import_peer_payload must not persist a peer record"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn confirm_peer_then_list_peers_shows_the_saved_peer()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let path = temp_keystore_path("confirm-then-list");
+        let bundle = IdentityBundle::generate();
+        umbra_cli::keystore::save(&path, b"pw", &bundle)?;
+        let peer_bundle = IdentityBundle::generate();
+        let peer_payload = umbra_cli::pairing::payload_for(&peer_bundle)?;
+        let peers_dir = path.parent().ok_or("no parent")?.join("peers");
+
+        let controller = LiveController::new();
+        controller
+            .unlock_identity(path.to_str().ok_or("non-UTF8 test path")?, "pw")
+            .map_err(|error| format!("expected Ok, got Err: {error}"))?;
+        controller
+            .confirm_peer("alice", &peer_payload, None)
+            .map_err(|error| format!("expected Ok, got Err: {error}"))?;
+        let names = controller
+            .list_peers()
+            .map_err(|error| format!("expected Ok, got Err: {error}"))?;
+        std::fs::remove_file(&path)?;
+        let _ = std::fs::remove_dir_all(&peers_dir);
+
+        assert_eq!(names, vec!["alice".to_string()]);
         Ok(())
     }
 }
