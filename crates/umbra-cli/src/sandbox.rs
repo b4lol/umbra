@@ -283,6 +283,16 @@ pub fn restrict_filesystem_for_mesh(
 /// this exact base list — the single source of truth for it — rather
 /// than maintaining its own copy; see that crate's `sandbox.rs` for the
 /// three extra syscalls its Nym-specific profile appends on top.
+///
+/// Real, security-critical Seccomp-BPF allowlist installed by
+/// `install_filter`/`restrict_syscalls` on Linux desktop targets (the
+/// CLI, the GUI's `umbra-engine` process). Gated to `target_os =
+/// "linux"` (TODO B.4: `umbra-cli` is now a transitive dependency of
+/// `umbra-ffi`, cross-compiled for Android, whose bionic libc lacks
+/// several of the legacy syscall constants this list references) —
+/// every syscall constant and comment below is copied verbatim from
+/// before that split; only this `#[cfg]` gate is new.
+#[cfg(target_os = "linux")]
 #[must_use]
 pub fn allowed_syscalls() -> Vec<i64> {
     const SYSCALLS: &[i64] = &[
@@ -425,6 +435,23 @@ pub fn allowed_syscalls() -> Vec<i64> {
         libc::SYS_socketpair,
     ];
     SYSCALLS.to_vec()
+}
+
+/// Stub for every non-Linux target (TODO B.4: `umbra-cli` is now a
+/// transitive dependency of `umbra-ffi`, cross-compiled for Android).
+/// Seccomp-BPF is a Linux kernel feature; Android has no equivalent
+/// call path through this crate — its own per-app sandbox is the
+/// entire security boundary there (see `ANDROID.md` §5). This
+/// function is NEVER actually invoked to install a live filter on any
+/// platform where it's compiled: `umbra-ffi`'s `LiveController` calls
+/// only `umbra_cli::keystore`/`decoy_vault`/`peers`/`pairing`
+/// functions, never `restrict_syscalls`/`install_filter`. It exists
+/// solely so this crate COMPILES as a dependency on non-Linux
+/// targets — returning an empty list is deliberate, not a partial
+/// implementation to fill in later.
+#[cfg(not(target_os = "linux"))]
+pub fn allowed_syscalls() -> Vec<i64> {
+    Vec::new()
 }
 
 /// Builds and installs a Seccomp-BPF filter from `allowed_syscalls()`
