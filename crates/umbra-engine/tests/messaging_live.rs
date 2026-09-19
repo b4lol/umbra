@@ -24,7 +24,7 @@
 //!     -- --ignored two_engines_send_and_receive --nocapture
 //! ```
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
@@ -114,28 +114,71 @@ fn send_and_read<T: serde::de::DeserializeOwned>(
     serde_json::from_str(response_line.trim_end()).map_err(|error| error.to_string())
 }
 
+/// Per-read socket timeout used by [`wait_for_ready_address`] and
+/// [`wait_for_inbound_text`]'s underlying `UnixStream`s. Deliberately
+/// short relative to those functions' own multi-minute deadlines: the
+/// socket has no timeout by default, so without this a hung/silent
+/// Engine (stuck Tor bootstrap, or a genuinely blocked network) would
+/// block `read_line` forever and the deadline check below it would
+/// never actually run — this bounds each blocking read so the
+/// deadline loop gets to re-check itself repeatedly instead of once.
+const READ_POLL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A `read_line` timeout is an expected, routine event of this
+/// polling loop (see [`READ_POLL_TIMEOUT`]) — not a fatal error like a
+/// genuine socket failure. `WouldBlock` is included because some
+/// platforms report a `SO_RCVTIMEO` expiry that way rather than as
+/// `TimedOut`.
+fn is_read_timeout(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+    )
+}
+
 /// Reads lines off `reader` until the `"ready"` event arrives (or
 /// `deadline` passes), returning its published onion address.
 /// Skips over anything else that might interleave (there shouldn't be
 /// anything, this early in a fresh connection, but the tagging
-/// protocol allows it in principle).
+/// protocol allows it in principle) — including a `"session-error"`
+/// event, treated as fatal exactly like [`wait_for_inbound_text`]
+/// does, so a bootstrap failure reported here is surfaced immediately
+/// instead of spinning until the deadline.
+///
+/// `reader`'s underlying stream must have a read timeout set (see
+/// [`READ_POLL_TIMEOUT`]) — a timeout error is treated as "keep
+/// checking the deadline," not as fatal.
 fn wait_for_ready_address(
     reader: &mut impl BufRead,
     deadline: std::time::Instant,
 ) -> Result<String, String> {
     loop {
         let mut line = String::new();
-        reader
-            .read_line(&mut line)
-            .map_err(|error| error.to_string())?;
-        if !line.trim_end().is_empty() {
-            let parsed: SessionLine =
-                serde_json::from_str(line.trim_end()).map_err(|error| error.to_string())?;
-            if parsed.kind == "event" && parsed.event.as_deref() == Some("ready") {
-                return parsed
-                    .address
-                    .ok_or_else(|| "ready event carried no address".to_string());
+        match reader.read_line(&mut line) {
+            Ok(_) => {
+                if !line.trim_end().is_empty() {
+                    let parsed: SessionLine =
+                        serde_json::from_str(line.trim_end()).map_err(|error| error.to_string())?;
+                    if parsed.kind == "event" {
+                        match parsed.event.as_deref() {
+                            Some("ready") => {
+                                return parsed
+                                    .address
+                                    .ok_or_else(|| "ready event carried no address".to_string());
+                            }
+                            Some("session-error") => {
+                                return Err(format!(
+                                    "engine reported a session error while bootstrapping: {:?}",
+                                    parsed.error
+                                ));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
             }
+            Err(error) if is_read_timeout(&error) => {}
+            Err(error) => return Err(error.to_string()),
         }
         if std::time::Instant::now() > deadline {
             return Err("timed out waiting for the ready event".to_string());
@@ -145,6 +188,10 @@ fn wait_for_ready_address(
 
 /// Reads lines off `reader` until an `"inbound-text"` event arrives
 /// (or `deadline` passes), returning its DECODED plaintext.
+///
+/// `reader`'s underlying stream must have a read timeout set (see
+/// [`READ_POLL_TIMEOUT`]) — a timeout error is treated as "keep
+/// checking the deadline," not as fatal.
 fn wait_for_inbound_text(
     reader: &mut impl BufRead,
     deadline: std::time::Instant,
@@ -152,32 +199,35 @@ fn wait_for_inbound_text(
     use base64::Engine as _;
     loop {
         let mut line = String::new();
-        reader
-            .read_line(&mut line)
-            .map_err(|error| error.to_string())?;
-        if !line.trim_end().is_empty() {
-            let parsed: SessionLine =
-                serde_json::from_str(line.trim_end()).map_err(|error| error.to_string())?;
-            if parsed.kind == "event" {
-                match parsed.event.as_deref() {
-                    Some("inbound-text") => {
-                        let data = parsed
-                            .data
-                            .ok_or_else(|| "inbound-text event carried no data".to_string())?;
-                        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-                            .decode(data)
-                            .map_err(|error| error.to_string())?;
-                        return String::from_utf8(bytes).map_err(|error| error.to_string());
+        match reader.read_line(&mut line) {
+            Ok(_) => {
+                if !line.trim_end().is_empty() {
+                    let parsed: SessionLine =
+                        serde_json::from_str(line.trim_end()).map_err(|error| error.to_string())?;
+                    if parsed.kind == "event" {
+                        match parsed.event.as_deref() {
+                            Some("inbound-text") => {
+                                let data = parsed.data.ok_or_else(|| {
+                                    "inbound-text event carried no data".to_string()
+                                })?;
+                                let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                                    .decode(data)
+                                    .map_err(|error| error.to_string())?;
+                                return String::from_utf8(bytes).map_err(|error| error.to_string());
+                            }
+                            Some("session-error") => {
+                                return Err(format!(
+                                    "receiving side reported a session error while waiting: {:?}",
+                                    parsed.error
+                                ));
+                            }
+                            _ => {}
+                        }
                     }
-                    Some("session-error") => {
-                        return Err(format!(
-                            "receiving side reported a session error while waiting: {:?}",
-                            parsed.error
-                        ));
-                    }
-                    _ => {}
                 }
             }
+            Err(error) if is_read_timeout(&error) => {}
+            Err(error) => return Err(error.to_string()),
         }
         if std::time::Instant::now() > deadline {
             return Err("timed out waiting for the inbound-text event".to_string());
@@ -251,6 +301,20 @@ fn run(dir_a: &Path, dir_b: &Path) -> Result<(), Box<dyn std::error::Error + Sen
             ..Request::default()
         },
     )?;
+
+    // From here on, every read is one of the polling wait_for_*
+    // helpers above, which need a bounded per-read timeout so a
+    // hung/silent Engine can't block read_line forever and skip past
+    // the helpers' own deadline checks (see READ_POLL_TIMEOUT). The
+    // unlock exchange above is local and fast, so it's deliberately
+    // left with no timeout (matching send_and_read's other call
+    // sites, which are equally local).
+    reader_a
+        .get_ref()
+        .set_read_timeout(Some(READ_POLL_TIMEOUT))?;
+    reader_b
+        .get_ref()
+        .set_read_timeout(Some(READ_POLL_TIMEOUT))?;
 
     // Both engines bootstrap concurrently (independent processes) from
     // this point; we just wait for each address sequentially.

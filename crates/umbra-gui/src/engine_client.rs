@@ -362,15 +362,37 @@ fn forward_or_drop(
 /// trustworthy request_id or event either way), but a genuine
 /// read failure or EOF is fatal for the connection and ends the loop.
 ///
-/// On exit, BEFORE returning: sends [`EngineEvent::ConnectionLost`]
-/// (so the GTK side can show a permanent error state), then locks
-/// `pending` and drains it — dropping every waiting
-/// [`std::sync::mpsc::Sender`], which makes every blocked
+/// On EVERY exit path from the loop below, BEFORE the thread
+/// terminates: locks `pending` and drains it — dropping every
+/// waiting [`std::sync::mpsc::Sender`], which makes every blocked
 /// `rx.recv()` in [`EngineConnection::session_request`] return `Err`
 /// immediately instead of hanging forever (the Engine dying used to
 /// freeze the GTK main thread permanently, since `session_request`
 /// runs on it and nothing else would ever signal those channels
-/// closed).
+/// closed). The loop is structured as `break 'reason` out to one
+/// shared cleanup block below it (mirroring the "every exit path
+/// runs cleanup" pattern already used by `umbra-engine::lib::
+/// serve_connection`) specifically so a future third exit path can't
+/// reintroduce this bug by forgetting to drain: there is exactly one
+/// place a reader-thread exit can reach, and it always drains.
+///
+/// When the exit reason is a dead socket (EOF or I/O error), a
+/// [`EngineEvent::ConnectionLost`] is ALSO sent — but only AFTER
+/// `pending` has been drained, and via a BLOCKING `send_blocking`
+/// rather than `try_send`. This ordering matters: `try_send` can
+/// fail silently if the bounded event channel is full (exactly the
+/// inbound-flood scenario the channel's bound exists to defend
+/// against), and a dropped `ConnectionLost` would leave the GTK side
+/// believing the session is still alive. Draining `pending` FIRST is
+/// what makes a blocking send safe here where `forward_or_drop`
+/// elsewhere in this thread must never block: once `pending` is
+/// drained, any GTK-thread call sitting in `session_request`'s
+/// `rx.recv()` unblocks immediately and returns control to the GTK
+/// main loop, which is then free to drain the event channel and make
+/// room — so this blocking send cannot deadlock against a GTK thread
+/// that's stuck waiting on `pending`. (`forward_or_drop`'s own
+/// `try_send` remains correct for ordinary `"event"` lines, which can
+/// arrive before any `session_request` is even blocked.)
 ///
 /// `event_sender` is an [`async_channel::Sender`] rather than glib's
 /// removed-in-0.22 `glib::Sender`: `try_send`/`send_blocking` work
@@ -383,23 +405,26 @@ fn spawn_reader_thread(
     pending: Arc<Mutex<HashMap<u64, std::sync::mpsc::Sender<SessionLine>>>>,
     event_sender: async_channel::Sender<EngineEvent>,
 ) -> std::thread::JoinHandle<()> {
+    /// Why the reader loop ended — decides what, if anything, the
+    /// shared cleanup block below the loop sends before draining
+    /// `pending`.
+    enum ExitReason {
+        /// EOF or an I/O error reading the socket: the Engine process
+        /// is gone or unreachable. Warrants `ConnectionLost`.
+        SocketDead,
+        /// The GTK-side event channel is closed (the GTK main loop /
+        /// receiver is gone): nothing left to notify.
+        GtkGone,
+    }
+
     std::thread::spawn(move || {
         let dropped_count = AtomicU64::new(0);
         let mut reader = BufReader::new(read_stream);
         let mut line = String::new();
-        loop {
+        let exit_reason = loop {
             line.clear();
             match reader.read_line(&mut line) {
-                Ok(0) | Err(_) => {
-                    let _ = event_sender.try_send(EngineEvent::ConnectionLost);
-                    if let Ok(mut pending) = pending.lock() {
-                        // `drain()` drops every `Sender` it yields —
-                        // exactly what unblocks each waiting
-                        // `rx.recv()`.
-                        let _ = pending.drain();
-                    }
-                    return;
-                }
+                Ok(0) | Err(_) => break ExitReason::SocketDead,
                 Ok(_) => {}
             }
             let Ok(parsed) = serde_json::from_str::<SessionLine>(line.trim_end()) else {
@@ -443,11 +468,25 @@ fn spawn_reader_thread(
                     if let Some(event) = event
                         && forward_or_drop(&event_sender, event, &dropped_count)
                     {
-                        return; // GTK main loop gone
+                        break ExitReason::GtkGone;
                     }
                 }
                 _ => {}
             }
+        };
+
+        // Shared cleanup point for every loop exit: drain `pending`
+        // first (see the doc comment above), THEN — only for a dead
+        // socket — deliver `ConnectionLost` with a blocking send,
+        // which is now safe precisely because `pending` is already
+        // empty.
+        if let Ok(mut pending) = pending.lock() {
+            // `drain()` drops every `Sender` it yields — exactly what
+            // unblocks each waiting `rx.recv()`.
+            let _ = pending.drain();
+        }
+        if let ExitReason::SocketDead = exit_reason {
+            let _ = event_sender.send_blocking(EngineEvent::ConnectionLost);
         }
     })
 }
