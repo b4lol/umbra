@@ -28,4 +28,17 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onStart() {
+        super.onStart()
+        AppState.uiShown()
+        AppCore.onUiShown()
+        Notifications.clearMessageAlert(this)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        AppState.uiHidden()
+        if (!AppState.uiVisible) AppCore.onUiHidden()
+    }
 }

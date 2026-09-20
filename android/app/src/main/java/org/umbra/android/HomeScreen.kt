@@ -1,6 +1,9 @@
 package org.umbra.android
 
 import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.Switch
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -33,6 +36,11 @@ fun HomeScreen(
     onLock: () -> Unit,
 ) {
     val context = LocalContext.current
+    var background by remember { mutableStateOf(BackgroundPrefs.enabled(context)) }
+    var notificationsDenied by remember { mutableStateOf(false) }
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        notificationsDenied = !granted
+    }
     var peers by remember { mutableStateOf<List<String>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -64,6 +72,36 @@ fun HomeScreen(
             }
             is SessionStatus.Failed ->
                 Text("Tor failed: ${status.message}", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp))
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("Keep receiving in the background")
+            Switch(checked = background, onCheckedChange = { on ->
+                background = on
+                BackgroundPrefs.set(context, on)
+                if (on) {
+                    if (android.os.Build.VERSION.SDK_INT >= 33) {
+                        notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                    SessionService.start(context)
+                } else {
+                    SessionService.stop(context)
+                }
+            })
+        }
+        Text(
+            "While on, Umbra stays unlocked in memory (it locks itself after 12 h off-screen). " +
+                "If Android or your phone's battery manager stops Umbra, you must unlock again.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (notificationsDenied) {
+            Text(
+                "Notifications are blocked: Umbra keeps running but will not show its status or new-message alerts.",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         val list = peers

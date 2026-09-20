@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -50,10 +51,13 @@ object SessionModel {
     private var log = BoundedLog(MAX_LOG_LINES)
     private var job: Job? = null
 
-    fun start(scope: CoroutineScope) {
-        if (job != null) return
+    /** Owned by the process, NOT by an Activity: a recreated Activity must not stop the polling. */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    fun start() {
+        if (job?.isActive == true) return
         status = SessionStatus.Bootstrapping
-        job = scope.launch(Dispatchers.IO) {
+        job = scope.launch {
             val started = runCatching { AppCore.controller.startSession(ONION_NICKNAME) }
             started.exceptionOrNull()?.let {
                 post { status = SessionStatus.Failed(it.userMessage("Could not start Tor")) }

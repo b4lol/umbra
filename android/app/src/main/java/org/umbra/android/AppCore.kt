@@ -1,8 +1,14 @@
 package org.umbra.android
 
 import android.content.Context
+import android.os.SystemClock
 import java.io.File
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uniffi.umbra_native.FfiControllerException
 import uniffi.umbra_native.LiveController
@@ -14,9 +20,36 @@ object AppCore {
     /** Set once by [UmbraApplication]; process-scoped, so holding it is not a leak. */
     lateinit var appContext: Context
 
-    /** Placeholder until the single teardown path lands (this task only proves the service). */
+    private var autoLockJob: Job? = null
+    private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    /** The ONE teardown path: Lock button, notification action, auto-lock. Main thread. */
     fun lock(context: Context) {
+        autoLockJob?.cancel()
+        autoLockJob = null
+        SessionModel.stop()
+        controller.triggerPanicWipe()
+        AppState.unlocked = false
+        Notifications.clearMessageAlert(context)
         SessionService.stop(context)
+    }
+
+    /** Called when the last Activity leaves the screen while unlocked: arm the bounded background window. */
+    fun onUiHidden() {
+        if (!AppState.unlocked || !BackgroundPrefs.enabled(appContext)) return
+        val hiddenSince = SystemClock.elapsedRealtime()
+        autoLockJob?.cancel()
+        autoLockJob = mainScope.launch {
+            delay(BackgroundPolicy.MAX_BACKGROUND_MS)
+            if (BackgroundPolicy.shouldAutoLock(hiddenSince, SystemClock.elapsedRealtime()) && !AppState.uiVisible) {
+                lock(appContext)
+            }
+        }
+    }
+
+    fun onUiShown() {
+        autoLockJob?.cancel()
+        autoLockJob = null
     }
 
     /** App-private keystore location; the peers directory is derived by Rust as a sibling `peers/`. */

@@ -5,7 +5,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.setValue
 
 sealed interface Route {
@@ -17,8 +18,11 @@ sealed interface Route {
 
 @Composable
 fun UmbraApp() {
-    var route by remember { mutableStateOf<Route>(Route.Gate) }
-    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    // The identity's state lives in the process (AppState), not in this Activity: a recreated
+    // Activity (rotation, system reclaim) must come back to Home while the identity is unlocked.
+    var route by remember { mutableStateOf<Route>(if (AppState.unlocked) Route.Home else Route.Gate) }
+    LaunchedEffect(AppState.unlocked) { if (!AppState.unlocked) route = Route.Gate }
     // Bumped after a peer is saved so HomeScreen re-reads the list.
     var peersVersion by remember { mutableStateOf(0) }
 
@@ -26,7 +30,9 @@ fun UmbraApp() {
 
     when (route) {
         Route.Gate -> GateScreen(onUnlocked = {
-            SessionModel.start(scope)
+            AppState.unlocked = true
+            SessionModel.start()
+            if (BackgroundPrefs.enabled(context)) SessionService.start(context)
             route = Route.Home
         })
         Route.Home -> HomeScreen(
@@ -34,8 +40,7 @@ fun UmbraApp() {
             onPair = { route = Route.Pairing },
             onOpenChat = { peer -> route = Route.Chat(peer) },
             onLock = {
-                SessionModel.stop()
-                AppCore.controller.triggerPanicWipe()
+                AppCore.lock(context)
                 route = Route.Gate
             },
         )
