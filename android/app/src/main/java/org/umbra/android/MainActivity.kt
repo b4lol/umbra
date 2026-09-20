@@ -4,14 +4,18 @@ import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
+import org.umbra.android.ui.Penumbra
+import org.umbra.android.ui.PenumbraTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         // TODO B.4: FLAG_SECURE on every window, set before any content exists.
         // Blocks screenshots/recents thumbnails; does NOT stop a rooted/instrumented
         // device (ADR-016 / Phase 3 anti-bypass work).
@@ -23,8 +27,8 @@ class MainActivity : ComponentActivity() {
             window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         }
         setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) { UmbraApp() }
+            PenumbraTheme {
+                Box(Modifier.fillMaxSize().background(Penumbra.colors.bg)) { UmbraApp() }
             }
         }
     }

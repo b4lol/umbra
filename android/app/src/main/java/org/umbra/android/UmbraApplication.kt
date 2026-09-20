@@ -7,5 +7,6 @@ class UmbraApplication : Application() {
         super.onCreate()
         AppCore.appContext = applicationContext
         Notifications.createChannels(this)
+        org.umbra.android.ui.ThemeStore.init(this)
     }
 }
