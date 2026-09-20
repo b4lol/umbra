@@ -23,6 +23,7 @@ class MainActivity : ComponentActivity() {
         // -PumbraInsecureE2E (on-device UI automation); never in normal or release builds.
         if (BuildConfig.ALLOW_INSECURE_WINDOW) {
             E2eHooks.peerPayload = intent.getStringExtra("e2e_peer_payload")
+            E2eHooks.seedFeed = intent.getBooleanExtra("e2e_seed_feed", false)
         } else {
             window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         }

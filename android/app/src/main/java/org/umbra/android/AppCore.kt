@@ -75,4 +75,17 @@ fun Throwable.userMessage(fallback: String): String =
  */
 object E2eHooks {
     var peerPayload: String? = null
+    var seedFeed = false
+
+    /** Fills the feed with one line of every kind so the chat styles can be inspected without a live peer. */
+    fun seed() {
+        listOf(
+            "← hey, are you there?",
+            "→ host: yes — pairing worked, the code matched",
+            "← great. this line is long enough to wrap onto a second row so the bubble width and line height can be judged properly",
+            "✓ accepted by Tor for host (24 bytes; not a delivery receipt)",
+            "✗ send to host failed: peer unreachable",
+            "→ host: ok",
+        ).forEach { SessionModel.addLocal(it) }
+    }
 }

@@ -13,6 +13,7 @@ sealed interface Route {
     data object Gate : Route
     data object Home : Route
     data object Pairing : Route
+    data object Settings : Route
     data class Chat(val peer: String) : Route
 }
 
@@ -26,12 +27,13 @@ fun UmbraApp() {
     // Bumped after a peer is saved so HomeScreen re-reads the list.
     var peersVersion by remember { mutableStateOf(0) }
 
-    BackHandler(enabled = route == Route.Pairing || route is Route.Chat) { route = Route.Home }
+    BackHandler(enabled = route == Route.Pairing || route == Route.Settings || route is Route.Chat) { route = Route.Home }
 
     when (route) {
         Route.Gate -> GateScreen(onUnlocked = {
             AppState.unlocked = true
             SessionModel.start()
+            if (BuildConfig.ALLOW_INSECURE_WINDOW && E2eHooks.seedFeed) E2eHooks.seed()
             if (BackgroundPrefs.enabled(context)) SessionService.start(context)
             route = Route.Home
         })
@@ -39,12 +41,14 @@ fun UmbraApp() {
             peersVersion = peersVersion,
             onPair = { route = Route.Pairing },
             onOpenChat = { peer -> route = Route.Chat(peer) },
+            onSettings = { route = Route.Settings },
             onLock = {
                 AppCore.lock(context)
                 route = Route.Gate
             },
         )
         is Route.Chat -> ChatScreen(peer = (route as Route.Chat).peer, onBack = { route = Route.Home })
+        Route.Settings -> org.umbra.android.ui.SettingsScreen(onBack = { route = Route.Home })
         Route.Pairing -> PairingScreen(
             onDone = { saved ->
                 if (saved) peersVersion++

@@ -3,20 +3,12 @@ package org.umbra.android
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.material3.Switch
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -26,6 +18,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import org.umbra.android.ui.PButton
+import org.umbra.android.ui.PCard
+import org.umbra.android.ui.PGroup
+import org.umbra.android.ui.PGroupLabel
+import org.umbra.android.ui.PKind
+import org.umbra.android.ui.PNote
+import org.umbra.android.ui.PRow
+import org.umbra.android.ui.PScreen
+import org.umbra.android.ui.PStyle
+import org.umbra.android.ui.PSwitch
+import org.umbra.android.ui.PText
+import org.umbra.android.ui.Penumbra
 import uniffi.umbra_native.privacyBriefTor
 
 @Composable
@@ -33,6 +37,7 @@ fun HomeScreen(
     peersVersion: Int,
     onPair: () -> Unit,
     onOpenChat: (String) -> Unit,
+    onSettings: () -> Unit,
     onLock: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -50,76 +55,79 @@ fun HomeScreen(
             .onFailure { error = it.userMessage("Could not list peers") }
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Peers", style = MaterialTheme.typography.headlineSmall)
-            OutlinedButton(onClick = onLock) { Text("Lock") }
-        }
+    PScreen(title = "Peers") {
         when (val status = SessionModel.status) {
             is SessionStatus.Idle -> {}
             is SessionStatus.Bootstrapping ->
-                Text("Connecting to Tor… this can take a few minutes.", modifier = Modifier.padding(top = 8.dp))
-            is SessionStatus.Ready -> {
-                Text("Tor ready. Your address:", modifier = Modifier.padding(top = 8.dp))
-                Text(status.address, style = MaterialTheme.typography.bodySmall)
-                OutlinedButton(onClick = {
+                PCard { PText("Connecting to Tor… this can take a few minutes.", style = PStyle.Caption) }
+            is SessionStatus.Ready -> PCard {
+                PText("Tor ready. Your address:", style = PStyle.Caption)
+                PText(status.address, Modifier.padding(vertical = 6.dp), style = PStyle.Caption, color = Penumbra.colors.ink, mono = true)
+                PButton("Share my address", kind = PKind.Tonal) {
                     val send = Intent(Intent.ACTION_SEND).apply {
                         type = "text/plain"
                         putExtra(Intent.EXTRA_TEXT, status.address)
                     }
                     context.startActivity(Intent.createChooser(send, "Share my onion address"))
-                }) { Text("Share my address") }
+                }
             }
             is SessionStatus.Failed ->
-                Text("Tor failed: ${status.message}", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp))
+                PCard { PText("Tor failed: ${status.message}", style = PStyle.Caption, color = Penumbra.colors.err) }
         }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text("Keep receiving in the background")
-            Switch(checked = background, onCheckedChange = { on ->
-                background = on
-                BackgroundPrefs.set(context, on)
-                if (on) {
-                    if (android.os.Build.VERSION.SDK_INT >= 33) {
-                        notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-                    }
-                    SessionService.start(context)
-                } else {
-                    SessionService.stop(context)
-                }
-            })
-        }
-        Text(
-            "While on, Umbra stays unlocked in memory (it locks itself after 12 h off-screen). " +
-                "If Android or your phone's battery manager stops Umbra, you must unlock again.",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        if (notificationsDenied) {
-            Text(
-                "Notifications are blocked: Umbra keeps running but will not show its status or new-message alerts.",
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        val list = peers
-        if (list == null) {
-            Text("Loading…", modifier = Modifier.padding(top = 16.dp))
-        } else if (list.isEmpty()) {
-            Text("No peers paired yet.", modifier = Modifier.padding(top = 16.dp))
-        } else {
-            LazyColumn(modifier = Modifier.weight(1f).padding(top = 16.dp)) {
-                items(list) { name ->
-                    Text(
-                        name,
-                        modifier = Modifier.fillMaxWidth().clickable { onOpenChat(name) }.padding(vertical = 12.dp),
-                    )
-                }
+
+        PGroupLabel("BACKGROUND")
+        PGroup {
+            row {
+                PRow(
+                    "Keep receiving in the background",
+                    summary = "While on, Umbra stays unlocked in memory (it locks itself after 12 h off-screen). " +
+                        "If Android or your phone's battery manager stops Umbra, you must unlock again.",
+                    trailing = {
+                        PSwitch(background, { on ->
+                            background = on
+                            BackgroundPrefs.set(context, on)
+                            if (on) {
+                                if (android.os.Build.VERSION.SDK_INT >= 33) {
+                                    notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                                SessionService.start(context)
+                            } else {
+                                SessionService.stop(context)
+                            }
+                        })
+                    },
+                )
             }
         }
-        Button(onClick = onPair, modifier = Modifier.padding(top = 16.dp)) { Text("Pair a peer") }
-        Text(privacyBriefTor(), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+        if (notificationsDenied) {
+            PText(
+                "Notifications are blocked: Umbra keeps running but will not show its status or new-message alerts.",
+                Modifier.padding(top = 8.dp, start = 6.dp),
+                style = PStyle.Caption,
+                color = Penumbra.colors.err,
+            )
+        }
+        error?.let { PText(it, Modifier.padding(top = 8.dp, start = 6.dp), style = PStyle.Caption, color = Penumbra.colors.err) }
+
+        PGroupLabel("PEERS")
+        val list = peers
+        if (list == null) {
+            PCard { PText("Loading…", style = PStyle.Caption) }
+        } else if (list.isEmpty()) {
+            PCard { PText("No peers paired yet.", style = PStyle.Caption) }
+        } else {
+            PGroup {
+                list.forEach { name -> row { PRow(name, onClick = { onOpenChat(name) }) } }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        PButton("Pair a peer", onClick = onPair)
+        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PButton("Appearance", kind = PKind.Tonal, modifier = Modifier.weight(1f), onClick = onSettings)
+            PButton("Lock", kind = PKind.Ghost, modifier = Modifier.weight(1f), onClick = onLock)
+        }
+        Spacer(Modifier.height(12.dp))
+        PNote(privacyBriefTor())
     }
 }

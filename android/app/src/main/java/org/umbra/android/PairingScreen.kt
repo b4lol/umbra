@@ -1,17 +1,6 @@
 package org.umbra.android
 
 import android.content.Intent
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -20,8 +9,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import org.umbra.android.ui.*
 
 /** Peer record names: the same charset Rust enforces (`[A-Za-z0-9_-]+`); Rust remains the authority. */
 private val NAME_RE = Regex("^[A-Za-z0-9_-]+$")
@@ -44,88 +38,57 @@ fun PairingScreen(onDone: (saved: Boolean) -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState()),
-    ) {
-        Text("Pair a peer", style = MaterialTheme.typography.headlineSmall)
-
-        Text("1. Send them your payload", modifier = Modifier.padding(top = 16.dp))
-        Button(
-            enabled = !busy,
-            onClick = {
-                scope.launch {
-                    ffi { AppCore.controller.pairingPayload() }
-                        .onSuccess { payload ->
-                            val send = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(Intent.EXTRA_TEXT, payload)
-                            }
-                            context.startActivity(Intent.createChooser(send, "Share pairing payload"))
+    PScreen(title = "Pair a peer", onBack = { onDone(false) }) {
+        PGroupLabel("1. SEND THEM YOUR PAYLOAD")
+        PButton("Share my payload", kind = PKind.Tonal, enabled = !busy) {
+            scope.launch {
+                ffi { AppCore.controller.pairingPayload() }
+                    .onSuccess { payload ->
+                        val send = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, payload)
                         }
-                        .onFailure { error = it.userMessage("Could not build payload") }
-                }
-            },
-        ) { Text("Share my payload") }
-
-        Text("2. Paste theirs", modifier = Modifier.padding(top = 16.dp))
-        OutlinedTextField(
-            value = name,
-            onValueChange = { name = it; sas = null },
-            label = { Text("Peer name") },
-            singleLine = true,
-            enabled = !busy && sas == null,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = peerPayload,
-            onValueChange = { peerPayload = it.trim(); sas = null },
-            label = { Text("Peer payload") },
-            enabled = !busy && sas == null,
-            minLines = 3,
-            maxLines = 6,
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        )
-        OutlinedTextField(
-            value = onion,
-            onValueChange = { onion = it.trim() },
-            label = { Text("Peer .onion address (optional)") },
-            singleLine = true,
-            enabled = !busy && sas == null,
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        )
-        Button(
-            enabled = !busy && sas == null && NAME_RE.matches(name) && peerPayload.isNotEmpty(),
-            modifier = Modifier.padding(top = 8.dp),
-            onClick = {
-                busy = true
-                error = null
-                scope.launch {
-                    val result = ffi { AppCore.controller.importPeerPayload(peerPayload) }
-                    busy = false
-                    result.onSuccess { sas = it }.onFailure { error = it.userMessage("Invalid payload") }
-                }
-            },
-        ) { Text("Check payload") }
-
-        sas?.let { code ->
-            Text("3. Compare this code with your peer", modifier = Modifier.padding(top = 16.dp))
-            Text(code, style = MaterialTheme.typography.displayMedium)
-            Text("Read it out to them over a channel you trust (in person or a call). Only save if it matches.")
-            Button(
-                enabled = !busy,
-                modifier = Modifier.padding(top = 8.dp),
-                onClick = {
-                    busy = true
-                    scope.launch {
-                        val result = ffi { AppCore.controller.confirmPeer(name, peerPayload, onion.ifEmpty { null }) }
-                        busy = false
-                        result.onSuccess { onDone(true) }.onFailure { error = it.userMessage("Could not save peer") }
+                        context.startActivity(Intent.createChooser(send, "Share pairing payload"))
                     }
-                },
-            ) { Text("Codes match — save peer") }
+                    .onFailure { error = it.userMessage("Could not build payload") }
+            }
         }
 
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp)) }
-        OutlinedButton(onClick = { onDone(false) }, modifier = Modifier.padding(top = 16.dp)) { Text("Cancel") }
+        PGroupLabel("2. PASTE THEIRS")
+        PField(name, { name = it; sas = null }, "Peer name", enabled = !busy && sas == null)
+        PField(peerPayload, { peerPayload = it.trim(); sas = null }, "Peer payload", Modifier.padding(top = 8.dp), enabled = !busy && sas == null, singleLine = false, minLines = 3, maxLines = 6)
+        PField(onion, { onion = it.trim() }, "Peer .onion address (optional)", Modifier.padding(top = 8.dp), enabled = !busy && sas == null)
+        PButton(
+            "Check payload",
+            Modifier.padding(top = 8.dp),
+            enabled = !busy && sas == null && NAME_RE.matches(name) && peerPayload.isNotEmpty(),
+        ) {
+            busy = true
+            error = null
+            scope.launch {
+                val result = ffi { AppCore.controller.importPeerPayload(peerPayload) }
+                busy = false
+                result.onSuccess { sas = it }.onFailure { error = it.userMessage("Invalid payload") }
+            }
+        }
+
+        sas?.let { code ->
+            PGroupLabel("3. COMPARE THIS CODE WITH YOUR PEER")
+            PCard {
+                CanvasText(groupSas(code), TextStyle(fontSize = 44.sp, fontFamily = FontFamily.Monospace), Penumbra.colors.ink)
+            }
+            PText("Read it out to them over a channel you trust (in person or a call). Only save if it matches.", Modifier.padding(vertical = 8.dp, horizontal = 6.dp), style = PStyle.Caption)
+            PButton("Codes match — save peer", enabled = !busy) {
+                busy = true
+                scope.launch {
+                    val result = ffi { AppCore.controller.confirmPeer(name, peerPayload, onion.ifEmpty { null }) }
+                    busy = false
+                    result.onSuccess { onDone(true) }.onFailure { error = it.userMessage("Could not save peer") }
+                }
+            }
+        }
+
+        error?.let { PText(it, Modifier.padding(top = 8.dp), style = PStyle.Caption, color = Penumbra.colors.err) }
+        PButton("Cancel", Modifier.padding(top = 16.dp), kind = PKind.Ghost) { onDone(false) }
     }
 }
