@@ -8,6 +8,8 @@
 //! * appends every inbound message to `inbox.log` (`[secs] text`);
 //! * sends the content of `outbox.txt` to the peer named in `UMBRA_P2E_PEER`
 //!   (default `phone`), then deletes it and logs the outcome in `events.log`;
+//! * if `UMBRA_P2E_PING_MINUTES` is set, sends `ping <n>` to the peer every that many
+//!   minutes (the soak test: the phone's feed shows which pings arrived promptly);
 //! * exits when `stop` appears or after `UMBRA_P2E_MINUTES` (default 45).
 //!
 //! Needed because the CLI's `serve`/`send` call `mlockall`, which the dev
@@ -51,6 +53,13 @@ fn host_peer() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     controller.unlock_identity_ffi(keystore.to_str().ok_or("non-UTF8 path")?.to_string(), pass)?;
     controller.start_session_ffi("umbrahost".to_string())?;
 
+    let ping_every: Option<Duration> = std::env::var("UMBRA_P2E_PING_MINUTES")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|minutes| *minutes > 0)
+        .map(|minutes| Duration::from_secs(minutes.saturating_mul(60)));
+    let mut next_ping: Option<Instant> = None;
+    let mut ping_count: u32 = 0;
     let started = Instant::now();
     let end = started
         .checked_add(Duration::from_secs(minutes.saturating_mul(60)))
@@ -89,6 +98,25 @@ fn host_peer() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 SessionEvent::Bootstrapping => {
                     log_line(&events_log, &format!("[{secs}s] Bootstrapping"));
                 }
+            }
+        }
+        if let Some(every) = ping_every {
+            let due = *next_ping.get_or_insert_with(|| {
+                Instant::now()
+                    .checked_add(every)
+                    .unwrap_or_else(Instant::now)
+            });
+            if Instant::now() >= due {
+                ping_count = ping_count.saturating_add(1);
+                let secs = started.elapsed().as_secs();
+                match controller.send_message_ffi(peer.clone(), format!("ping {ping_count}")) {
+                    Ok(()) => log_line(&events_log, &format!("[{secs}s] ping {ping_count} queued")),
+                    Err(error) => log_line(
+                        &events_log,
+                        &format!("[{secs}s] ping {ping_count} rejected: {error}"),
+                    ),
+                }
+                next_ping = Instant::now().checked_add(every);
             }
         }
         let outbox = dir.join("outbox.txt");
