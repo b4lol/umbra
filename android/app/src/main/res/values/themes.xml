@@ -1,0 +1,4 @@
+<resources>
+    <!-- Window background before Compose draws: follows the system so there is no light flash in dark mode. -->
+    <style name="Theme.Umbra" parent="@android:style/Theme.DeviceDefault.Light.NoActionBar" />
+</resources>

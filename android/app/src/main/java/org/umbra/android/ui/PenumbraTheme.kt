@@ -59,10 +59,14 @@ fun PenumbraTheme(content: @Composable () -> Unit) {
         FontChoice.SERIF -> FontFamily.Serif
         FontChoice.MONO -> FontFamily.Monospace
     }
+    val animatorScale = remember(context) {
+        android.provider.Settings.Global.getFloat(context.contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+    }
+    val reduceMotion = effectiveReduceMotion(config.reduceMotion, animatorScale)
     val base = LocalDensity.current
     CompositionLocalProvider(
         LocalColors provides colors,
-        LocalMetrics provides Metrics(config, font),
+        LocalMetrics provides Metrics(config.copy(reduceMotion = reduceMotion), font),
         LocalDensity provides ComposeDensity(base.density, base.fontScale * config.textScalePct / 100f),
         content = content,
     )
