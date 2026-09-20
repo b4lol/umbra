@@ -177,7 +177,7 @@ fun PSwitch(checked: Boolean, onChange: (Boolean) -> Unit, modifier: Modifier = 
         modifier
             .width(46.dp).height(28.dp)
             .clip(CircleShape)
-            .background(if (checked) colors.acc else colors.line)
+            .background(if (checked) colors.acc else colors.mut.copy(alpha = .5f))
             .semantics { role = Role.Switch }
             .tappable(role = Role.Switch) { onChange(!checked) }
             .padding(3.dp),
@@ -250,7 +250,7 @@ fun PField(
 }
 
 @Composable
-fun <T> PSegmented(options: List<Pair<T, String>>, selected: T, onSelect: (T) -> Unit, modifier: Modifier = Modifier) {
+fun <T> PSegmented(options: List<Pair<T, String>>, selected: T, modifier: Modifier = Modifier, onSelect: (T) -> Unit) {
     val colors = Penumbra.colors
     Row(
         modifier.fillMaxWidth().clip(cornerShape(.7f)).background(colors.soft).padding(3.dp),

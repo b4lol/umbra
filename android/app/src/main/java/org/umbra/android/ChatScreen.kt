@@ -123,6 +123,15 @@ private fun FeedRow(item: FeedItem, revealed: Boolean, onReveal: () -> Unit) {
     val tapModifier = if (masked) Modifier.pointerInput(Unit) { detectTapGestures { onReveal() } } else Modifier
 
     when {
+        config.messages == MessageStyle.TERMINAL -> {
+            val marker = when (item.kind) { FeedKind.IN -> "←"; FeedKind.OUT -> "→"; FeedKind.ERROR -> "!"; FeedKind.SYSTEM -> "·" }
+            CanvasText(
+                "${time?.plus(" ") ?: ""}$marker $shown",
+                TextStyle(fontSize = 13.sp, fontFamily = FontFamily.Monospace),
+                when (item.kind) { FeedKind.IN -> colors.ink; FeedKind.OUT -> colors.acc; FeedKind.ERROR -> colors.err; FeedKind.SYSTEM -> colors.mut },
+                tapModifier.fillMaxWidth(),
+            )
+        }
         !isMessage -> Column(Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             CanvasText(
                 shown,
@@ -130,15 +139,6 @@ private fun FeedRow(item: FeedItem, revealed: Boolean, onReveal: () -> Unit) {
                 if (item.kind == FeedKind.ERROR) colors.err else colors.mut,
             )
             if (time != null) PText(time, style = PStyle.Caption)
-        }
-        config.messages == MessageStyle.TERMINAL -> {
-            val marker = if (item.kind == FeedKind.IN) "←" else "→"
-            CanvasText(
-                "${time?.plus(" ") ?: ""}$marker $shown",
-                TextStyle(fontSize = 13.sp, fontFamily = FontFamily.Monospace),
-                if (item.kind == FeedKind.IN) colors.ink else colors.acc,
-                tapModifier.fillMaxWidth(),
-            )
         }
         config.messages == MessageStyle.FLAT -> Column(
             Modifier.fillMaxWidth().padding(vertical = 2.dp),
