@@ -39,6 +39,10 @@ object BackgroundPrefs {
 object BackgroundPolicy {
     const val MAX_BACKGROUND_MS: Long = 12L * 60 * 60 * 1000
 
+    /** A test override may only SHORTEN the bound; anything else falls back to the real 12 h. */
+    fun effectiveLimitMs(overrideMs: Long, maxMs: Long = MAX_BACKGROUND_MS): Long =
+        if (overrideMs in 1 until maxMs) overrideMs else maxMs
+
     fun shouldAutoLock(hiddenSinceMs: Long?, nowMs: Long, maxMs: Long = MAX_BACKGROUND_MS): Boolean =
         hiddenSinceMs != null && nowMs >= hiddenSinceMs && nowMs - hiddenSinceMs >= maxMs
 }

@@ -40,8 +40,9 @@ object AppCore {
         val hiddenSince = SystemClock.elapsedRealtime()
         autoLockJob?.cancel()
         autoLockJob = mainScope.launch {
-            delay(BackgroundPolicy.MAX_BACKGROUND_MS)
-            if (BackgroundPolicy.shouldAutoLock(hiddenSince, SystemClock.elapsedRealtime()) && !AppState.uiVisible) {
+            val limit = BackgroundPolicy.effectiveLimitMs(BuildConfig.AUTO_LOCK_OVERRIDE_MS)
+            delay(limit)
+            if (BackgroundPolicy.shouldAutoLock(hiddenSince, SystemClock.elapsedRealtime(), limit) && !AppState.uiVisible) {
                 lock(appContext)
             }
         }

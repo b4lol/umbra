@@ -27,12 +27,18 @@ android {
         // but ONLY via the debug build type below, behind an explicit Gradle
         // property. Default and release are always secure.
         buildConfigField("boolean", "ALLOW_INSECURE_WINDOW", "false")
+        // Debug-only test hook: shortens (never lengthens) the 12 h background auto-lock so the
+        // real code path can be proven on a device. 0 = use the real bound.
+        buildConfigField("long", "AUTO_LOCK_OVERRIDE_MS", "0L")
     }
 
     buildTypes {
         debug {
             if (project.hasProperty("umbraInsecureE2E")) {
                 buildConfigField("boolean", "ALLOW_INSECURE_WINDOW", "true")
+            }
+            (findProperty("umbraAutoLockSeconds") as String?)?.toLongOrNull()?.let {
+                buildConfigField("long", "AUTO_LOCK_OVERRIDE_MS", "${it * 1000}L")
             }
         }
         release {

@@ -19,4 +19,11 @@ class BackgroundPolicyTest {
     @Test fun aClockGoingBackwardsNeverLocksEarly() = assertFalse(BackgroundPolicy.shouldAutoLock(2_000, 1_000, max))
 
     @Test fun twelveHoursIsTheDefaultBound() = assertEquals(12L * 60 * 60 * 1000, BackgroundPolicy.MAX_BACKGROUND_MS)
+
+    @Test fun anOverrideCanOnlyShortenTheBound() {
+        assertEquals(60_000L, BackgroundPolicy.effectiveLimitMs(60_000L))
+        assertEquals(BackgroundPolicy.MAX_BACKGROUND_MS, BackgroundPolicy.effectiveLimitMs(0L))
+        assertEquals(BackgroundPolicy.MAX_BACKGROUND_MS, BackgroundPolicy.effectiveLimitMs(-5L))
+        assertEquals(BackgroundPolicy.MAX_BACKGROUND_MS, BackgroundPolicy.effectiveLimitMs(BackgroundPolicy.MAX_BACKGROUND_MS * 2))
+    }
 }
