@@ -96,6 +96,19 @@ object SessionModel {
     }
 
     private fun apply(event: SessionEvent) {
+        // On-device test instrument for E2E builds only: event KIND and length, never content,
+        // so background receipt can be measured while the screen is locked.
+        if (BuildConfig.ALLOW_INSECURE_WINDOW) {
+            val detail = when (event) {
+                is SessionEvent.Inbound -> " chars=${event.text.length}"
+                is SessionEvent.Sent -> " bytes=${event.bytes}"
+                is SessionEvent.SendError -> " error"
+                is SessionEvent.SessionError -> " error"
+                is SessionEvent.Fatal -> " fatal"
+                else -> ""
+            }
+            android.util.Log.i("umbra-e2e", "event=${event::class.simpleName}$detail")
+        }
         when (event) {
             is SessionEvent.Bootstrapping -> status = SessionStatus.Bootstrapping
             is SessionEvent.Ready -> status = SessionStatus.Ready(event.address)
