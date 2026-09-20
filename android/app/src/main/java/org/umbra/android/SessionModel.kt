@@ -31,6 +31,12 @@ sealed interface SessionStatus {
     data class Failed(val message: String) : SessionStatus
 }
 
+private val FEED_TIME = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")
+
+/** Local receive/send time prefix for one feed line (also the measuring instrument for background tests). */
+fun formatFeedLine(epochMillis: Long, zone: java.time.ZoneId, text: String): String =
+    "${java.time.Instant.ofEpochMilli(epochMillis).atZone(zone).format(FEED_TIME)} $text"
+
 /** Feed bound, matching the TUI's MAX_LOG_LINES. */
 private const val MAX_LOG_LINES = 400
 
@@ -85,7 +91,7 @@ object SessionModel {
     private suspend fun post(block: () -> Unit) = withContext(Dispatchers.Main) { block() }
 
     private fun add(line: String) {
-        log.add(line)
+        log.add(formatFeedLine(System.currentTimeMillis(), java.time.ZoneId.systemDefault(), line))
         lines = log.snapshot()
     }
 
@@ -93,7 +99,11 @@ object SessionModel {
         when (event) {
             is SessionEvent.Bootstrapping -> status = SessionStatus.Bootstrapping
             is SessionEvent.Ready -> status = SessionStatus.Ready(event.address)
-            is SessionEvent.Inbound -> add("← ${event.text}")
+            is SessionEvent.Inbound -> {
+                add("← ${event.text}")
+                // Content-free alert only when no UI is on screen; never message text.
+                if (!AppState.uiVisible) Notifications.newMessage(AppCore.appContext)
+            }
             is SessionEvent.Sent ->
                 add("✓ accepted by Tor for ${event.peer} (${event.bytes} bytes; not a delivery receipt)")
             is SessionEvent.SendError -> add("✗ send to ${event.peer} failed: ${event.message}")
