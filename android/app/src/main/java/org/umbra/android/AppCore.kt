@@ -11,6 +11,14 @@ import uniffi.umbra_native.LiveController
 object AppCore {
     val controller: LiveController by lazy { LiveController.newFfi() }
 
+    /** Set once by [UmbraApplication]; process-scoped, so holding it is not a leak. */
+    lateinit var appContext: Context
+
+    /** Placeholder until the single teardown path lands (this task only proves the service). */
+    fun lock(context: Context) {
+        SessionService.stop(context)
+    }
+
     /** App-private keystore location; the peers directory is derived by Rust as a sibling `peers/`. */
     fun keystoreFile(context: Context): File = File(context.filesDir, "keystore.bin")
 }
