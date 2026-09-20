@@ -61,6 +61,15 @@ object Notifications {
             .build()
     }
 
+    /** Neutral notice for a service that is stopping itself (no session to be "connected" to). */
+    fun stopping(context: Context): Notification =
+        NotificationCompat.Builder(context, CHANNEL_STATUS)
+            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setContentTitle("Umbra")
+            .setContentText("Stopped")
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .build()
+
     /** A content-free "something arrived" alert; a no-op when notifications are blocked. */
     fun newMessage(context: Context) {
         if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return

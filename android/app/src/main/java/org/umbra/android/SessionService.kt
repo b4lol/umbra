@@ -25,12 +25,17 @@ class SessionService : Service() {
         // A killed foreground service can be restarted by the OS in a FRESH process where no identity
         // is unlocked: showing "connected" there would be a lie. Only a live, unlocked session may
         // hold the foreground notification (found on the phone after HyperOS's OneKeyClean killed us).
+        // Crash-safe: if this start came from startForegroundService(), the platform kills the app
+        // unless startForeground() is called before we stop, so satisfy it with a NEUTRAL notice
+        // (never the "connected" one) and stop right away.
+        val type = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
         if (!AppState.unlocked) {
+            ServiceCompat.startForeground(this, Notifications.ID_STATUS, Notifications.stopping(this), type)
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
         }
         if (BuildConfig.ALLOW_INSECURE_WINDOW && java.io.File(filesDir, "e2e_wakelock").exists()) holdWakeLock()
-        val type = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
         ServiceCompat.startForeground(this, Notifications.ID_STATUS, Notifications.status(this), type)
         return START_NOT_STICKY
     }
