@@ -93,7 +93,7 @@ umbra-engine = { path = "crates/umbra-engine", version = "1.0.0-alpha.3" }
 # implementation detail, not a documented contract; ADR-033), so even a
 # patch release must be a deliberate, reviewed bump, never a silent
 # `cargo update`.
-openmls = { version = "=0.9.0", default-features = false, features = [
+openmls = { version = "=0.9.1", default-features = false, features = [
     "libcrux-provider",
 ] }
 openmls_basic_credential = "=0.6.0"
